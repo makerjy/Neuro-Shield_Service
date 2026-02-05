@@ -28,6 +28,13 @@ type GeoMapPanelProps = {
   indicatorId: string;
   year?: number;
   scope?: GeoScope;
+  fixedLevel?: Level;
+  lockedSigCode?: string;
+  lockedSigName?: string;
+  hideBreadcrumb?: boolean;
+  hintText?: string;
+  variant?: 'default' | 'portal';
+  mapHeight?: number;
   className?: string;
   onRegionSelect?: (payload: { level: Level; code: string; name: string }) => void;
 };
@@ -81,12 +88,20 @@ export function GeoMapPanel({
   indicatorId,
   year = 2026,
   scope = { mode: 'national' },
+  fixedLevel,
+  lockedSigCode,
+  lockedSigName,
+  hideBreadcrumb = false,
+  hintText,
+  variant = 'default',
+  mapHeight = 420,
   className,
   onRegionSelect
 }: GeoMapPanelProps) {
   const indicator = getGeoIndicator(indicatorId);
   const scopeKey = JSON.stringify(scope);
   const isRegional = scope.mode === 'regional';
+  const isPortal = variant === 'portal';
   const [ctprvnGeo, setCtprvnGeo] = useState<any[] | null>(null);
   const [sigGeo, setSigGeo] = useState<any[] | null>(null);
   const [emdGeo, setEmdGeo] = useState<any[] | null>(null);
@@ -150,10 +165,23 @@ export function GeoMapPanel({
   }, []);
 
   useEffect(() => {
-    setLevel(defaultLevel);
+    setLevel(fixedLevel ?? defaultLevel);
     setSelectedCodes({ ctprvn: scopedCtprvnCodes?.[0] });
     setSelectedNames(scope.label ? { ctprvn: scope.label } : {});
-  }, [scopeKey, scope.label, defaultLevel, scopedCtprvnCodes?.[0]]);
+  }, [scopeKey, scope.label, defaultLevel, scopedCtprvnCodes?.[0], fixedLevel]);
+
+  useEffect(() => {
+    if (!fixedLevel) return;
+    if (level !== fixedLevel) setLevel(fixedLevel);
+  }, [fixedLevel, level]);
+
+  useEffect(() => {
+    if (!lockedSigCode) return;
+    setSelectedCodes((prev) => ({ ...prev, sig: lockedSigCode }));
+    if (lockedSigName) {
+      setSelectedNames((prev) => ({ ...prev, sig: lockedSigName }));
+    }
+  }, [lockedSigCode, lockedSigName]);
 
   useEffect(() => {
     if (!isRegional) return;
@@ -192,9 +220,10 @@ export function GeoMapPanel({
   }, [sigGeo, selectedCodes.ctprvn, scopedCtprvnCodes, isRegional]);
 
   const filteredEmd = useMemo(() => {
-    if (!emdGeo || !selectedCodes.sig) return [];
-    return filterByPrefixes(emdGeo, [selectedCodes.sig]);
-  }, [emdGeo, selectedCodes.sig]);
+    const sigCode = lockedSigCode ?? selectedCodes.sig;
+    if (!emdGeo || !sigCode) return [];
+    return filterByPrefixes(emdGeo, [sigCode]);
+  }, [emdGeo, selectedCodes.sig, lockedSigCode]);
 
   useEffect(() => {
     if (level !== 'sig') return;
@@ -236,6 +265,23 @@ export function GeoMapPanel({
     const feature = currentFeatures.find((item) => getFeatureCode(item) === code);
     const name = feature ? getFeatureName(feature) : code;
 
+    if (fixedLevel) {
+      if (fixedLevel === 'ctprvn') {
+        setSelectedCodes({ ctprvn: code });
+        setSelectedNames({ ctprvn: name });
+        onRegionSelect?.({ level: 'ctprvn', code, name });
+      } else if (fixedLevel === 'sig') {
+        setSelectedCodes((prev) => ({ ctprvn: prev.ctprvn, sig: code }));
+        setSelectedNames((prev) => ({ ctprvn: prev.ctprvn, sig: name }));
+        onRegionSelect?.({ level: 'sig', code, name });
+      } else {
+        setSelectedCodes((prev) => ({ ...prev, emd: code }));
+        setSelectedNames((prev) => ({ ...prev, emd: name }));
+        onRegionSelect?.({ level: 'emd', code, name });
+      }
+      return;
+    }
+
     if (level === 'ctprvn') {
       setSelectedCodes({ ctprvn: code });
       setSelectedNames({ ctprvn: name });
@@ -260,6 +306,7 @@ export function GeoMapPanel({
   };
 
   const handleGoRoot = () => {
+    if (fixedLevel) return;
     if (isRegional) return;
     setLevel('ctprvn');
     setSelectedCodes({});
@@ -267,6 +314,7 @@ export function GeoMapPanel({
   };
 
   const handleGoUp = () => {
+    if (fixedLevel) return;
     if (isRegional && level === 'sig') return;
     if (level === 'emd') {
       setLevel('sig');
@@ -385,8 +433,8 @@ export function GeoMapPanel({
   };
 
   return (
-    <div className={`border-2 border-gray-300 bg-white ${className || ''}`}>
-      <div className="border-b-2 border-gray-300 px-4 py-3">
+    <div className={`${isPortal ? 'border border-gray-200' : 'border-2 border-gray-300'} bg-white ${className || ''}`}>
+      <div className={`${isPortal ? 'border-b border-gray-200' : 'border-b-2 border-gray-300'} px-4 py-3`}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
@@ -401,35 +449,37 @@ export function GeoMapPanel({
         </div>
       </div>
 
-      <div className="px-4 py-3">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-          {breadcrumb.map((item, idx) => (
-            <React.Fragment key={`${item.label}-${idx}`}>
+      {!hideBreadcrumb && (
+        <div className="px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+            {breadcrumb.map((item, idx) => (
+              <React.Fragment key={`${item.label}-${idx}`}>
+                <button
+                  type="button"
+                  disabled={item.disabled}
+                  onClick={item.onClick}
+                  className={`font-medium ${item.disabled ? 'text-gray-400' : 'text-blue-600 hover:underline'}`}
+                >
+                  {item.label}
+                </button>
+                {idx < breadcrumb.length - 1 && <span>/</span>}
+              </React.Fragment>
+            ))}
+            {level !== 'ctprvn' && !(isRegional && level === 'sig') && (
               <button
                 type="button"
-                disabled={item.disabled}
-                onClick={item.onClick}
-                className={`font-medium ${item.disabled ? 'text-gray-400' : 'text-blue-600 hover:underline'}`}
+                onClick={handleGoUp}
+                className="ml-2 rounded-full border border-gray-200 px-2 py-0.5 text-gray-600"
               >
-                {item.label}
+                상위로
               </button>
-              {idx < breadcrumb.length - 1 && <span>/</span>}
-            </React.Fragment>
-          ))}
-          {level !== 'ctprvn' && !(isRegional && level === 'sig') && (
-            <button
-              type="button"
-              onClick={handleGoUp}
-              className="ml-2 rounded-full border border-gray-200 px-2 py-0.5 text-gray-600"
-            >
-              상위로
-            </button>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="px-4 pb-4">
-        {metricPoints.length > 0 && (
+        {!isPortal && metricPoints.length > 0 && (
           <div className="mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
             <div className="rounded-lg border border-gray-200 bg-white p-3">
               <div className="text-gray-500">전체 평균</div>
@@ -457,46 +507,55 @@ export function GeoMapPanel({
           </div>
         )}
 
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-4">
-          <div>
-            <div
-              className="rounded-lg border border-gray-200 bg-gray-50"
-              style={{ height: 420, minHeight: 420 }}
-            >
-              {loading && (
-                <div className="flex h-full items-center justify-center text-sm text-gray-500">지도를 불러오는 중...</div>
-              )}
-              {error && (
-                <div className="flex h-full items-center justify-center text-sm text-red-600">{error}</div>
-              )}
-              {!loading && !error && (
-                <KoreaDrilldownMap
-                  level={level}
-                  features={currentFeatures}
-                  stats={stats}
-                  onSelect={handleSelect}
-                  indicatorLabel={indicator.label}
-                  unit={indicator.unit}
-                  year={year}
-                  valueFormatter={(value) => formatGeoValue(value, indicator)}
-                />
-              )}
-            </div>
-
-            <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-              <div className="flex items-center gap-2">
-                <div className="h-2 w-24 rounded-full" style={{ background: `linear-gradient(90deg, ${legendColors.join(',')})` }} />
-                <span>{indicator.unit} 기준</span>
+        {(() => {
+          const mapBlock = (
+            <div>
+              <div
+                className={`${isPortal ? 'rounded-sm' : 'rounded-lg'} border border-gray-200 bg-gray-50`}
+                style={{ height: mapHeight, minHeight: mapHeight }}
+              >
+                {loading && (
+                  <div className="flex h-full items-center justify-center text-sm text-gray-500">지도를 불러오는 중...</div>
+                )}
+                {error && (
+                  <div className="flex h-full items-center justify-center text-sm text-red-600">{error}</div>
+                )}
+                {!loading && !error && (
+                  <KoreaDrilldownMap
+                    level={level}
+                    features={currentFeatures}
+                    stats={stats}
+                    onSelect={handleSelect}
+                    indicatorLabel={indicator.label}
+                    unit={indicator.unit}
+                    year={year}
+                    valueFormatter={(value) => formatGeoValue(value, indicator)}
+                  />
+                )}
               </div>
-              <div>지도 클릭 시 하위 행정구역으로 이동</div>
-            </div>
-          </div>
 
-          {metricPoints.length > 0 && (
-            <div className="space-y-4">
-              <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="flex items-start justify-between">
-                  <div>
+              <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-24 rounded-full" style={{ background: `linear-gradient(90deg, ${legendColors.join(',')})` }} />
+                  <span>{indicator.unit} 기준</span>
+                </div>
+                <div>{hintText ?? '지도 클릭 시 하위 행정구역으로 이동'}</div>
+              </div>
+            </div>
+          );
+
+          if (isPortal) {
+            return mapBlock;
+          }
+
+          return (
+            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-4">
+              {mapBlock}
+              {metricPoints.length > 0 && (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-gray-200 bg-white p-4">
+                    <div className="flex items-start justify-between">
+                      <div>
                     <div className="text-xs text-gray-500">선택 지역</div>
                     <div className="text-base font-semibold text-gray-900">{activeName}</div>
                   </div>
@@ -551,53 +610,55 @@ export function GeoMapPanel({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="text-sm font-semibold text-gray-900 mb-3">상·하위 구역</div>
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <div className="text-gray-500 mb-2">상위 5</div>
-                    <div className="space-y-2">
-                      {top5.map((item, idx) => (
-                        <div key={item.code} className="flex items-center justify-between">
-                          <span className="text-gray-700">{idx + 1}. {item.name}</span>
-                          <span className="font-semibold text-gray-900">{formatGeoValue(item.value, indicator)}</span>
+                  <div className="rounded-lg border border-gray-200 bg-white p-4">
+                    <div className="text-sm font-semibold text-gray-900 mb-3">상·하위 구역</div>
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <div className="text-gray-500 mb-2">상위 5</div>
+                        <div className="space-y-2">
+                          {top5.map((item, idx) => (
+                            <div key={item.code} className="flex items-center justify-between">
+                              <span className="text-gray-700">{idx + 1}. {item.name}</span>
+                              <span className="font-semibold text-gray-900">{formatGeoValue(item.value, indicator)}</span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      </div>
+                      <div>
+                        <div className="text-gray-500 mb-2">하위 5</div>
+                        <div className="space-y-2">
+                          {bottom5.map((item, idx) => (
+                            <div key={item.code} className="flex items-center justify-between">
+                              <span className="text-gray-700">{totalCount - bottom5.length + idx + 1}. {item.name}</span>
+                              <span className="font-semibold text-gray-900">{formatGeoValue(item.value, indicator)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-gray-500 mb-2">하위 5</div>
-                    <div className="space-y-2">
-                      {bottom5.map((item, idx) => (
-                        <div key={item.code} className="flex items-center justify-between">
-                          <span className="text-gray-700">{totalCount - bottom5.length + idx + 1}. {item.name}</span>
-                          <span className="font-semibold text-gray-900">{formatGeoValue(item.value, indicator)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
 
-              <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <div className="text-sm font-semibold text-gray-900 mb-3">분포 요약</div>
-                <div className="flex items-end gap-1 h-20">
-                  {distribution.map((ratio, idx) => (
-                    <div
-                      key={`bucket-${idx}`}
-                      className="w-2 rounded-sm bg-blue-200"
-                      style={{ height: `${Math.round(ratio * 100)}%` }}
-                    />
-                  ))}
+                  <div className="rounded-lg border border-gray-200 bg-white p-4">
+                    <div className="text-sm font-semibold text-gray-900 mb-3">분포 요약</div>
+                    <div className="flex items-end gap-1 h-20">
+                      {distribution.map((ratio, idx) => (
+                        <div
+                          key={`bucket-${idx}`}
+                          className="w-2 rounded-sm bg-blue-200"
+                          style={{ height: `${Math.round(ratio * 100)}%` }}
+                        />
+                      ))}
+                    </div>
+                    <div className="mt-3 text-xs text-gray-500">
+                      총 {totalCount}개 구역 · 중앙값 {medianValue ? formatGeoValue(medianValue, indicator) : '-'}
+                    </div>
+                    <div className="mt-2 text-xs text-gray-500">선택 지역 상위 {activePercentile}% 수준</div>
+                  </div>
                 </div>
-                <div className="mt-3 text-xs text-gray-500">
-                  총 {totalCount}개 구역 · 중앙값 {medianValue ? formatGeoValue(medianValue, indicator) : '-'}
-                </div>
-                <div className="mt-2 text-xs text-gray-500">선택 지역 상위 {activePercentile}% 수준</div>
-              </div>
+              )}
             </div>
-          )}
-        </div>
+          );
+        })()}
       </div>
     </div>
   );

@@ -163,12 +163,12 @@ export function RegionalDashboard({ region, onNavigateToBottleneck }: RegionalDa
   const statsScopeLabel = selectedDistrictName ? `${selectedDistrictName} 권역` : region.label;
 
   const kpiOptions = [
-    { id: 'completion', label: '상담완료율', avg: 82 },
-    { id: 'referral', label: '연계율', avg: 43 },
-    { id: 'dropout', label: '이탈률', avg: 13 },
-    { id: 'recontact', label: '재접촉 성공률', avg: 56 },
-    { id: 'wait_time', label: '평균 상담대기시간', avg: 2.2 },
-    { id: 'consultation_time', label: '평균 상담시간', avg: 19.8 },
+    { id: 'completion', label: '케이스 처리율', avg: 82 },
+    { id: 'referral', label: 'SLA 준수율', avg: 94 },
+    { id: 'dropout', label: '추적 이탈 비율', avg: 13 },
+    { id: 'recontact', label: '데이터 품질', avg: 96 },
+    { id: 'wait_time', label: '평균 응답시간', avg: 18.4 },
+    { id: 'consultation_time', label: 'SLA 위반률', avg: 3.2 },
   ];
 
   const ageDistribution = useMemo(() => {
@@ -275,7 +275,7 @@ export function RegionalDashboard({ region, onNavigateToBottleneck }: RegionalDa
       minDistrict: minDistrict?.name || '',
       max: max.toFixed(1),
       maxDistrict: maxDistrict?.name || '',
-      unit: option.id === 'wait_time' || option.id === 'consultation_time' ? '일' : '%',
+      unit: option.id === 'wait_time' ? '분' : '%',
     };
   });
 
@@ -324,7 +324,7 @@ export function RegionalDashboard({ region, onNavigateToBottleneck }: RegionalDa
                   <span>{option.label}</span>
                   <span className="text-xs opacity-70">
                     (평균: {option.avg}
-                    {option.id === 'wait_time' || option.id === 'consultation_time' ? '일' : '%'})
+                    {option.id === 'wait_time' ? '분' : '%'})
                   </span>
                 </div>
               </button>
@@ -332,7 +332,7 @@ export function RegionalDashboard({ region, onNavigateToBottleneck }: RegionalDa
           </div>
         </section>
 
-        {/* GeoMap + SGIS-style Statistics */}
+        {/* GeoMap + 운영 지표 패널 */}
         <section className="mb-8 grid grid-cols-1 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] gap-6">
           <GeoMapPanel
             key={`${region.id}-${selectedKPI}`}
@@ -356,7 +356,7 @@ export function RegionalDashboard({ region, onNavigateToBottleneck }: RegionalDa
               <CardHeader>
                 <CardTitle>{statsScopeLabel} 통계 요약</CardTitle>
                 <p className="text-xs text-gray-500">
-                  {selectedDistrictName ? '선택 구역 기준' : '광역 평균 기준'} · 인구 구조 · 상담 추세
+                {selectedDistrictName ? '선택 구역 기준' : '광역 평균 기준'} · 케이스 분포 · 처리 추세
                 </p>
               </CardHeader>
               <CardContent>

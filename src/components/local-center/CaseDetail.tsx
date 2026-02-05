@@ -166,7 +166,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
         {
           name: '사회적 고립도',
           impact: 68,
-          description: '단독가구, 최근 3개월 사회활동 없음',
+          description: '단독 생활, 최근 3개월 사회활동 없음',
         },
         {
           name: '건강검진 미실시',
@@ -181,7 +181,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
       ],
       operationalGuidelines: [
         '최근 2회 전화 미응답 지속. 우선 SMS로 예약 권고 발송 후, 3일 내 재연락 시도 필요.',
-        '단독가구이며 인지기능 저하 징후 확인됨. 즉시 초기 선별검사 예약 진행 권장.',
+        '단독 생활이며 인지기능 저하 징후 확인됨. 즉시 초기 선별검사 예약 진행 권장.',
         '이상 징후 재발생 시 관할 보건소 및 응급연락망 가동 고려 필요.',
       ],
       analysisInfo: {

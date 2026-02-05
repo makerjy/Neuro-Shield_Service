@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { KoreaDrilldownMap, Level } from './KoreaDrilldownMap';
 import { formatGeoValue, getGeoIndicator } from './geoIndicators';
 import { buildComposition, buildMetrics, buildRegionSeries } from './metrics';
+import { ChoroplethScale, formatRange, formatNumber as formatChoroplethNumber } from '../../lib/choroplethScale';
 
 const GEO_URLS: Record<Level, string> = {
   ctprvn: 'https://raw.githubusercontent.com/southkorea/southkorea-maps/master/kostat/2018/json/skorea-provinces-2018-geo.json',
@@ -15,7 +16,8 @@ const levelLabel: Record<Level, string> = {
   emd: '읍면동'
 };
 
-const legendColors = ['#eff6ff', '#bfdbfe', '#93c5fd', '#60a5fa', '#3b82f6', '#1e3a8a'];
+// 구간형 색상 스케일 (7단계 - 더 명확한 대비)
+const CHOROPLETH_COLORS = ['#eff6ff', '#bfdbfe', '#93c5fd', '#60a5fa', '#3b82f6', '#2563eb', '#1d4ed8'];
 
 export type GeoScope = {
   mode: 'national' | 'regional';
@@ -36,7 +38,9 @@ type GeoMapPanelProps = {
   variant?: 'default' | 'portal';
   mapHeight?: number;
   className?: string;
+  externalLevel?: Level; // 외부에서 제어하는 레벨 (드릴다운 동기화)
   onRegionSelect?: (payload: { level: Level; code: string; name: string }) => void;
+  onGoBack?: () => void; // 상위 레벨로 돌아가기 콜백
 };
 
 function getFeatureCode(feature: any): string {
@@ -96,7 +100,9 @@ export function GeoMapPanel({
   variant = 'default',
   mapHeight = 420,
   className,
-  onRegionSelect
+  externalLevel,
+  onRegionSelect,
+  onGoBack
 }: GeoMapPanelProps) {
   const indicator = getGeoIndicator(indicatorId);
   const scopeKey = JSON.stringify(scope);
@@ -207,6 +213,17 @@ export function GeoMapPanel({
     }
   }, [isRegional, scopedCtprvnCodes, level]);
 
+  // 외부 레벨 변경 시 내부 상태 동기화
+  useEffect(() => {
+    if (!externalLevel) return;
+    // 외부 레벨이 전국(ctprvn)이면 선택 상태 초기화
+    if (externalLevel === 'ctprvn') {
+      setLevel('ctprvn');
+      setSelectedCodes({});
+      setSelectedNames({});
+    }
+  }, [externalLevel]);
+
   const filteredCtprvn = useMemo(() => {
     if (!ctprvnGeo) return [];
     return filterByPrefixes(ctprvnGeo, scopedCtprvnCodes);
@@ -311,6 +328,7 @@ export function GeoMapPanel({
     setLevel('ctprvn');
     setSelectedCodes({});
     setSelectedNames({});
+    onGoBack?.(); // 외부에 알림
   };
 
   const handleGoUp = () => {
@@ -320,12 +338,14 @@ export function GeoMapPanel({
       setLevel('sig');
       setSelectedCodes((prev) => ({ ctprvn: prev.ctprvn, sig: prev.sig }));
       setSelectedNames((prev) => ({ ctprvn: prev.ctprvn, sig: prev.sig }));
+      onGoBack?.(); // 외부에 알림
       return;
     }
     if (level === 'sig') {
       setLevel('ctprvn');
       setSelectedCodes({ ctprvn: selectedCodes.ctprvn });
       setSelectedNames({ ctprvn: selectedNames.ctprvn });
+      onGoBack?.(); // 외부에 알림
     }
   };
 
@@ -423,6 +443,21 @@ export function GeoMapPanel({
     const maxBucket = Math.max(...buckets, 1);
     return buckets.map((count) => count / maxBucket);
   }, [metricPoints]);
+
+  // ═══ 구간형 Choropleth Scale 생성 ═══
+  const choroplethScale = useMemo(() => {
+    const values = metricPoints.map(m => m.value);
+    if (values.length === 0) return null;
+    return new ChoroplethScale(values, 'quantile', 7, 'blue');
+  }, [metricPoints]);
+
+  const legendBins = useMemo(() => {
+    return choroplethScale?.getLegendBins() ?? [];
+  }, [choroplethScale]);
+
+  const scaleStats = useMemo(() => {
+    return choroplethScale?.getStats() ?? { min: 0, max: 0, avg: 0, total: 0 };
+  }, [choroplethScale]);
 
   const formatDelta = (value: number) => {
     const sign = value >= 0 ? '+' : '';
@@ -534,36 +569,62 @@ export function GeoMapPanel({
                 )}
               </div>
 
-              {/* SGIS Style Legend - Dropdown */}
+              {/* SGIS Style Legend - 구간형 스케일 개선 */}
               <div className="mt-3 relative">
                 <div className="flex items-start gap-3">
-                  {/* Color Legend */}
+                  {/* Color Legend - 구간형 범례 */}
                   <div className="flex-1">
-                    <div className="text-[11px] text-gray-500 mb-2">{indicator.label} 단계</div>
+                    <div className="text-[11px] text-gray-500 mb-2">{indicator.label} 단계 (구간형)</div>
                     <div className="space-y-1">
-                      {legendColors.map((color, idx) => {
-                        const step = legendColors.length;
-                        const values = metricPoints.map(m => m.value);
-                        const min = Math.min(...values, indicator.scale[0]);
-                        const max = Math.max(...values, indicator.scale[1]);
-                        const range = max - min;
-                        const stepSize = range / step;
-                        const minVal = min + (idx * stepSize);
-                        const maxVal = idx === step - 1 ? max : min + ((idx + 1) * stepSize);
-                        
-                        return (
+                      {legendBins.length > 0 ? (
+                        legendBins.map((bin, idx) => (
                           <div key={idx} className="flex items-center gap-2 text-[11px]">
                             <div 
                               className="w-4 h-3 rounded border border-gray-300" 
-                              style={{ backgroundColor: color }}
+                              style={{ backgroundColor: bin.color }}
                             />
-                            <span className="text-gray-700">
-                              {formatGeoValue(minVal, indicator)} ~ {formatGeoValue(maxVal, indicator)}
+                            <span className="text-gray-700 font-medium">
+                              {formatChoroplethNumber(bin.min)} ~ {formatChoroplethNumber(bin.max)}
                             </span>
+                            {bin.count !== undefined && (
+                              <span className="text-gray-400">({bin.count}개 지역)</span>
+                            )}
                           </div>
-                        );
-                      })}
+                        ))
+                      ) : (
+                        CHOROPLETH_COLORS.map((color, idx) => {
+                          const step = CHOROPLETH_COLORS.length;
+                          const values = metricPoints.map(m => m.value);
+                          const min = Math.min(...values, indicator.scale[0]);
+                          const max = Math.max(...values, indicator.scale[1]);
+                          const range = max - min;
+                          const stepSize = range / step;
+                          const minVal = min + (idx * stepSize);
+                          const maxVal = idx === step - 1 ? max : min + ((idx + 1) * stepSize);
+                          
+                          return (
+                            <div key={idx} className="flex items-center gap-2 text-[11px]">
+                              <div 
+                                className="w-4 h-3 rounded border border-gray-300" 
+                                style={{ backgroundColor: color }}
+                              />
+                              <span className="text-gray-700">
+                                {formatGeoValue(minVal, indicator)} ~ {formatGeoValue(maxVal, indicator)}
+                              </span>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
+                    {/* 통계 요약 */}
+                    {scaleStats.total > 0 && (
+                      <div className="mt-2 pt-2 border-t border-gray-200 text-[10px] text-gray-500">
+                        <div className="flex gap-3">
+                          <span>전국 합계: <strong className="text-gray-700">{scaleStats.total.toLocaleString()}</strong></span>
+                          <span>평균: <strong className="text-gray-700">{scaleStats.avg.toLocaleString()}</strong></span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   
                   {/* Hint Text */}

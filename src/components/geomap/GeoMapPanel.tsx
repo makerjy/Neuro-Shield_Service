@@ -534,12 +534,43 @@ export function GeoMapPanel({
                 )}
               </div>
 
-              <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
-                <div className="flex items-center gap-2">
-                  <div className="h-2 w-24 rounded-full" style={{ background: `linear-gradient(90deg, ${legendColors.join(',')})` }} />
-                  <span>{indicator.unit} 기준</span>
+              {/* SGIS Style Legend - Dropdown */}
+              <div className="mt-3 relative">
+                <div className="flex items-start gap-3">
+                  {/* Color Legend */}
+                  <div className="flex-1">
+                    <div className="text-[11px] text-gray-500 mb-2">{indicator.label} 단계</div>
+                    <div className="space-y-1">
+                      {legendColors.map((color, idx) => {
+                        const step = legendColors.length;
+                        const values = metricPoints.map(m => m.value);
+                        const min = Math.min(...values, indicator.scale[0]);
+                        const max = Math.max(...values, indicator.scale[1]);
+                        const range = max - min;
+                        const stepSize = range / step;
+                        const minVal = min + (idx * stepSize);
+                        const maxVal = idx === step - 1 ? max : min + ((idx + 1) * stepSize);
+                        
+                        return (
+                          <div key={idx} className="flex items-center gap-2 text-[11px]">
+                            <div 
+                              className="w-4 h-3 rounded border border-gray-300" 
+                              style={{ backgroundColor: color }}
+                            />
+                            <span className="text-gray-700">
+                              {formatGeoValue(minVal, indicator)} ~ {formatGeoValue(maxVal, indicator)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  
+                  {/* Hint Text */}
+                  <div className="text-[11px] text-gray-500 text-right">
+                    {hintText ?? '지도 클릭 시 하위 행정구역으로 이동'}
+                  </div>
                 </div>
-                <div>{hintText ?? '지도 클릭 시 하위 행정구역으로 이동'}</div>
               </div>
             </div>
           );

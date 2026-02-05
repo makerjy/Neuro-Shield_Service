@@ -1,149 +1,47 @@
-import React, { useMemo, useRef, useState } from 'react';
-import {
-  HelpCircle,
-  Share2,
-  Printer,
-  RefreshCw,
-  Table2,
-  BarChart3,
-  Download
-} from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Download, BarChart3, HelpCircle, TrendingUp, TrendingDown } from 'lucide-react';
 import {
   ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
   BarChart,
   Bar,
   XAxis,
   YAxis,
   Tooltip,
   CartesianGrid,
+  PieChart,
+  Pie,
+  Cell,
   ComposedChart,
-  Line
+  Line,
+  Legend,
+  Treemap,
 } from 'recharts';
 import { GeoMapPanel } from '../geomap/GeoMapPanel';
-import { GEO_INDICATORS, getGeoIndicator, formatGeoValue } from '../geomap/geoIndicators';
-import { REGIONAL_SCOPES } from '../geomap/regions';
 
-type RegionValue = {
-  regionCode: string;
-  regionName: string;
-  value: number;
-  unit: string;
-  rank: number;
+/* ═══════════════════════════════════════════════════════════════════════════════
+   색상 상수
+═══════════════════════════════════════════════════════════════════════════════ */
+const COLORS = {
+  blue: '#3b82f6',
+  lightBlue: '#93c5fd',
+  red: '#ef4444',
+  lightRed: '#fca5a5',
+  green: '#22c55e',
+  orange: '#f59e0b',
+  purple: '#8b5cf6',
+  cyan: '#06b6d4',
+  pink: '#ec4899',
+  gray: '#6b7280',
 };
 
-type AlertItem = {
-  id: string;
-  severity: 'low' | 'medium' | 'high';
-  kpiKey: string;
-  regionName: string;
-  reason: string;
-  createdAt: string;
-};
+const AGE_COLORS = ['#3b82f6', '#60a5fa', '#22c55e', '#f59e0b', '#ec4899', '#8b5cf6'];
 
-type ViewLevel = 1 | 2 | 3;
-
-type SelectItem = {
-  code: string;
-  name: string;
-};
-
-type PeriodTab = '주간' | '월간' | '분기';
-
-type KpiPrimary = {
-  key: 'total_cases' | 'sla_violation' | 'data_shortage' | 'active_alerts';
-  label: string;
-  unit: string;
-  tooltip: string;
-  warn: number;
-  risk: number;
-  direction: 'high' | 'low';
-};
-
-const PERIODS = ['2019', '2020', '2021', '2022', '2023', '2024', '2025'];
-
-const PERIOD_TABS: PeriodTab[] = ['주간', '월간', '분기'];
-
-const MAP_KPIS = [
-  'total_cases',
-  'referral',
-  'wait_time',
-  'recontact',
-  'waitlist_pressure',
-  'accessibility_score'
-];
-
-const KPI_PRIMARY: KpiPrimary[] = [
-  {
-    key: 'total_cases',
-    label: '전국 처리건수',
-    unit: '건',
-    tooltip: '기간 내 처리된 전체 케이스 합계',
-    warn: 14000,
-    risk: 17000,
-    direction: 'high'
-  },
-  {
-    key: 'sla_violation',
-    label: 'SLA 위반률',
-    unit: '%',
-    tooltip: '기준 시간 내 응답 실패 비율',
-    warn: 3.0,
-    risk: 5.0,
-    direction: 'low'
-  },
-  {
-    key: 'data_shortage',
-    label: '데이터 부족률',
-    unit: '%',
-    tooltip: '필수 입력 누락 비율',
-    warn: 4.5,
-    risk: 7.0,
-    direction: 'low'
-  },
-  {
-    key: 'active_alerts',
-    label: '활성 알림 수',
-    unit: '건',
-    tooltip: '미확인 상태의 알림 개수',
-    warn: 8,
-    risk: 12,
-    direction: 'high'
-  }
-];
-
-const ALERTS: AlertItem[] = [
-  {
-    id: 'AL-2401',
-    severity: 'high',
-    kpiKey: 'waitlist_pressure',
-    regionName: '경기',
-    reason: '대기/병목 지수 급등',
-    createdAt: '2026-02-04 08:20'
-  },
-  {
-    id: 'AL-2392',
-    severity: 'medium',
-    kpiKey: 'followup_dropout',
-    regionName: '전북',
-    reason: '추적 이탈 비율 상승',
-    createdAt: '2026-02-04 07:45'
-  },
-  {
-    id: 'AL-2381',
-    severity: 'low',
-    kpiKey: 'data_shortage',
-    regionName: '강원',
-    reason: '데이터 부족률 증가',
-    createdAt: '2026-02-03 17:10'
-  }
-];
-
+/* ═══════════════════════════════════════════════════════════════════════════════
+   유틸리티 함수
+═══════════════════════════════════════════════════════════════════════════════ */
 const hashSeed = (input: string) => {
   let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
+  for (let i = 0; i < input.length; i++) {
     hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
   }
   return hash;
@@ -154,536 +52,417 @@ const seededValue = (seed: string, min: number, max: number) => {
   return min + (max - min) * ratio;
 };
 
-const getStatusStyle = (value: number, def: KpiPrimary) => {
-  if (def.direction === 'high') {
-    if (value >= def.risk) return 'border-red-500';
-    if (value >= def.warn) return 'border-amber-400';
-  } else {
-    if (value <= def.risk) return 'border-red-500';
-    if (value <= def.warn) return 'border-amber-400';
-  }
-  return 'border-gray-200';
-};
-
-const ChartCard = ({
-  title,
-  tableData,
-  footer,
-  children
-}: {
-  title: string;
-  tableData: { label: string; value: string | number }[];
-  footer?: string;
-  children: React.ReactNode;
-}) => {
-  const [openTable, setOpenTable] = useState(false);
-  const [openType, setOpenType] = useState(false);
-  const [selectedType, setSelectedType] = useState('기본');
-  const chartRef = useRef<HTMLDivElement>(null);
-
-  const handleDownload = () => {
-    if (!chartRef.current) return;
-    const svg = chartRef.current.querySelector('svg');
-    if (!svg) return;
-    const serializer = new XMLSerializer();
-    const svgText = serializer.serializeToString(svg);
-    const svgBlob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(svgBlob);
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = svg.clientWidth || 640;
-      canvas.height = svg.clientHeight || 360;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0);
-      const png = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.href = png;
-      link.download = `${title}.png`;
-      link.click();
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
-  };
-
-  return (
-    <div className="relative rounded-lg border border-gray-200 bg-white">
-      <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-        <div className="text-sm font-semibold text-gray-900">{title}</div>
-        <div className="flex items-center gap-2 text-xs text-gray-600">
-          <button type="button" className="inline-flex items-center gap-1 rounded-sm border border-gray-200 px-2 py-1" onClick={() => setOpenTable(true)}>
-            <Table2 className="h-3.5 w-3.5" />
-            통계표
-          </button>
-          <button type="button" className="inline-flex items-center gap-1 rounded-sm border border-gray-200 px-2 py-1" onClick={() => setOpenType((prev) => !prev)}>
-            <BarChart3 className="h-3.5 w-3.5" />
-            유형
-          </button>
-          <button type="button" className="inline-flex items-center gap-1 rounded-sm border border-gray-200 px-2 py-1" onClick={handleDownload}>
-            <Download className="h-3.5 w-3.5" />
-            저장
-          </button>
-        </div>
-      </div>
-      <div ref={chartRef} className="px-4 py-3">
-        {children}
-      </div>
-      {footer && <div className="px-4 pb-3 text-[11px] text-gray-500">{footer}</div>}
-
-      {openType && (
-        <div className="absolute right-4 top-12 z-10 w-40 rounded-md border border-gray-200 bg-white p-2 text-xs shadow">
-          <div className="grid grid-cols-2 gap-2">
-            {['기본', '막대', '선', '파이'].map((item) => (
-              <button
-                key={item}
-                type="button"
-                className={`rounded border px-2 py-1 ${selectedType === item ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600'}`}
-                onClick={() => setSelectedType(item)}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {openTable && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-md border border-gray-200 bg-white p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-gray-900">{title} 통계표</div>
-              <button
-                type="button"
-                className="rounded-sm border border-gray-200 px-2 py-1 text-xs"
-                onClick={() => setOpenTable(false)}
-              >
-                닫기
-              </button>
-            </div>
-            <table className="mt-3 w-full text-xs">
-              <thead>
-                <tr className="border-b border-gray-200 text-left text-gray-500">
-                  <th className="py-2">항목</th>
-                  <th className="py-2 text-right">값</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tableData.map((row) => (
-                  <tr key={row.label} className="border-b border-gray-100">
-                    <td className="py-2 text-gray-700">{row.label}</td>
-                    <td className="py-2 text-right font-semibold text-gray-900">{row.value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
+/* ═══════════════════════════════════════════════════════════════════════════════
+   메인 컴포넌트
+═══════════════════════════════════════════════════════════════════════════════ */
 export function NationalDashboard() {
-  const indicatorOptions = useMemo(
-    () => GEO_INDICATORS.filter((item) => MAP_KPIS.includes(item.id)),
-    []
-  );
-  const [selectedPeriod, setSelectedPeriod] = useState<PeriodTab>('주간');
-  const [selectedRegionCode, setSelectedRegionCode] = useState(REGIONAL_SCOPES[0]?.ctprvnCode ?? '11');
-  const [selectedKpiId, setSelectedKpiId] = useState(indicatorOptions[0]?.id ?? 'total_cases');
-  const [viewLevel, setViewLevel] = useState<ViewLevel>(1);
-  const [selectedSig, setSelectedSig] = useState<SelectItem | null>(null);
-  const [selectedEmd, setSelectedEmd] = useState<SelectItem | null>(null);
-  const [activeKpiKey, setActiveKpiKey] = useState<string | null>(null);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState('2026-02-04 09:15');
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedKPI, setSelectedKPI] = useState<string | null>(null);
+  const [selectedDistrictName, setSelectedDistrictName] = useState<string | null>(null);
 
-  const selectedRegion = useMemo(
-    () => REGIONAL_SCOPES.find((item) => item.ctprvnCode === selectedRegionCode) ?? REGIONAL_SCOPES[0],
-    [selectedRegionCode]
-  );
+  const statsScopeKey = selectedDistrictName || 'national';
 
-  const sigOptions = useMemo(() => {
-    return Array.from({ length: 5 }).map((_, idx) => ({
-      code: `${selectedRegion.ctprvnCode}${idx + 1}0`,
-      name: `${selectedRegion.name} 권역 ${idx + 1}`
+  /* ─────────────────────────────────────────────────────────────
+     KPI 데이터
+  ───────────────────────────────────────────────────────────── */
+  const kpiData = useMemo(() => ({
+    totalCases: Math.round(seededValue(`${statsScopeKey}-total`, 14000, 18000)),
+    slaRate: Number((100 - seededValue(`${statsScopeKey}-sla`, 2, 6)).toFixed(2)),
+    dataRate: Number((100 - seededValue(`${statsScopeKey}-data`, 3, 8)).toFixed(2)),
+    activeAlerts: Math.round(seededValue(`${statsScopeKey}-alerts`, 5, 25)),
+    maleRatio: Number(seededValue(`${statsScopeKey}-male`, 48, 52).toFixed(2)),
+    foreigners: Math.round(seededValue(`${statsScopeKey}-foreign`, 180000, 220000)),
+    foreignerChange: Number(seededValue(`${statsScopeKey}-foreign-change`, 3, 8).toFixed(2)),
+  }), [statsScopeKey]);
+
+  /* ─────────────────────────────────────────────────────────────
+     트리맵 데이터 (지역별 케이스)
+  ───────────────────────────────────────────────────────────── */
+  const treemapData = useMemo(() => [
+    { name: '경기도', size: Math.round(seededValue(`${statsScopeKey}-tree-경기`, 2500, 3500)), fill: '#3b82f6' },
+    { name: '경상남도', size: Math.round(seededValue(`${statsScopeKey}-tree-경남`, 1800, 2500)), fill: '#60a5fa' },
+    { name: '부산광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-부산`, 1500, 2200)), fill: '#93c5fd' },
+    { name: '인천광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-인천`, 1200, 1800)), fill: '#bfdbfe' },
+    { name: '충청남도', size: Math.round(seededValue(`${statsScopeKey}-tree-충남`, 1000, 1500)), fill: '#dbeafe' },
+    { name: '전라남도', size: Math.round(seededValue(`${statsScopeKey}-tree-전남`, 900, 1400)), fill: '#3b82f6' },
+    { name: '경상북도', size: Math.round(seededValue(`${statsScopeKey}-tree-경북`, 800, 1300)), fill: '#60a5fa' },
+    { name: '대구광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-대구`, 700, 1100)), fill: '#93c5fd' },
+    { name: '서울특별시', size: Math.round(seededValue(`${statsScopeKey}-tree-서울`, 600, 1000)), fill: '#bfdbfe' },
+    { name: '충청북도', size: Math.round(seededValue(`${statsScopeKey}-tree-충북`, 500, 900)), fill: '#dbeafe' },
+    { name: '강원특별자치도', size: Math.round(seededValue(`${statsScopeKey}-tree-강원`, 400, 800)), fill: '#3b82f6' },
+    { name: '전북특별자치도', size: Math.round(seededValue(`${statsScopeKey}-tree-전북`, 350, 700)), fill: '#60a5fa' },
+  ], [statsScopeKey]);
+
+  /* ─────────────────────────────────────────────────────────────
+     파이 차트 데이터 (SLA 정상/위반)
+  ───────────────────────────────────────────────────────────── */
+  const slaPieData = useMemo(() => [
+    { name: '정상', value: kpiData.slaRate, fill: COLORS.blue },
+    { name: '위반', value: Number((100 - kpiData.slaRate).toFixed(2)), fill: COLORS.red },
+  ], [kpiData.slaRate]);
+
+  const dataPieData = useMemo(() => [
+    { name: '충분', value: kpiData.dataRate, fill: COLORS.blue },
+    { name: '부족', value: Number((100 - kpiData.dataRate).toFixed(2)), fill: COLORS.orange },
+  ], [kpiData.dataRate]);
+
+  /* ─────────────────────────────────────────────────────────────
+     연령분포 막대 데이터
+  ───────────────────────────────────────────────────────────── */
+  const ageDistributionData = useMemo(() => {
+    const ages = ['0-4', '5-9', '10-14', '15-19', '20-24', '25-29', '30-34', '35-39', '40-44', '45-49', '50-54', '55-59', '60-64', '65-69'];
+    return ages.map((age, idx) => ({
+      age,
+      value: Math.round(seededValue(`${statsScopeKey}-age-${idx}`, 800, 4500)),
+      fill: AGE_COLORS[Math.floor(idx / 3) % AGE_COLORS.length],
     }));
-  }, [selectedRegion]);
+  }, [statsScopeKey]);
 
-  const selectedYear = PERIODS[PERIODS.length - 1];
+  /* ─────────────────────────────────────────────────────────────
+     센터별 부하 가로막대 데이터
+  ───────────────────────────────────────────────────────────── */
+  const centerLoadData = useMemo(() => [
+    { name: '비이동자', value: Math.round(seededValue(`${statsScopeKey}-load-1`, 35000, 45000)) },
+    { name: '총 이동자', value: Math.round(seededValue(`${statsScopeKey}-load-2`, 4000, 6000)) },
+    { name: '시도내 이동', value: Math.round(seededValue(`${statsScopeKey}-load-3`, 1500, 2500)) },
+    { name: '시도간 이동', value: Math.round(seededValue(`${statsScopeKey}-load-4`, 1200, 2000)) },
+    { name: '광역센터간', value: Math.round(seededValue(`${statsScopeKey}-load-5`, 1000, 1800)) },
+  ], [statsScopeKey]);
 
-  const contextKey = selectedEmd?.code ?? selectedSig?.code ?? selectedRegionCode;
-
-  const kpiCards = useMemo(() => {
-    return KPI_PRIMARY.map((def) => {
-      const baseValue = def.unit === '건'
-        ? Math.round(seededValue(`${def.key}-${contextKey}-${selectedPeriod}`, 12000, 22000))
-        : Number(seededValue(`${def.key}-${contextKey}-${selectedPeriod}`, 1.5, 8.5).toFixed(1));
-      const prevValue = def.unit === '건'
-        ? Math.round(baseValue * (0.95 + seededValue(`${def.key}-delta-${contextKey}`, 0.01, 0.06)))
-        : Number((baseValue * (0.94 + seededValue(`${def.key}-delta-${contextKey}`, 0.02, 0.08))).toFixed(1));
-      const deltaRate = prevValue ? Number((((baseValue - prevValue) / prevValue) * 100).toFixed(1)) : 0;
-      const value = def.key === 'active_alerts'
-        ? ALERTS.length + Math.round(seededValue(`${def.key}-count-${contextKey}`, -1, 3))
-        : baseValue;
-      return {
-        ...def,
-        value,
-        deltaRate
-      };
-    });
-  }, [contextKey, selectedPeriod]);
-
-  const kpiMap = useMemo(() => {
-    return kpiCards.reduce<Record<string, number>>((acc, item) => {
-      acc[item.key] = item.value;
-      return acc;
-    }, {});
-  }, [kpiCards]);
-
-  const selectedIndicator = getGeoIndicator(selectedKpiId);
-
-  const regionValues: RegionValue[] = useMemo(() => {
-    return REGIONAL_SCOPES.map((region) => {
-      const value = seededValue(`${selectedKpiId}-${region.id}-${selectedYear}`, selectedIndicator.scale[0], selectedIndicator.scale[1]);
-      return {
-        regionCode: region.ctprvnCode,
-        regionName: region.label,
-        value,
-        unit: selectedIndicator.unit,
-        rank: 0
-      };
-    });
-  }, [selectedKpiId, selectedYear, selectedIndicator.scale]);
-
-  const pieSlaData = [
-    { name: '정상', value: Number((100 - kpiMap.sla_violation).toFixed(1)) },
-    { name: '위반', value: Number(kpiMap.sla_violation.toFixed(1)) }
-  ];
-
-  const pieDataQuality = [
-    { name: '충분', value: Number((100 - kpiMap.data_shortage).toFixed(1)) },
-    { name: '부족', value: Number(kpiMap.data_shortage.toFixed(1)) }
-  ];
-
-  const barKpiData = [
-    { name: '처리', value: Math.round(seededValue(`${contextKey}-proc`, 65, 95)) },
-    { name: '지연', value: Math.round(seededValue(`${contextKey}-delay`, 8, 28)) },
-    { name: '오류', value: Math.round(seededValue(`${contextKey}-error`, 3, 18)) },
-    { name: '대기열', value: Math.round(seededValue(`${contextKey}-queue`, 12, 35)) }
-  ];
-
-  const topLoadData = [...regionValues]
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 6)
-    .map((item) => ({ name: item.regionName, value: Number(item.value.toFixed(1)) }));
-
-  const trendData = useMemo(() => {
-    return Array.from({ length: 12 }).map((_, idx) => ({
-      period: `W${idx + 1}`,
-      throughput: Math.round(seededValue(`${contextKey}-t-${idx}`, 2800, 5200)),
-      slaViolation: Number(seededValue(`${contextKey}-s-${idx}`, 1.2, 6.4).toFixed(1))
+  /* ─────────────────────────────────────────────────────────────
+     시계열 추이 데이터
+  ───────────────────────────────────────────────────────────── */
+  const timeSeriesData = useMemo(() => {
+    const years = ['2018', '2019', '2020', '2021', '2022', '2023', '2024', '2025', '2026'];
+    return years.map((year, idx) => ({
+      year,
+      처리량: Math.round(seededValue(`${statsScopeKey}-ts-${idx}`, 12000, 18000)),
+      증감률: Number(seededValue(`${statsScopeKey}-ts-rate-${idx}`, -5, 10).toFixed(1)),
     }));
-  }, [contextKey]);
+  }, [statsScopeKey]);
 
-  const contextPath = useMemo(() => {
-    const parts = [selectedRegion.label];
-    if (selectedSig?.name) parts.push(selectedSig.name);
-    if (selectedEmd?.name) parts.push(selectedEmd.name);
-    return parts.join(' > ');
-  }, [selectedRegion.label, selectedSig, selectedEmd]);
-
-  const handleRegionChange = (code: string) => {
-    setSelectedRegionCode(code);
-    setSelectedSig(null);
-    setSelectedEmd(null);
-    setViewLevel(1);
-  };
-
-  const handleRefresh = () => {
-    setIsRefreshing(true);
-    setTimeout(() => {
-      setLastUpdatedAt('2026-02-04 09:30');
-      setIsRefreshing(false);
-    }, 700);
-  };
-
-  const handleKpiClick = (key: string) => {
-    setActiveKpiKey((prev) => (prev === key ? null : key));
+  /* ─────────────────────────────────────────────────────────────
+     커스텀 트리맵 컨텐트
+  ───────────────────────────────────────────────────────────── */
+  const CustomTreemapContent = (props: any) => {
+    const { x, y, width, height, name, fill } = props;
+    if (width < 30 || height < 20) return null;
+    return (
+      <g>
+        <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={2} />
+        {width > 50 && height > 30 && (
+          <text x={x + width / 2} y={y + height / 2} textAnchor="middle" dominantBaseline="middle" fill="#fff" fontSize={width > 80 ? 11 : 9} fontWeight="500">
+            {name}
+          </text>
+        )}
+      </g>
+    );
   };
 
   return (
-    <div className="bg-white text-gray-900">
-      <div className="sticky top-0 z-30 h-14 border-b border-gray-200 bg-white">
-        <div className="mx-auto flex h-full max-w-[1800px] items-center justify-between px-6">
-          <div className="text-lg font-bold">전국 운영 대시보드</div>
-          <div className="flex items-center gap-2">
-            {PERIOD_TABS.map((period) => (
-              <button
-                key={period}
-                type="button"
-                onClick={() => setSelectedPeriod(period)}
-                className={`rounded-sm border px-3 py-1 text-xs ${
-                  selectedPeriod === period ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600'
-                }`}
-              >
-                {period}
-              </button>
-            ))}
+    <div className="h-full flex flex-col bg-gray-50 overflow-hidden">
+      {/* ═══════════════════════════════════════════════════════════
+          HEADER
+      ═══════════════════════════════════════════════════════════ */}
+      <header className="h-10 bg-white border-b border-gray-200 flex items-center px-4 shrink-0">
+        <h1 className="text-sm font-bold text-gray-800">전국 운영 대시보드</h1>
+        <div className="flex items-center gap-1 ml-4">
+          <span className="px-2 py-0.5 bg-blue-500 text-white text-[10px] rounded">주간</span>
+          <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] rounded cursor-pointer hover:bg-gray-200">월간</span>
+          <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] rounded cursor-pointer hover:bg-gray-200">분기</span>
+        </div>
+        <div className="flex-1" />
+        <div className="flex items-center gap-2 text-gray-500">
+          <button className="p-1.5 hover:bg-gray-100 rounded"><HelpCircle className="h-4 w-4" /></button>
+          <button className="p-1.5 hover:bg-gray-100 rounded"><BarChart3 className="h-4 w-4" /></button>
+          <button className="p-1.5 hover:bg-gray-100 rounded"><Download className="h-4 w-4" /></button>
+        </div>
+      </header>
+
+      {/* ═══════════════════════════════════════════════════════════
+          MAIN CONTENT - 3열 레이아웃
+      ═══════════════════════════════════════════════════════════ */}
+      <div className="flex-1 flex overflow-hidden p-3 gap-3">
+        
+        {/* ═══════════════════════════════════════════════════════
+            LEFT COLUMN - flex-[2] (통계 시각화)
+        ═══════════════════════════════════════════════════ */}
+        <div className="flex-[2] min-w-0 flex flex-col gap-3">
+          
+          {/* 총 처리건수 + 트리맵 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1">
+            <div className="text-xs text-gray-500 mb-1">총 처리건수</div>
+            <div className="text-2xl font-bold text-blue-600 mb-3">
+              {kpiData.totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
+            </div>
+            <div style={{ height: '200px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <Treemap
+                  data={treemapData}
+                  dataKey="size"
+                  aspectRatio={4 / 3}
+                  stroke="#fff"
+                  content={<CustomTreemapContent />}
+                />
+              </ResponsiveContainer>
+            </div>
           </div>
-          <div className="flex items-center gap-2 text-xs">
-            <select
-              value={selectedRegionCode}
-              onChange={(event) => {
-                handleRegionChange(event.target.value);
-              }}
-              className="rounded-sm border border-gray-200 bg-white px-2 py-1"
-            >
-              {REGIONAL_SCOPES.map((region) => (
-                <option key={region.id} value={region.ctprvnCode}>
-                  {region.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedSig?.code ?? ''}
-              onChange={(event) => {
-                const nextCode = event.target.value;
-                if (!nextCode) {
-                  setSelectedSig(null);
-                  setSelectedEmd(null);
-                  setViewLevel(1);
-                  return;
-                }
-                const nextSig = sigOptions.find((sig) => sig.code === nextCode) ?? null;
-                setSelectedSig(nextSig);
-                setSelectedEmd(null);
-                setViewLevel(2);
-              }}
-              className="rounded-sm border border-gray-200 bg-white px-2 py-1"
-            >
-              <option value="">시군구</option>
-              {sigOptions.map((sig) => (
-                <option key={sig.code} value={sig.code}>
-                  {sig.name}
-                </option>
-              ))}
-            </select>
-            <button className="inline-flex items-center gap-1 rounded-sm border border-gray-200 px-2 py-1">
-              <HelpCircle className="h-4 w-4" />
-              가이드
-            </button>
-            <button className="inline-flex items-center gap-1 rounded-sm border border-gray-200 px-2 py-1">
-              <Share2 className="h-4 w-4" />
-              공유
-            </button>
-            <button className="inline-flex items-center gap-1 rounded-sm border border-gray-200 px-2 py-1">
-              <Printer className="h-4 w-4" />
-              출력
-            </button>
+
+          {/* SLA 현황 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="text-xs text-gray-500 mb-1">SLA 현황</div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-600">전국 SLA 준수율 <HelpCircle className="inline h-3 w-3 text-gray-400" /></span>
+            </div>
+            <div className="text-2xl font-bold text-center mt-2">{kpiData.slaRate}%</div>
+          </div>
+
+          {/* 활성 알림 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="text-xs text-gray-500 mb-1">전국 활성 알림 수 <HelpCircle className="inline h-3 w-3 text-gray-400" /></div>
+            <div className="text-2xl font-bold text-blue-600">
+              {kpiData.foreigners.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
+            </div>
+            <div className="flex items-center gap-1 mt-1 text-xs">
+              <span className="text-gray-500">전월대비</span>
+              <span className="text-red-500 flex items-center">
+                {kpiData.foreignerChange}% <TrendingUp className="h-3 w-3 ml-0.5" />
+              </span>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="mx-auto max-w-[1800px] overflow-x-auto px-6 py-6">
-        <div className="mb-4 flex items-center justify-between text-xs text-gray-500">
-          <div>마지막 갱신 {lastUpdatedAt}</div>
-          <button className="inline-flex items-center gap-1 rounded-sm border border-gray-200 px-2 py-1 text-gray-600" onClick={handleRefresh}>
-            <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-            새로고침
-          </button>
-        </div>
-
-        <div className="grid min-w-[1200px] grid-cols-[20%_50%_30%] gap-4">
-          <div className="space-y-3">
-            {kpiCards.map((card) => {
-              const isActive = activeKpiKey === card.key;
-              const deltaColor = card.deltaRate >= 0 ? 'text-emerald-600' : 'text-red-600';
-              return (
-                <button
-                  key={card.key}
-                  type="button"
-                  onClick={() => handleKpiClick(card.key)}
-                  className={`w-full rounded-lg border bg-white p-4 text-left transition-shadow hover:shadow-sm ${getStatusStyle(card.value, card)} ${isActive ? 'ring-2 ring-blue-500' : ''}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-500" title={card.tooltip}>
-                      {card.label}
-                    </span>
-                    <span className="rounded-sm bg-gray-50 px-2 py-0.5 text-[11px] text-gray-500">{card.unit}</span>
-                  </div>
-                  <div className="mt-2 text-2xl font-bold text-gray-900">
-                    {card.unit === '건' ? Math.round(card.value).toLocaleString('ko-KR') : card.value.toFixed(1)}
-                  </div>
-                  <div className={`mt-2 text-xs ${deltaColor}`}>
-                    {card.deltaRate >= 0 ? '▲' : '▼'} {Math.abs(card.deltaRate).toFixed(1)}%
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="space-y-4">
-            <GeoMapPanel
-              title="전국 GeoMap"
-              indicatorId={selectedKpiId}
-              year={Number(selectedYear)}
-              scope={{ mode: 'national' }}
-              variant="portal"
-              mapHeight={520}
-              hintText="시군구 클릭 시 운영 분석 화면으로 이동"
-              onRegionSelect={({ level, code, name }) => {
-                if (level === 'ctprvn') {
-                  handleRegionChange(code);
-                  return;
-                }
-                if (level === 'sig') {
-                  handleRegionChange(code.slice(0, 2));
-                  setSelectedSig({ code, name });
-                  setSelectedEmd(null);
-                  setViewLevel(2);
-                }
-              }}
-            />
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
-              <div className="flex flex-wrap items-center gap-3">
-                <span>선택 권역: {contextPath}</span>
-                <span>
-                  단계: {viewLevel === 1 ? '전국' : viewLevel === 2 ? '시군구' : '읍면동'}
-                </span>
-              </div>
+        {/* ═══════════════════════════════════════════════════════
+            CENTER COLUMN - GeoMap (flex-[2])
+        ═══════════════════════════════════════════════════ */}
+        <div className="flex-[2] min-w-0">
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col">
+            <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
               <div className="flex items-center gap-2">
-                <span>선택 지표</span>
-                <select
-                  value={selectedKpiId}
-                  onChange={(event) => setSelectedKpiId(event.target.value)}
-                  className="rounded-sm border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700"
-                >
-                  {indicatorOptions.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
+                <span className="text-xs font-medium text-gray-700">지도</span>
+                <span className="px-2 py-0.5 bg-red-500 text-white text-[10px] rounded">전국</span>
+              </div>
+              <button className="p-1 hover:bg-gray-200 rounded"><Download className="h-3.5 w-3.5 text-gray-500" /></button>
+            </div>
+            <div className="flex-1 p-2">
+              <GeoMapPanel
+                key={`national-${selectedKPI || 'default'}`}
+                title=""
+                indicatorId={selectedKPI || 'completion'}
+                year={2026}
+                scope={{ mode: 'national' }}
+                variant="portal"
+                mapHeight={340}
+                hideBreadcrumb
+                onRegionSelect={({ level, name }) => {
+                  if (level === 'ctprvn') setSelectedDistrictName(null);
+                  else setSelectedDistrictName(name);
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════
+            RIGHT COLUMN - 차트들 (flex-[3])
+        ═══════════════════════════════════════════════════ */}
+        <div className="flex-[3] min-w-0 flex flex-col gap-3">
+          
+          {/* 파이 차트 2개 나란히 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="grid grid-cols-2 gap-4">
+              {/* SLA 파이 */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs text-gray-700 font-medium">SLA 현황</span>
+                </div>
+                <div style={{ height: '120px' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <defs>
+                        <linearGradient id="blueGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#3b82f6" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#1d4ed8" stopOpacity={1}/>
+                        </linearGradient>
+                        <linearGradient id="redGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#ef4444" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#dc2626" stopOpacity={1}/>
+                        </linearGradient>
+                      </defs>
+                      <Pie data={slaPieData} cx="50%" cy="50%" innerRadius={30} outerRadius={48} dataKey="value" startAngle={90} endAngle={-270} strokeWidth={0}>
+                        <Cell fill="url(#blueGradient)" />
+                        <Cell fill="url(#redGradient)" />
+                      </Pie>
+                      <Tooltip formatter={(v: number) => `${v}%`} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex justify-center gap-3 mt-1">
+                  <div className="flex items-center gap-1 text-[10px]">
+                    <span className="w-2 h-2 rounded-full bg-blue-500" />
+                    <span>정상 {kpiData.slaRate}%</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-[10px]">
+                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                    <span>위반 {(100 - kpiData.slaRate).toFixed(2)}%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 데이터 현황 파이 */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs text-gray-700 font-medium">데이터 현황</span>
+                </div>
+                <div style={{ height: '120px' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <defs>
+                        <linearGradient id="blueGradient2" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#3b82f6" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#1d4ed8" stopOpacity={1}/>
+                        </linearGradient>
+                        <linearGradient id="orangeGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#f59e0b" stopOpacity={1}/>
+                          <stop offset="100%" stopColor="#d97706" stopOpacity={1}/>
+                        </linearGradient>
+                      </defs>
+                      <Pie data={dataPieData} cx="50%" cy="50%" innerRadius={30} outerRadius={48} dataKey="value" startAngle={90} endAngle={-270} strokeWidth={0}>
+                        <Cell fill="url(#blueGradient2)" />
+                        <Cell fill="url(#orangeGradient)" />
+                      </Pie>
+                      <Tooltip formatter={(v: number) => `${v}%`} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex justify-center gap-3 mt-1">
+                  <div className="flex items-center gap-1 text-[10px]">
+                    <span className="w-2 h-2 rounded-full bg-blue-500" />
+                    <span>충분 {kpiData.dataRate}%</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-[10px]">
+                    <span className="w-2 h-2 rounded-full bg-orange-500" />
+                    <span>부족 {(100 - kpiData.dataRate).toFixed(2)}%</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <ChartCard
-              title="SLA 정상/위반"
-              tableData={pieSlaData.map((item) => ({ label: item.name, value: `${item.value}%` }))}
-              footer="단위: %"
-            >
-              <div className="h-40">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieSlaData}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={38}
-                      outerRadius={60}
-                      activeIndex={activeKpiKey === 'sla_violation' ? 1 : undefined}
-                    >
-                      {pieSlaData.map((_, idx) => (
-                        <Cell key={idx} fill={idx === 0 ? '#2563eb' : '#e2e8f0'} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
+          {/* 연령분포 (KPI 분포) 막대 차트 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-700">케이스 분포</span>
+                <div className="flex gap-1">
+                  {['영유아/어린이', '청소년', '청년', '장년', '노년'].map((label, idx) => (
+                    <span key={label} className="flex items-center gap-0.5 text-[9px] text-gray-500">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: AGE_COLORS[idx] }} />
+                      {label}
+                    </span>
+                  ))}
+                </div>
               </div>
-            </ChartCard>
+              <div className="flex items-center gap-1">
+                <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
+                <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
+              </div>
+            </div>
+            <div style={{ height: '150px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={ageDistributionData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+                  <defs>
+                    <linearGradient id="barGradient1" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.9}/>
+                      <stop offset="100%" stopColor="#1d4ed8" stopOpacity={0.9}/>
+                    </linearGradient>
+                    <linearGradient id="barGradient2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#22c55e" stopOpacity={0.9}/>
+                      <stop offset="100%" stopColor="#16a34a" stopOpacity={0.9}/>
+                    </linearGradient>
+                    <linearGradient id="barGradient3" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.9}/>
+                      <stop offset="100%" stopColor="#d97706" stopOpacity={0.9}/>
+                    </linearGradient>
+                    <linearGradient id="barGradient4" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#ec4899" stopOpacity={0.9}/>
+                      <stop offset="100%" stopColor="#db2777" stopOpacity={0.9}/>
+                    </linearGradient>
+                    <linearGradient id="barGradient5" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.9}/>
+                      <stop offset="100%" stopColor="#7c3aed" stopOpacity={0.9}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                  <XAxis dataKey="age" tick={{ fontSize: 9 }} interval={0} angle={-45} textAnchor="end" height={35} />
+                  <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+                  <Tooltip formatter={(v: number) => v.toLocaleString()} />
+                  <Bar dataKey="value" radius={[2, 2, 0, 0]}>
+                    {ageDistributionData.map((entry, idx) => <Cell key={idx} fill={entry.fill} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
 
-            <ChartCard
-              title="데이터 충분/부족"
-              tableData={pieDataQuality.map((item) => ({ label: item.name, value: `${item.value}%` }))}
-              footer="단위: %"
-            >
-              <div className="h-40">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieDataQuality}
-                      dataKey="value"
-                      nameKey="name"
-                      innerRadius={38}
-                      outerRadius={60}
-                      activeIndex={activeKpiKey === 'data_shortage' ? 1 : undefined}
-                    >
-                      {pieDataQuality.map((_, idx) => (
-                        <Cell key={idx} fill={idx === 0 ? '#0f766e' : '#e2e8f0'} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
+          {/* 센터별 부하 가로막대 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-gray-700">케이스 이동 현황 (광역센터간)</span>
+              <div className="flex items-center gap-1">
+                <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
+                <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
               </div>
-            </ChartCard>
-
-            <ChartCard
-              title="KPI 분포"
-              tableData={barKpiData.map((item) => ({ label: item.name, value: item.value }))}
-              footer="단위: 점수"
-            >
-              <div className="h-40">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={barKpiData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                    <CartesianGrid stroke="#e5e7eb" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} />
-                    <Tooltip />
-                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                      {barKpiData.map((entry) => {
-                        const highlight = activeKpiKey === 'total_cases' && entry.name === '처리';
-                        const fill = highlight ? '#2563eb' : '#94a3b8';
-                        return <Cell key={entry.name} fill={fill} opacity={highlight || !activeKpiKey ? 1 : 0.5} />;
-                      })}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </ChartCard>
-
-            <ChartCard
-              title="광역센터 부하 Top N"
-              tableData={topLoadData.map((item) => ({ label: item.name, value: formatGeoValue(item.value, selectedIndicator) }))}
-              footer={`단위: ${selectedIndicator.unit}`}
-            >
-              <div className="h-44">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={topLoadData} layout="vertical" margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                    <CartesianGrid stroke="#e5e7eb" vertical={false} />
-                    <XAxis type="number" tick={{ fontSize: 10 }} />
-                    <YAxis dataKey="name" type="category" width={60} tick={{ fontSize: 10 }} />
-                    <Tooltip />
-                    <Bar dataKey="value" fill="#2563eb" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </ChartCard>
+            </div>
+            <div style={{ height: '160px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={centerLoadData} layout="vertical" margin={{ top: 5, right: 30, left: 70, bottom: 5 }}>
+                  <defs>
+                    <linearGradient id="horizontalBarGradient" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.8}/>
+                      <stop offset="100%" stopColor="#60a5fa" stopOpacity={1}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
+                  <XAxis type="number" tick={{ fontSize: 9 }} tickFormatter={(v) => v.toLocaleString()} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={65} />
+                  <Tooltip formatter={(v: number) => v.toLocaleString()} />
+                  <Bar dataKey="value" fill="url(#horizontalBarGradient)" radius={[0, 6, 6, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
+      </div>
 
-        <div className="mt-4 h-[240px] rounded-lg border border-gray-200 bg-white p-4">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold text-gray-900">주간 처리량 추이</div>
-            <div className="text-xs text-gray-500">단위: 건 / %</div>
+      {/* ═══════════════════════════════════════════════════════════
+          BOTTOM - 시계열 차트 (전체 너비)
+      ═══════════════════════════════════════════════════════════ */}
+      <div className="shrink-0 px-3 pb-3">
+        <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-semibold text-gray-700">연간 처리량 추이</span>
+            <div className="flex items-center gap-1">
+              <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
+              <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
+            </div>
           </div>
-          <div className="mt-4 h-[180px]">
+          <div style={{ height: '180px' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={trendData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke="#e5e7eb" vertical={false} />
-                <XAxis dataKey="period" tick={{ fontSize: 10 }} />
-                <YAxis yAxisId="left" tick={{ fontSize: 10 }} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} />
-                <Tooltip />
-                <Bar yAxisId="left" dataKey="throughput" fill="#2563eb" radius={[4, 4, 0, 0]} />
-                <Line yAxisId="right" type="monotone" dataKey="slaViolation" stroke="#ef4444" strokeWidth={2} dot={false} />
+              <ComposedChart data={timeSeriesData} margin={{ top: 10, right: 40, left: 0, bottom: 5 }}>
+                <defs>
+                  <linearGradient id="timeBarGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#22c55e" stopOpacity={0.9}/>
+                    <stop offset="100%" stopColor="#16a34a" stopOpacity={0.9}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                <XAxis dataKey="year" tick={{ fontSize: 10 }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} domain={[-20, 20]} />
+                <Tooltip formatter={(value: number, name: string) => [name === '처리량' ? value.toLocaleString() + '건' : value + '%', name]} />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+                <Bar yAxisId="left" dataKey="처리량" fill="url(#timeBarGradient)" radius={[6, 6, 0, 0]} name="처리량" />
+                <Line yAxisId="right" type="monotone" dataKey="증감률" stroke="#16a34a" strokeWidth={3} dot={{ fill: '#16a34a', r: 5, strokeWidth: 2, stroke: '#fff' }} name="증감률" />
               </ComposedChart>
             </ResponsiveContainer>
           </div>

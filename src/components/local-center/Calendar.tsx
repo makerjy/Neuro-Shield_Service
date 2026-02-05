@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertCircle, Phone, MapPin } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import { Button } from '../ui/button';
@@ -6,6 +6,9 @@ import { Badge } from '../ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/dialog';
 import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Alert, AlertDescription } from '../ui/alert';
+import { Input } from '../ui/input';
+import { Textarea } from '../ui/textarea';
+import { Label } from '../ui/label';
 
 type RiskLevel = 'high' | 'medium' | 'low';
 type AppointmentStatus = 'confirmed' | 'pending' | 'reminder_sent' | 'completed' | 'cancelled';
@@ -27,13 +30,21 @@ interface Appointment {
 }
 
 export function Calendar() {
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 1, 2)); // Feb 2, 2026
-  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [now, setNow] = useState(new Date());
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState<Date | null>(new Date());
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newCaseId, setNewCaseId] = useState('');
+  const [newCounselor, setNewCounselor] = useState('');
+  const [newDate, setNewDate] = useState('');
+  const [newTime, setNewTime] = useState('');
+  const [newNotes, setNewNotes] = useState('');
 
   // Mock appointments data
-  const appointments: Appointment[] = [
+  const initialAppointments: Appointment[] = [
     {
       id: 'APT-001',
       caseId: 'CASE-2026-001',
@@ -104,6 +115,14 @@ export function Calendar() {
       phone: '010-5678-9012',
     },
   ];
+  const [appointments, setAppointments] = useState<Appointment[]>(initialAppointments);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNow(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const getDaysInMonth = (date: Date) => {
     const year = date.getFullYear();
@@ -135,6 +154,13 @@ export function Calendar() {
     return days;
   };
 
+  const formatDateInput = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const getAppointmentsForDate = (day: number | null) => {
     if (!day) return [];
     const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -142,7 +168,7 @@ export function Calendar() {
   };
 
   const getUpcomingReminders = () => {
-    const today = new Date(2026, 1, 2); // Mock today
+    const today = now;
     const threeDaysLater = new Date(today);
     threeDaysLater.setDate(today.getDate() + 3);
 
@@ -190,7 +216,51 @@ export function Calendar() {
     setDetailsOpen(true);
   };
 
+  const handleOpenCreate = () => {
+    const baseDate = selectedDate ?? now;
+    setNewTitle('');
+    setNewCaseId('');
+    setNewCounselor('');
+    setNewDate(formatDateInput(baseDate));
+    setNewTime('09:00');
+    setNewNotes('');
+    setCreateOpen(true);
+  };
+
+  const handleCreateAppointment = () => {
+    if (!newTitle || !newCaseId || !newCounselor || !newDate || !newTime) {
+      alert('필수 항목을 입력해주세요.');
+      return;
+    }
+    const newAppointment: Appointment = {
+      id: `APT-${Date.now()}`,
+      caseId: newCaseId,
+      patientName: newCaseId,
+      patientAge: 0,
+      date: newDate,
+      time: newTime,
+      type: newTitle,
+      status: 'pending',
+      riskLevel: 'medium',
+      counselor: newCounselor,
+      phone: '',
+      notes: newNotes,
+    };
+    setAppointments((prev) => [newAppointment, ...prev]);
+    setCreateOpen(false);
+  };
+
+  const handleDeleteAppointment = () => {
+    if (!selectedAppointment) return;
+    const confirmed = window.confirm('선택한 일정을 삭제하시겠습니까?');
+    if (!confirmed) return;
+    setAppointments((prev) => prev.filter((apt) => apt.id !== selectedAppointment.id));
+    setSelectedAppointment(null);
+    setDetailsOpen(false);
+  };
+
   const upcomingReminders = getUpcomingReminders();
+  const todayStr = formatDateInput(now);
 
   return (
     <div className="space-y-6">
@@ -230,12 +300,25 @@ export function Calendar() {
                 {currentDate.getFullYear()}년 {currentDate.getMonth() + 1}월
               </CardTitle>
               <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={handleOpenCreate}>
+                  일정 등록
+                </Button>
                 <Button variant="outline" size="sm" onClick={handlePrevMonth}>
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleNextMonth}>
                   <ChevronRight className="h-4 w-4" />
                 </Button>
+              </div>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-4 text-sm text-gray-600">
+              <div className="flex items-center gap-2">
+                <CalendarIcon className="h-4 w-4 text-gray-400" />
+                <span>{now.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-gray-400" />
+                <span>{now.toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
               </div>
             </div>
           </CardHeader>
@@ -252,7 +335,11 @@ export function Calendar() {
               {/* Calendar days */}
               {getDaysArray().map((day, index) => {
                 const dayAppointments = getAppointmentsForDate(day);
-                const isToday = day === 2 && currentDate.getMonth() === 1; // Mock today
+                const isToday =
+                  !!day &&
+                  day === now.getDate() &&
+                  currentDate.getMonth() === now.getMonth() &&
+                  currentDate.getFullYear() === now.getFullYear();
                 const hasAppointments = dayAppointments.length > 0;
 
                 return (
@@ -324,12 +411,12 @@ export function Calendar() {
         <Card>
           <CardHeader>
             <CardTitle>오늘의 일정</CardTitle>
-            <CardDescription>2026년 2월 2일 (월)</CardDescription>
+            <CardDescription>{now.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               {appointments
-                .filter((apt) => apt.date === '2026-02-02')
+                .filter((apt) => apt.date === todayStr)
                 .map((apt) => {
                   const status = getStatusBadge(apt.status);
                   return (
@@ -356,7 +443,7 @@ export function Calendar() {
                     </div>
                   );
                 })}
-              {appointments.filter((apt) => apt.date === '2026-02-02').length === 0 && (
+              {appointments.filter((apt) => apt.date === todayStr).length === 0 && (
                 <div className="text-center py-8 text-gray-500">
                   <CalendarIcon className="h-12 w-12 text-gray-300 mx-auto mb-2" />
                   <p className="text-sm">오늘 예정된 일정이 없습니다</p>
@@ -366,6 +453,54 @@ export function Calendar() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Appointment Create Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>일정 등록</DialogTitle>
+            <DialogDescription>필수 항목을 입력해 일정을 등록합니다</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label>일정 제목</Label>
+              <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} className="mt-2" />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>케이스 ID</Label>
+                <Input value={newCaseId} onChange={(e) => setNewCaseId(e.target.value)} className="mt-2" />
+              </div>
+              <div>
+                <Label>담당 상담사</Label>
+                <Input value={newCounselor} onChange={(e) => setNewCounselor(e.target.value)} className="mt-2" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>일정 날짜</Label>
+                <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} className="mt-2" />
+              </div>
+              <div>
+                <Label>일정 시간</Label>
+                <Input type="time" value={newTime} onChange={(e) => setNewTime(e.target.value)} className="mt-2" />
+              </div>
+            </div>
+            <div>
+              <Label>메모</Label>
+              <Textarea value={newNotes} onChange={(e) => setNewNotes(e.target.value)} className="mt-2" rows={3} />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={() => setCreateOpen(false)}>
+              취소
+            </Button>
+            <Button className="flex-1" onClick={handleCreateAppointment}>
+              등록
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Appointment Details Dialog */}
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
@@ -384,7 +519,11 @@ export function Calendar() {
                 </Avatar>
                 <div className="flex-1">
                   <h3 className="text-xl font-semibold mb-1">{selectedAppointment.patientName}</h3>
-                  <p className="text-sm text-gray-500 mb-2">{selectedAppointment.patientAge}세</p>
+                  {selectedAppointment.patientAge > 0 ? (
+                    <p className="text-sm text-gray-500 mb-2">{selectedAppointment.patientAge}세</p>
+                  ) : (
+                    <p className="text-sm text-gray-400 mb-2">연령 정보 없음</p>
+                  )}
                   <div className="flex items-center gap-2">
                     {getRiskBadge(selectedAppointment.riskLevel)}
                     <Badge variant={getStatusBadge(selectedAppointment.status).variant}>
@@ -449,6 +588,9 @@ export function Calendar() {
                 <Button variant="outline" className="flex-1">
                   <MapPin className="h-4 w-4 mr-2" />
                   위치 안내
+                </Button>
+                <Button variant="destructive" className="flex-1" onClick={handleDeleteAppointment}>
+                  삭제
                 </Button>
               </div>
             </div>

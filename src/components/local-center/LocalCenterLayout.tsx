@@ -84,6 +84,11 @@ export function LocalCenterLayout({
     }
   };
 
+  const handleNavClick = (pageId: string) => {
+    setUserMenuOpen(false);
+    onPageChange(pageId);
+  };
+
   return (
     <div className="flex h-screen bg-gray-50">
       {/* Sidebar */}
@@ -130,7 +135,12 @@ export function LocalCenterLayout({
             return (
               <button
                 key={item.id}
-                onClick={() => onPageChange(item.id)}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  handleNavClick(item.id);
+                }}
+                onClick={() => handleNavClick(item.id)}
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive
                     ? 'bg-blue-50 text-blue-600'

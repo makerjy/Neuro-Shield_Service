@@ -102,6 +102,12 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
   const [dropoutDetails, setDropoutDetails] = useState('');
   const [recontactDate, setRecontactDate] = useState('');
   const [recontactPlan, setRecontactPlan] = useState('');
+
+  // Script Edit
+  const [scriptEdits, setScriptEdits] = useState<Record<string, string>>({});
+  const [scriptEditMode, setScriptEditMode] = useState(false);
+  const [scriptDraft, setScriptDraft] = useState('');
+  const [scriptHistory, setScriptHistory] = useState<Array<{ id: string; step: ConsultationStep; title: string; before: string; after: string; ts: string }>>([]);
   
   // Mock Case Data
   const caseData = {
@@ -284,6 +290,10 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
   }, [consultationNotes, autoSaveEnabled]);
 
   useEffect(() => {
+    setScriptEditMode(false);
+  }, [currentStep, caseStatus]);
+
+  useEffect(() => {
     // Update SMS preview when appointment details change
     if (referralType && appointmentDate && appointmentTime) {
       const dateObj = new Date(appointmentDate);
@@ -324,9 +334,35 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
     });
   };
 
-  const handleInsertScript = (script: string) => {
-    const newNotes = consultationNotes + (consultationNotes ? '\n\n' : '') + `[${currentScriptData.title}]\n${script}`;
-    setConsultationNotes(newNotes);
+  const handleOpenScriptEdit = () => {
+    const key = `${caseStatus}-${currentStep}`;
+    const baseScript = consultationScripts[caseStatus][currentStep].content;
+    setScriptDraft(scriptEdits[key] ?? baseScript);
+    setScriptEditMode(true);
+  };
+
+  const handleSaveScriptEdit = () => {
+    const key = `${caseStatus}-${currentStep}`;
+    const baseScript = consultationScripts[caseStatus][currentStep].content;
+    const previous = scriptEdits[key] ?? baseScript;
+    setScriptEdits((prev) => ({ ...prev, [key]: scriptDraft }));
+    setScriptHistory((prev) => [
+      {
+        id: `EDIT-${Date.now()}`,
+        step: currentStep,
+        title: consultationScripts[caseStatus][currentStep].title,
+        before: previous,
+        after: scriptDraft,
+        ts: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+    setConsultationNotes((prev) => prev + (prev ? '\n\n' : '') + `[${consultationScripts[caseStatus][currentStep].title} - 수정본]\n${scriptDraft}`);
+    setScriptEditMode(false);
+  };
+
+  const handleCancelScriptEdit = () => {
+    setScriptEditMode(false);
   };
 
   const handleTemporarySave = () => {
@@ -433,7 +469,12 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
   };
 
   const currentScriptSet = consultationScripts[caseStatus];
-  const currentScriptData = currentScriptSet[currentStep];
+  const scriptKey = `${caseStatus}-${currentStep}`;
+  const currentScriptBase = currentScriptSet[currentStep];
+  const currentScriptData = {
+    ...currentScriptBase,
+    content: scriptEdits[scriptKey] ?? currentScriptBase.content,
+  };
 
   const getElapsedTime = () => {
     if (!consultationStartTime) return '00:00';
@@ -579,18 +620,39 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
                         </h3>
                         
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                          <p className="text-sm text-blue-900 whitespace-pre-line leading-relaxed">
-                            {currentScriptData.content}
-                          </p>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="mt-3 text-blue-600 hover:text-blue-700 hover:bg-blue-100"
-                            onClick={() => handleInsertScript(currentScriptData.content)}
-                          >
-                            <Copy className="h-4 w-4 mr-2" />
-                            메모에 추가
-                          </Button>
+                          {scriptEditMode ? (
+                            <div className="space-y-3">
+                              <Textarea
+                                value={scriptDraft}
+                                onChange={(e) => setScriptDraft(e.target.value)}
+                                rows={6}
+                                className="bg-white"
+                              />
+                              <div className="flex gap-2">
+                                <Button size="sm" onClick={handleSaveScriptEdit}>
+                                  저장
+                                </Button>
+                                <Button variant="outline" size="sm" onClick={handleCancelScriptEdit}>
+                                  취소
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <p className="text-sm text-blue-900 whitespace-pre-line leading-relaxed">
+                                {currentScriptData.content}
+                              </p>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="mt-3 text-blue-600 hover:text-blue-700 hover:bg-blue-100"
+                                onClick={handleOpenScriptEdit}
+                              >
+                                <Copy className="h-4 w-4 mr-2" />
+                                스크립트 수정
+                              </Button>
+                            </>
+                          )}
                         </div>
 
                         <div className="space-y-3">
@@ -624,6 +686,23 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
                             </div>
                           </div>
                         </div>
+
+                        {scriptHistory.length > 0 && (
+                          <div className="mt-4 border-t pt-3">
+                            <h4 className="text-xs font-semibold text-gray-600 mb-2">스크립트 수정 이력</h4>
+                            <div className="space-y-2">
+                              {scriptHistory.slice(0, 3).map((item) => (
+                                <div key={item.id} className="rounded-md border border-gray-200 bg-white p-2">
+                                  <div className="flex items-center justify-between text-[11px] text-gray-500">
+                                    <span>{item.title}</span>
+                                    <span>{new Date(item.ts).toLocaleString('ko-KR')}</span>
+                                  </div>
+                                  <p className="mt-1 text-xs text-gray-700 line-clamp-2">{item.after}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </CardContent>
                   </Card>

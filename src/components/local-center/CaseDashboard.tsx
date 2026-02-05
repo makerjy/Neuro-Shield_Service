@@ -239,19 +239,29 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
     });
   };
 
+  const getAgeRangeLabel = (age: number) => {
+    if (age >= 80) return '80세 이상';
+    if (age >= 75) return '75~79세';
+    if (age >= 70) return '70~74세';
+    if (age >= 65) return '65~69세';
+    if (age >= 60) return '60~64세';
+    return '60세 미만';
+  };
+
   const filteredCases = cases
     .filter((c) => {
+      const ageRangeLabel = getAgeRangeLabel(c.age);
       const matchesSearch =
         c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
         c.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        c.age.toString().includes(searchTerm);
+        ageRangeLabel.includes(searchTerm);
       const matchesRisk = riskFilter === 'all' || c.riskLevel === riskFilter;
       const matchesStatus = statusFilter === 'all' || c.status === statusFilter;
       const matchesCounselor = counselorFilter === 'all' || c.counselor === counselorFilter;
       const matchesFavorite = !showFavoritesOnly || favorites.has(c.id);
       return matchesSearch && matchesRisk && matchesStatus && matchesCounselor && matchesFavorite;
     })
-    .map((c) => ({ ...c, isFavorite: favorites.has(c.id) }));
+    .map((c) => ({ ...c, isFavorite: favorites.has(c.id), ageRangeLabel: getAgeRangeLabel(c.age) }));
 
   const urgentTasks = tasks.filter((t) => t.priority === 'urgent');
   const todayTasks = tasks.filter((t) => t.priority === 'today');
@@ -339,7 +349,7 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
                     <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                     <Input
                       type="text"
-                      placeholder="케이스 ID 또는 연령대로 검색..."
+                      placeholder="케이스 ID 또는 연령대 범위로 검색..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       className="pl-10"
@@ -430,7 +440,7 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
                         </button>
                       </TableCell>
                       <TableCell className="font-medium">{c.id}</TableCell>
-                      <TableCell>{c.age}세</TableCell>
+                      <TableCell>{c.ageRangeLabel}</TableCell>
                       <TableCell>{getRiskBadge(c.riskLevel)}</TableCell>
                       <TableCell>
                         {c.lastContact ? new Date(c.lastContact).toLocaleDateString('ko-KR') : '-'}
@@ -488,7 +498,7 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
                         {getPriorityBadge(task.priority)}
                         <span className="text-xs text-gray-500">{task.type}</span>
                       </div>
-                      <h4 className="font-semibold text-sm mb-1">{task.patientName}</h4>
+                      <h4 className="font-semibold text-sm mb-1">케이스 ID: {task.caseId}</h4>
                       <p className="text-sm text-gray-700 mb-2">{task.title}</p>
                       <p className="text-xs text-gray-600">{task.description}</p>
                     </div>
@@ -506,7 +516,7 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
                         {getPriorityBadge(task.priority)}
                         <span className="text-xs text-gray-500">{task.type}</span>
                       </div>
-                      <h4 className="font-semibold text-sm mb-1">{task.patientName}</h4>
+                      <h4 className="font-semibold text-sm mb-1">케이스 ID: {task.caseId}</h4>
                       <p className="text-sm text-gray-700 mb-2">{task.title}</p>
                       <p className="text-xs text-gray-600">{task.description}</p>
                     </div>
@@ -524,7 +534,7 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
                         {getPriorityBadge(task.priority)}
                         <span className="text-xs text-gray-500">{task.type}</span>
                       </div>
-                      <h4 className="font-semibold text-sm mb-1">{task.patientName}</h4>
+                      <h4 className="font-semibold text-sm mb-1">케이스 ID: {task.caseId}</h4>
                       <p className="text-sm text-gray-700 mb-2">{task.title}</p>
                       <p className="text-xs text-gray-600">{task.description}</p>
                     </div>

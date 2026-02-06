@@ -23,12 +23,38 @@ export type MapMetric = {
   riskGrade: 'normal' | 'warn' | 'critical';
 };
 
+export type RiskMatrixPoint = {
+  regionId: string;
+  regionName: string;
+  slaRate: number;
+  dataRate: number;
+  totalCases: number;
+};
+
+export type StageByRegion = {
+  regionName: string;
+  incoming: number;
+  inProgress: number;
+  needRecontact: number;
+  slaBreach: number;
+  completed: number;
+};
+
+export type WeeklyTrendItem = {
+  week: string;
+  throughput: number;
+  slaRate: number;
+  changeRate: number;
+};
+
 export type Charts = {
   pieSla: { name: string; value: number }[];
   pieData: { name: string; value: number }[];
   barKpi: { name: string; value: number }[];
   barLoadByCenter: { name: string; value: number }[];
-  weeklyTrend: { week: string; throughput: number; slaRate: number }[];
+  weeklyTrend: WeeklyTrendItem[];
+  riskMatrix: RiskMatrixPoint[];
+  stageByRegion: StageByRegion[];
 };
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -113,14 +139,35 @@ const makeCharts = (region: RegionKey, kpi: KPI): Charts => {
     value: Math.round(30 + rnd() * 70)
   }));
 
-  const weeklyTrend = Array.from({ length: 12 }).map((_, idx) => {
+  const weeklyTrend: WeeklyTrendItem[] = Array.from({ length: 12 }).map((_, idx) => {
     const throughput = Math.round(600 + rnd() * 700 + idx * 40);
     const slaRate = clamp(1 + rnd() * 6, 0.5, 9);
+    const changeRate = idx === 0 ? 0 : Number(((-15 + rnd() * 30)).toFixed(1));
     return {
       week: `W${idx + 1}`,
       throughput,
-      slaRate: Number(slaRate.toFixed(2))
+      slaRate: Number(slaRate.toFixed(2)),
+      changeRate
     };
+  });
+
+  const regions = SIDO_OPTIONS.filter((item) => item.code !== 'all');
+  const riskMatrix: RiskMatrixPoint[] = regions.map((r) => ({
+    regionId: r.code,
+    regionName: r.label,
+    slaRate: Number(clamp(85 + rnd() * 15, 78, 100).toFixed(1)),
+    dataRate: Number(clamp(82 + rnd() * 18, 75, 100).toFixed(1)),
+    totalCases: Math.round(200 + rnd() * 3000)
+  }));
+
+  const stageByRegion: StageByRegion[] = regions.map((r) => {
+    const total = Math.round(500 + rnd() * 2500);
+    const completed = Math.round(total * (0.4 + rnd() * 0.3));
+    const inProgress = Math.round(total * (0.1 + rnd() * 0.15));
+    const incoming = Math.round(total * (0.05 + rnd() * 0.1));
+    const slaBreach = Math.round(total * (0.01 + rnd() * 0.05));
+    const needRecontact = Math.max(0, total - completed - inProgress - incoming - slaBreach);
+    return { regionName: r.label, incoming, inProgress, needRecontact, slaBreach, completed };
   });
 
   return {
@@ -134,7 +181,9 @@ const makeCharts = (region: RegionKey, kpi: KPI): Charts => {
     ],
     barKpi,
     barLoadByCenter,
-    weeklyTrend
+    weeklyTrend,
+    riskMatrix,
+    stageByRegion
   };
 };
 

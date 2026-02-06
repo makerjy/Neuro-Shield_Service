@@ -18,6 +18,9 @@ import {
   Treemap,
   Sector,
   ReferenceLine,
+  ScatterChart,
+  Scatter,
+  ZAxis,
 } from 'recharts';
 import { GeoMapPanel } from '../geomap/GeoMapPanel';
 import { useDrillState, getDrillLevelLabel } from '../../lib/useDrillState';
@@ -774,6 +777,59 @@ export function NationalDashboard() {
   }, [statsScopeKey, timeFilter]);
 
   /* ─────────────────────────────────────────────────────────────
+     SLA × 데이터 충족률 2×2 리스크 매트릭스 데이터
+  ───────────────────────────────────────────────────────────── */
+  const SLA_THRESHOLD = 95;
+  const DATA_THRESHOLD = 93;
+
+  const riskMatrixData = useMemo(() => {
+    const regions = [
+      { id: '11', name: '서울' }, { id: '26', name: '부산' }, { id: '27', name: '대구' },
+      { id: '28', name: '인천' }, { id: '29', name: '광주' }, { id: '30', name: '대전' },
+      { id: '31', name: '울산' }, { id: '36', name: '세종' }, { id: '41', name: '경기' },
+      { id: '43', name: '충북' }, { id: '44', name: '충남' }, { id: '45', name: '전북' },
+      { id: '46', name: '전남' }, { id: '47', name: '경북' }, { id: '48', name: '경남' },
+      { id: '50', name: '제주' }, { id: '51', name: '강원' },
+    ];
+    return regions.map(r => {
+      const seed = `${statsScopeKey}-${timeFilter}-risk-${r.id}`;
+      const slaRate = Number(seededValue(`${seed}-sla`, 78, 100).toFixed(1));
+      const dataRate = Number(seededValue(`${seed}-data`, 75, 100).toFixed(1));
+      const totalCases = Math.round(seededValue(`${seed}-cases`, 200, 3000));
+      return { regionId: r.id, regionName: r.name, slaRate, dataRate, totalCases };
+    });
+  }, [statsScopeKey, timeFilter]);
+
+  /* ─────────────────────────────────────────────────────────────
+     처리 단계 분포 스택형 바 데이터
+  ───────────────────────────────────────────────────────────── */
+  const STAGE_KEYS = ['incoming', 'inProgress', 'needRecontact', 'slaBreach', 'completed'] as const;
+  const STAGE_LABELS: Record<string, string> = {
+    incoming: '신규', inProgress: '처리중', needRecontact: '재접촉 필요',
+    slaBreach: 'SLA 위반', completed: '완료',
+  };
+  const STAGE_COLORS_MAP: Record<string, string> = {
+    incoming: COLORS.blue, inProgress: COLORS.cyan, needRecontact: COLORS.orange,
+    slaBreach: COLORS.red, completed: COLORS.green,
+  };
+
+  const stageByRegionData = useMemo(() => {
+    const regions = ['서울', '부산', '대구', '인천', '광주', '대전', '울산', '세종',
+                     '경기', '충북', '충남', '전북', '전남', '경북', '경남', '제주', '강원'];
+    return regions.map(name => {
+      const seed = `${statsScopeKey}-${timeFilter}-stage-${name}`;
+      return {
+        regionName: name,
+        incoming: Math.round(seededValue(`${seed}-inc`, 50, 300)),
+        inProgress: Math.round(seededValue(`${seed}-inp`, 100, 500)),
+        needRecontact: Math.round(seededValue(`${seed}-nrc`, 20, 150)),
+        slaBreach: Math.round(seededValue(`${seed}-sla`, 5, 80)),
+        completed: Math.round(seededValue(`${seed}-cmp`, 200, 800)),
+      };
+    });
+  }, [statsScopeKey, timeFilter]);
+
+  /* ─────────────────────────────────────────────────────────────
      커스텀 트리맵 컨텐트
   ───────────────────────────────────────────────────────────── */
   const CustomTreemapContent = (props: any) => {
@@ -1056,7 +1112,7 @@ export function NationalDashboard() {
           layoutMode === 'desktop' 
             ? 'w-[60%] min-w-0 shrink-0' 
             : 'w-full shrink-0'
-        }`}style={{width: "40%"}}>
+        }`}style={{width: "35%"}}>
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col min-h-[400px]">
             <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
               <div className="flex items-center gap-2">
@@ -1113,42 +1169,100 @@ export function NationalDashboard() {
             : layoutMode === 'tablet'
             ? 'hidden'
             : 'w-full shrink-0'
-        }`}style={{width: "44%"}} >
+        }`}style={{width: "49%"}} >
           
-          {/* 파이 차트들을 같은 선상에 배치 (2열 그리드) */}
-          <div className="grid grid-cols-2 gap-1.5">
-            {rightKPIs.filter(kpi => kpi.visualization.chartType === 'donut').map(kpi => {
-              const data = kpiDataMap[kpi.id];
-              if (!data) return null;
-              
-              return (
-                <div key={kpi.id} className="bg-white border border-gray-200 rounded-lg p-1.5">
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-[9px] font-medium text-gray-700 truncate">{kpi.name}</span>
-                  </div>
-                  <div className="h-[70px]">
-                    <KPIWidget 
-                      kpi={kpi} 
-                      data={data} 
-                      statsScopeKey={statsScopeKey}
-                      activeDonutIndex={activeDonutIndex}
-                      setActiveDonutIndex={setActiveDonutIndex}
-                    />
-                  </div>
-                  {/* 도넛 차트 범례 */}
-                  {Array.isArray(data) && (
-                    <div className="flex flex-wrap justify-center gap-1 mt-1">
-                      {(data as DonutDataItem[]).map((item, idx) => (
-                        <div key={idx} className="flex items-center gap-0.5 text-[9px]">
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.color }} />
-                          <span>{item.name} {((item.value / (data as DonutDataItem[]).reduce((s, i) => s + i.value, 0)) * 100).toFixed(1)}%</span>
+          {/* ═══ SLA × 데이터 충족률 리스크 매트릭스 (ScatterChart) ═══ */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-semibold text-gray-700">SLA × 데이터 충족률 리스크 매트릭스</span>
+              <div className="flex items-center gap-2 text-[8px] text-gray-500">
+                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-green-500" />양호</span>
+                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-amber-400" />주의</span>
+                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-red-500" />위험</span>
+              </div>
+            </div>
+            {riskMatrixData.length > 0 ? (
+              <div style={{ height: '200px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 10, right: 15, left: -5, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis type="number" dataKey="dataRate" name="데이터 충족률" unit="%"
+                      domain={[70, 100]} tick={{ fontSize: 10 }} label={{ value: '데이터 충족률(%)', position: 'insideBottom', offset: -2, fontSize: 9, fill: '#6b7280' }} />
+                    <YAxis type="number" dataKey="slaRate" name="SLA 준수율" unit="%"
+                      domain={[70, 100]} tick={{ fontSize: 10 }} label={{ value: 'SLA(%)', angle: -90, position: 'insideLeft', offset: 15, fontSize: 9, fill: '#6b7280' }} />
+                    <ZAxis type="number" dataKey="totalCases" range={[40, 300]} name="케이스 수" />
+                    <ReferenceLine x={DATA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
+                    <ReferenceLine y={SLA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
+                    <Tooltip content={({ active, payload }) => {
+                      if (!active || !payload?.[0]) return null;
+                      const d = payload[0].payload;
+                      return (
+                        <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-xs">
+                          <div className="font-semibold text-gray-800 mb-1">{d.regionName}</div>
+                          <div>SLA 준수율: <span className="font-medium">{d.slaRate}%</span></div>
+                          <div>데이터 충족률: <span className="font-medium">{d.dataRate}%</span></div>
+                          <div>케이스: <span className="font-medium">{d.totalCases.toLocaleString()}건</span></div>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                      );
+                    }} />
+                    <Scatter data={riskMatrixData} onClick={(entry: any) => {
+                      if (entry?.regionId) {
+                        drillDown({ code: entry.regionId, name: entry.regionName, level: 'sido' });
+                      }
+                    }}>
+                      {riskMatrixData.map((entry, idx) => {
+                        const slaOk = entry.slaRate >= SLA_THRESHOLD;
+                        const dataOk = entry.dataRate >= DATA_THRESHOLD;
+                        const color = slaOk && dataOk ? '#22c55e' : !slaOk && !dataOk ? '#ef4444' : '#f59e0b';
+                        return <Cell key={idx} fill={color} style={{ cursor: 'pointer' }} />;
+                      })}
+                    </Scatter>
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="h-[200px] flex items-center justify-center text-xs text-gray-400">데이터 부족</div>
+            )}
+          </div>
+
+          {/* ═══ 처리 단계 분포 스택형 바 ═══ */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-semibold text-gray-700">처리 단계 분포 (지역별)</span>
+            </div>
+            {stageByRegionData.length > 0 ? (
+              <div style={{ height: '220px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={stageByRegionData} margin={{ top: 5, right: 10, left: -10, bottom: 25 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                    <XAxis dataKey="regionName" tick={{ fontSize: 9, fill: '#4b5563' }} interval={0} angle={-35} textAnchor="end" />
+                    <YAxis tick={{ fontSize: 9, fill: '#6b7280' }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} />
+                    <Tooltip content={({ active, payload, label }) => {
+                      if (!active || !payload?.length) return null;
+                      const total = payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
+                      return (
+                        <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-xs">
+                          <div className="font-semibold text-gray-800 mb-1">{label}</div>
+                          {payload.map((p, i) => (
+                            <div key={i} className="flex items-center gap-1">
+                              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+                              <span>{STAGE_LABELS[p.dataKey as string] || p.dataKey}: {Number(p.value).toLocaleString()}건 ({total > 0 ? ((Number(p.value) / total) * 100).toFixed(1) : 0}%)</span>
+                            </div>
+                          ))}
+                          <div className="mt-1 pt-1 border-t border-gray-100 font-medium">합계: {total.toLocaleString()}건</div>
+                        </div>
+                      );
+                    }} />
+                    <Legend formatter={(value: string) => STAGE_LABELS[value] || value} wrapperStyle={{ fontSize: '9px' }} />
+                    {STAGE_KEYS.map(key => (
+                      <Bar key={key} dataKey={key} stackId="stage" fill={STAGE_COLORS_MAP[key]} />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="h-[220px] flex items-center justify-center text-xs text-gray-400">데이터 부족</div>
+            )}
           </div>
 
           {/* ═══════════════════════════════════════════════════════
@@ -1340,7 +1454,7 @@ export function NationalDashboard() {
       <div className="shrink-0 px-3 pb-3">
         <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-700">{timeFilterLabel} 처리량 추이</span>
+            <span className="text-sm font-semibold text-gray-700">전주 대비 증감률</span>
             <div className="flex items-center gap-1">
               <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
               <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
@@ -1348,22 +1462,31 @@ export function NationalDashboard() {
           </div>
           <div style={{ height: '180px' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={timeSeriesData} margin={{ top: 10, right: 40, left: 0, bottom: 5 }}>
-                <defs>
-                  <linearGradient id="timeBarGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#bf6ce3" stopOpacity={0.9}/>
-                    <stop offset="100%" stopColor="#dc6fe8" stopOpacity={0.9}/>
-                  </linearGradient>
-                </defs>
+              <BarChart data={timeSeriesData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                <XAxis dataKey="month" tick={{ fontSize: 13 }} />
-                <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} domain={[-20, 20]} />
-                <Tooltip formatter={(value: number, name: string) => [name === '처리량' ? value.toLocaleString() + '건' : value + '%', name]} />
-                <Legend wrapperStyle={{ fontSize: '11px' }} />
-                <Bar yAxisId="left" dataKey="처리량" fill="url(#timeBarGradient)" radius={[6, 6, 0, 0]} name="처리량" />
-                <Line yAxisId="right" type="monotone" dataKey="증감률" stroke="#6ce3a2" strokeWidth={3} dot={{ fill: '#6ce3a2', r: 5, strokeWidth: 2, stroke: '#fff' }} name="증감률" />
-              </ComposedChart>
+                <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#374151' }} />
+                <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} tickFormatter={(v) => `${v}%`} domain={['auto', 'auto']} />
+                <ReferenceLine y={0} stroke="#9ca3af" strokeWidth={1.5} />
+                <Tooltip content={({ active, payload, label }) => {
+                  if (!active || !payload?.[0]) return null;
+                  const rate = payload[0].value as number;
+                  const item = payload[0].payload;
+                  return (
+                    <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-xs">
+                      <div className="font-semibold text-gray-800 mb-1">{label}</div>
+                      <div style={{ color: rate >= 0 ? '#16a34a' : '#ef4444' }}>
+                        증감률: {rate >= 0 ? '+' : ''}{rate}%
+                      </div>
+                      <div className="text-gray-500">처리량: {item.처리량?.toLocaleString()}건</div>
+                    </div>
+                  );
+                }} />
+                <Bar dataKey="증감률" radius={[4, 4, 0, 0]}>
+                  {timeSeriesData.map((entry, idx) => (
+                    <Cell key={idx} fill={entry.증감률 >= 0 ? '#16a34a' : '#ef4444'} />
+                  ))}
+                </Bar>
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </div>

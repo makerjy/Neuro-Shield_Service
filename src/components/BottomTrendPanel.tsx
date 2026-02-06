@@ -2,8 +2,9 @@ import React from 'react';
 import {
   Bar,
   CartesianGrid,
-  ComposedChart,
-  Line,
+  BarChart,
+  Cell,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -26,12 +27,8 @@ type BottomTrendPanelProps = {
 export function BottomTrendPanel({
   data,
   loading,
-  title = '주간 처리량 추이',
+  title = '전주 대비 증감률',
   xKey = 'week',
-  primaryKey = 'throughput',
-  secondaryKey = 'slaRate',
-  primaryColor = CHART_COLORS.primary,
-  secondaryColor = CHART_COLORS.accent,
   footerLabel = '최근 12구간'
 }: BottomTrendPanelProps) {
   if (loading) {
@@ -44,6 +41,12 @@ export function BottomTrendPanel({
     );
   }
 
+  const chartData = data.map((item) => ({
+    week: item[xKey] ?? '',
+    changeRate: typeof item.changeRate === 'number' ? item.changeRate : 0,
+    throughput: typeof item.throughput === 'number' ? item.throughput : 0
+  }));
+
   return (
     <div className="rounded-md border border-gray-200 bg-white p-4">
       <div className="flex items-center justify-between">
@@ -52,15 +55,40 @@ export function BottomTrendPanel({
       </div>
       <div className="mt-4 h-48">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+          <BarChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey={xKey} tick={{ fontSize: 10 }} />
-            <YAxis yAxisId="left" tick={{ fontSize: 10 }} />
-            <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} />
-            <Tooltip />
-            <Bar yAxisId="left" dataKey={primaryKey} fill={primaryColor} radius={[3, 3, 0, 0]} />
-            <Line yAxisId="right" type="monotone" dataKey={secondaryKey} stroke={secondaryColor} strokeWidth={2} dot={false} />
-          </ComposedChart>
+            <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+            <YAxis
+              tick={{ fontSize: 10 }}
+              tickFormatter={(v) => `${v}%`}
+              domain={['auto', 'auto']}
+            />
+            <ReferenceLine y={0} stroke="#374151" strokeWidth={1.5} />
+            <Tooltip
+              content={({ payload, label }) => {
+                if (!payload?.[0]) return null;
+                const item = payload[0].payload;
+                return (
+                  <div className="rounded border border-gray-200 bg-white px-3 py-2 text-xs shadow-sm">
+                    <div className="font-semibold text-gray-900">{label}</div>
+                    <div className="text-gray-600">
+                      증감률: <span className={item.changeRate >= 0 ? 'text-emerald-600' : 'text-red-600'}>{item.changeRate > 0 ? '+' : ''}{item.changeRate}%</span>
+                    </div>
+                    <div className="text-gray-500">처리량: {item.throughput.toLocaleString()}건</div>
+                  </div>
+                );
+              }}
+            />
+            <Bar dataKey="changeRate" radius={[3, 3, 0, 0]}>
+              {chartData.map((entry, idx) => (
+                <Cell
+                  key={idx}
+                  fill={entry.changeRate >= 0 ? '#16a34a' : CHART_COLORS.accent}
+                  fillOpacity={0.85}
+                />
+              ))}
+            </Bar>
+          </BarChart>
         </ResponsiveContainer>
       </div>
     </div>

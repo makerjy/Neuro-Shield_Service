@@ -1,10 +1,12 @@
 /*
- * 원본 central-model_dashboard/src/styles/theme.css의 CSS 변수를
- * .model-dashboard-scope 클래스 안에서만 적용되도록 scope 처리
- * → 메인 프로젝트의 다른 페이지에 영향 없이 원본 피그마 디자인 유지
+ * 원본 central-model_dashboard/src/styles/theme.css의 CSS 변수 + @layer base를
+ * .model-dashboard-scope 안에서만 적용되도록 완전 scope 처리
+ * → 메인 프로젝트의 :root 변수(--primary: #1e3a5f 등)를 덮어쓰지 않음
+ * → 피그마 대시보드 내부에서만 원본 토큰/타이포/기본 스타일 적용
  */
 
-.model-dashboard-scope {
+/* ─── 1) CSS 변수: :root 대신 scope에만 ─── */
+:where(.model-dashboard-scope) {
   --font-size: 16px;
   --background: #ffffff;
   --foreground: oklch(0.145 0 0);
@@ -45,42 +47,90 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* 원본 theme.css @layer base 스타일 - scope 안에서만 적용 */
-.model-dashboard-scope * {
+/* ─── 2) 다크모드도 scope 안에서만 ─── */
+:where(.model-dashboard-scope.dark) {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
+}
+
+/* ─── 3) base 레이어도 scope로 제한 ─── */
+/* border 기본값 */
+:where(.model-dashboard-scope) *,
+:where(.model-dashboard-scope) *::before,
+:where(.model-dashboard-scope) *::after {
   border-color: var(--border);
 }
 
-.model-dashboard-scope h1 {
+/* body 대신 scope 컨테이너에 배경/텍스트 직접 적용 */
+:where(.model-dashboard-scope) {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-size: var(--font-size);
+}
+
+:where(.model-dashboard-scope) h1 {
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
 }
 
-.model-dashboard-scope h2 {
+:where(.model-dashboard-scope) h2 {
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
 }
 
-.model-dashboard-scope h3 {
+:where(.model-dashboard-scope) h3 {
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
 }
 
-.model-dashboard-scope h4 {
+:where(.model-dashboard-scope) h4 {
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
 }
 
-.model-dashboard-scope button {
+:where(.model-dashboard-scope) label {
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
 }
 
-.model-dashboard-scope label {
+:where(.model-dashboard-scope) button {
   font-weight: var(--font-weight-medium);
   line-height: 1.5;
 }
 
-.model-dashboard-scope input {
+:where(.model-dashboard-scope) input {
   font-weight: var(--font-weight-normal);
   line-height: 1.5;
 }

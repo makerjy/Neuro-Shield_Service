@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertCircle, Phone, MapPin } from 'lucide-react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, User, AlertCircle, Phone, MapPin, FlaskConical, ClipboardList, MessageSquare } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
@@ -9,25 +9,12 @@ import { Alert, AlertDescription } from '../ui/alert';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Label } from '../ui/label';
-
-type RiskLevel = 'high' | 'medium' | 'low';
-type AppointmentStatus = 'confirmed' | 'pending' | 'reminder_sent' | 'completed' | 'cancelled';
-
-interface Appointment {
-  id: string;
-  caseId: string;
-  patientName: string;
-  patientAge: number;
-  date: string;
-  time: string;
-  type: string;
-  status: AppointmentStatus;
-  riskLevel: RiskLevel;
-  counselor: string;
-  phone: string;
-  reminderSent?: boolean;
-  notes?: string;
-}
+import {
+  generateCases, generateAppointments,
+  CONTACT_STATUS_LABELS, CONSULT_STATUS_LABELS, SECOND_EXAM_LABELS, RESERVATION_TYPE_LABELS,
+  maskPhone,
+  type Appointment, type RiskLevel, type AppointmentStatus,
+} from './caseData';
 
 export function Calendar() {
   const [now, setNow] = useState(new Date());
@@ -43,79 +30,10 @@ export function Calendar() {
   const [newTime, setNewTime] = useState('');
   const [newNotes, setNewNotes] = useState('');
 
-  // Mock appointments data
-  const initialAppointments: Appointment[] = [
-    {
-      id: 'APT-001',
-      caseId: 'CASE-2026-001',
-      patientName: '김민수',
-      patientAge: 72,
-      date: '2026-02-05',
-      time: '10:00',
-      type: '선별검사',
-      status: 'confirmed',
-      riskLevel: 'high',
-      counselor: '이상담',
-      phone: '010-1234-5678',
-      reminderSent: true,
-      notes: '고위험군, 최근 기억력 저하 호소',
-    },
-    {
-      id: 'APT-002',
-      caseId: 'CASE-2026-002',
-      patientName: '박영희',
-      patientAge: 68,
-      date: '2026-02-05',
-      time: '14:00',
-      type: '재검사',
-      status: 'reminder_sent',
-      riskLevel: 'medium',
-      counselor: '김상담',
-      phone: '010-2345-6789',
-      reminderSent: true,
-    },
-    {
-      id: 'APT-003',
-      caseId: 'CASE-2026-003',
-      patientName: '정철수',
-      patientAge: 75,
-      date: '2026-02-06',
-      time: '11:00',
-      type: '선별검사',
-      status: 'pending',
-      riskLevel: 'high',
-      counselor: '이상담',
-      phone: '010-3456-7890',
-      notes: '3일 전 리마인더 대기 중',
-    },
-    {
-      id: 'APT-004',
-      caseId: 'CASE-2026-004',
-      patientName: '최수진',
-      patientAge: 70,
-      date: '2026-02-03',
-      time: '15:00',
-      type: '상담',
-      status: 'completed',
-      riskLevel: 'low',
-      counselor: '김상담',
-      phone: '010-4567-8901',
-    },
-    {
-      id: 'APT-005',
-      caseId: 'CASE-2026-005',
-      patientName: '이순자',
-      patientAge: 73,
-      date: '2026-02-07',
-      time: '10:30',
-      type: '선별검사',
-      status: 'confirmed',
-      riskLevel: 'medium',
-      counselor: '이상담',
-      phone: '010-5678-9012',
-    },
-  ];
-  const [appointments, setAppointments] = useState<Appointment[]>(initialAppointments);
+  // ═══ 공유 데이터에서 예약 생성 ═══
+  const allCases = useMemo(() => generateCases(), []);
+  const sharedAppointments = useMemo(() => generateAppointments(allCases), [allCases]);
+  const [appointments, setAppointments] = useState<Appointment[]>(sharedAppointments);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -524,11 +442,16 @@ export function Calendar() {
                   ) : (
                     <p className="text-sm text-gray-400 mb-2">연령 정보 없음</p>
                   )}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {getRiskBadge(selectedAppointment.riskLevel)}
                     <Badge variant={getStatusBadge(selectedAppointment.status).variant}>
                       {getStatusBadge(selectedAppointment.status).label}
                     </Badge>
+                    {selectedAppointment.reservationType && (
+                      <Badge variant="outline" className="text-xs">
+                        {RESERVATION_TYPE_LABELS[selectedAppointment.reservationType]}
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </div>
@@ -555,7 +478,7 @@ export function Calendar() {
                   <p className="text-sm text-gray-500">연락처</p>
                   <p className="font-medium mt-1 flex items-center gap-1">
                     <Phone className="h-4 w-4 text-gray-400" />
-                    {selectedAppointment.phone}
+                    {maskPhone(selectedAppointment.phone)}
                   </p>
                 </div>
                 <div className="col-span-2">
@@ -564,10 +487,58 @@ export function Calendar() {
                 </div>
               </div>
 
-              {selectedAppointment.notes && (
+              {/* ═══ 확장: 케이스 상태 요약 ═══ */}
+              {(selectedAppointment.caseContactStatus || selectedAppointment.caseConsultStatus || selectedAppointment.caseSecondExamStatus) && (
+                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                  <p className="text-xs font-semibold text-slate-600 mb-2 flex items-center gap-1">
+                    <ClipboardList className="h-3.5 w-3.5" /> 케이스 상태 요약
+                  </p>
+                  <div className="flex items-center gap-3 flex-wrap text-sm">
+                    {selectedAppointment.caseContactStatus && (
+                      <span className="text-gray-700">접촉: <strong>{CONTACT_STATUS_LABELS[selectedAppointment.caseContactStatus]}</strong></span>
+                    )}
+                    {selectedAppointment.caseConsultStatus && (
+                      <span className="text-gray-700">상담: <strong>{CONSULT_STATUS_LABELS[selectedAppointment.caseConsultStatus]}</strong></span>
+                    )}
+                    {selectedAppointment.caseSecondExamStatus && (
+                      <span className="text-gray-700 flex items-center gap-1">
+                        <FlaskConical className="h-3.5 w-3.5" />
+                        2차: <strong>{SECOND_EXAM_LABELS[selectedAppointment.caseSecondExamStatus]}</strong>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ═══ 확장: 예약 사유 ═══ */}
+              {selectedAppointment.reasonText && (
+                <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+                  <p className="text-xs font-semibold text-purple-700 mb-1">예약 사유</p>
+                  <p className="text-sm text-purple-900">{selectedAppointment.reasonText}</p>
+                </div>
+              )}
+
+              {selectedAppointment.notes && !selectedAppointment.reasonText && (
                 <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
                   <p className="text-sm font-medium text-blue-900 mb-1">특이사항</p>
                   <p className="text-sm text-blue-700">{selectedAppointment.notes}</p>
+                </div>
+              )}
+
+              {/* ═══ 확장: 최근 운영 메모 ═══ */}
+              {selectedAppointment.autoMemoRecent && selectedAppointment.autoMemoRecent.length > 0 && (
+                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  <p className="text-xs font-semibold text-gray-600 mb-2 flex items-center gap-1">
+                    <MessageSquare className="h-3.5 w-3.5" /> 최근 운영 메모
+                  </p>
+                  <ul className="space-y-1">
+                    {selectedAppointment.autoMemoRecent.map((memo, i) => (
+                      <li key={i} className="text-xs text-gray-700 flex items-start gap-1.5">
+                        <span className="mt-1 w-1 h-1 rounded-full bg-gray-400 flex-shrink-0" />
+                        {memo}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
 

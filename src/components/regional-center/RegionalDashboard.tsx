@@ -18,6 +18,7 @@ import {
   ScatterChart,
   Scatter,
   ZAxis,
+  Brush,
 } from 'recharts';
 import { GeoMapPanel } from '../geomap/GeoMapPanel';
 import { RegionalScope } from '../geomap/regions';
@@ -145,7 +146,18 @@ const MAP_KPI_CARDS: MapKpiCardDef[] = [
 ];
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   KPI 통합 추이 차트
+   KPI 통합 추이 차트 — 인터랙션 고도화
+   - 멀티 KPI 토글(최대 4개, FIFO 자동 교체)
+   - Brush(구간 선택/확대) + 리셋
+   - 정규화 보기(첫 시점=100 지수화) 토글  ← 스케일 문제 해결책
+     «이유: 좌/우 이중축은 4개 KPI에서 축 분리 규칙이 복잡하고,
+      small multiples는 레이아웃 49% 컬럼에 비좁음.
+      첫날=100 지수화가 가장 직관적으로 방향/크기를 비교할 수 있다.»
+   - 비교 모드(이전 기간 오버레이, 점선)
+   - Legend를 컨트롤로 활용(클릭 토글, hover 강조)
+   - 커스텀 Tooltip(값 큰 순 정렬, Δ 표시)
+   - 로딩/에러/빈 데이터 상태 분리
+   - useMemo/useCallback으로 불필요 재렌더 방지
 ═══════════════════════════════════════════════════════════════════════════════ */
 type UnifiedKpiKey = 'contact' | 'consult' | 'linkage' | 'dropout' | 'recontact';
 
@@ -165,25 +177,28 @@ interface KPIUnifiedChartProps {
 function KPIUnifiedChart({ statsScopeKey, analyticsPeriod }: KPIUnifiedChartProps) {
   const [enabledKeys, setEnabledKeys] = useState<UnifiedKpiKey[]>(['contact', 'consult', 'linkage', 'dropout']);
   const [hoveredKey, setHoveredKey] = useState<UnifiedKpiKey | null>(null);
+  const [isNormalized, setIsNormalized] = useState(false);
+  const [isComparePrev, setIsComparePrev] = useState(false);
+  const [brushRange, setBrushRange] = useState<{ startIndex?: number; endIndex?: number }>({});
 
-  const toggleKey = (key: UnifiedKpiKey) => {
+  const toggleKey = useCallback((key: UnifiedKpiKey) => {
     setEnabledKeys(prev => {
       if (prev.includes(key)) return prev.filter(k => k !== key);
-      if (prev.length >= 4) return [...prev.slice(1), key];
+      if (prev.length >= 4) return [...prev.slice(1), key]; // FIFO: 가장 오래된 것 자동 제거
       return [...prev, key];
     });
-  };
+  }, []);
 
   const timeRangeLabel = analyticsPeriod === 'week' ? '최근 7일' : analyticsPeriod === 'month' ? '최근 12개월' : '분기별';
 
-  const unifiedData = useMemo(() => {
+  // ── 원본 데이터 (캐시, KPI 변경 시 재패치 불필요) ──
+  const rawData = useMemo(() => {
     const points = analyticsPeriod === 'week' ? 7 : analyticsPeriod === 'month' ? 12 : 4;
     const labels = analyticsPeriod === 'week'
       ? ['월', '화', '수', '목', '금', '토', '일']
       : analyticsPeriod === 'month'
-      ? ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
-      : ['Q1', 'Q2', 'Q3', 'Q4'];
-
+        ? ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월']
+        : ['Q1', 'Q2', 'Q3', 'Q4'];
     return Array.from({ length: points }, (_, i) => {
       const row: Record<string, string | number> = { date: labels[i] };
       UNIFIED_KPI_DEFS.forEach(def => {
@@ -191,137 +206,251 @@ function KPIUnifiedChart({ statsScopeKey, analyticsPeriod }: KPIUnifiedChartProp
           ? seededValue(`${statsScopeKey}-${analyticsPeriod}-uni-${def.key}-${i}`, 5, 18)
           : seededValue(`${statsScopeKey}-${analyticsPeriod}-uni-${def.key}-${i}`, 65, 98);
         row[def.key] = Number(base.toFixed(1));
+        // 이전 기간 데이터
+        const prevBase = def.key === 'dropout'
+          ? seededValue(`${statsScopeKey}-${analyticsPeriod}-prev-uni-${def.key}-${i}`, 4, 17)
+          : seededValue(`${statsScopeKey}-${analyticsPeriod}-prev-uni-${def.key}-${i}`, 62, 96);
+        row[`${def.key}_prev`] = Number(prevBase.toFixed(1));
       });
       return row;
     });
   }, [statsScopeKey, analyticsPeriod]);
 
-  const visibleDefs = UNIFIED_KPI_DEFS.filter(d => enabledKeys.includes(d.key));
+  // ── 정규화 변환 (첫 시점 = 100 지수) ──
+  const chartData = useMemo(() => {
+    if (!isNormalized) return rawData;
+    if (rawData.length === 0) return rawData;
+    return rawData.map((row, i) => {
+      const r: Record<string, string | number> = { date: row.date };
+      UNIFIED_KPI_DEFS.forEach(def => {
+        const firstVal = Number(rawData[0][def.key]) || 1;
+        r[def.key] = Number(((Number(row[def.key]) / firstVal) * 100).toFixed(1));
+        const firstPrev = Number(rawData[0][`${def.key}_prev`]) || 1;
+        r[`${def.key}_prev`] = Number(((Number(row[`${def.key}_prev`]) / firstPrev) * 100).toFixed(1));
+      });
+      return r;
+    });
+  }, [rawData, isNormalized]);
+
+  // brush 리셋 시 range 초기화
+  useEffect(() => { setBrushRange({}); }, [analyticsPeriod, statsScopeKey]);
+
+  const visibleDefs = useMemo(() => UNIFIED_KPI_DEFS.filter(d => enabledKeys.includes(d.key)), [enabledKeys]);
+  const yDomain: [number, number] = isNormalized ? [70, 130] : [0, 100];
+  const yTickFormatter = useCallback((v: number) => isNormalized ? `${v}` : `${v}%`, [isNormalized]);
+
+  // 비교 라벨
+  const prevPeriodLabel = analyticsPeriod === 'week' ? '전주' : analyticsPeriod === 'month' ? '전월' : '전분기';
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-3">
-      <div className="flex items-center justify-between mb-2">
+      {/* 헤더 */}
+      <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-semibold text-gray-700">KPI 통합 추이</span>
-        <span className="text-[9px] text-gray-400">{timeRangeLabel}</span>
+        <div className="flex items-center gap-2">
+          {/* 정규화 토글 */}
+          <button
+            onClick={() => setIsNormalized(n => !n)}
+            aria-pressed={isNormalized}
+            className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+              isNormalized ? 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300' : 'bg-gray-100 text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {isNormalized ? '정규화 ON' : '원본 값'}
+          </button>
+          {/* 비교 토글 */}
+          <button
+            onClick={() => setIsComparePrev(c => !c)}
+            aria-pressed={isComparePrev}
+            className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+              isComparePrev ? 'bg-amber-100 text-amber-700 ring-1 ring-amber-300' : 'bg-gray-100 text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {isComparePrev ? `${prevPeriodLabel} 비교 ON` : `${prevPeriodLabel} 비교`}
+          </button>
+          {/* Brush 리셋 */}
+          {(brushRange.startIndex != null || brushRange.endIndex != null) && (
+            <button onClick={() => setBrushRange({})} className="px-2 py-0.5 text-[10px] rounded bg-gray-100 text-gray-500 hover:text-gray-700">
+              구간 리셋
+            </button>
+          )}
+          <span className="text-[9px] text-gray-400">{timeRangeLabel}</span>
+        </div>
       </div>
-      <div className="flex flex-wrap gap-1.5 mb-3">
+
+      {/* KPI 칩 (Legend 겸 컨트롤) */}
+      <div className="flex flex-wrap gap-1.5 mb-2" role="group" aria-label="KPI 시리즈 선택">
         {UNIFIED_KPI_DEFS.map(def => {
           const isOn = enabledKeys.includes(def.key);
-          const isHovered = hoveredKey === def.key;
+          const isHov = hoveredKey === def.key;
           return (
             <button
               key={def.key}
+              role="switch"
+              aria-checked={isOn}
+              aria-label={`${def.label} ${isOn ? '활성' : '비활성'}`}
               onClick={() => toggleKey(def.key)}
               onMouseEnter={() => setHoveredKey(def.key)}
               onMouseLeave={() => setHoveredKey(null)}
+              onFocus={() => setHoveredKey(def.key)}
+              onBlur={() => setHoveredKey(null)}
               className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium transition-all border ${
                 isOn ? 'border-transparent shadow-sm' : 'border-gray-200 bg-white text-gray-400 hover:text-gray-600 hover:border-gray-300'
-              } ${isHovered && isOn ? 'ring-2 ring-offset-1' : ''}`}
+              } ${isHov && isOn ? 'ring-2 ring-offset-1' : ''}`}
               style={isOn ? {
-                backgroundColor: `${def.color}15`,
-                color: def.color,
-                borderColor: `${def.color}40`,
-                ...(isHovered ? { ringColor: `${def.color}40` } : {}),
+                backgroundColor: `${def.color}15`, color: def.color, borderColor: `${def.color}40`,
               } : undefined}
             >
               <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: isOn ? def.color : '#d1d5db' }} />
               <span>{def.label}</span>
+              {isOn && <span className="text-[9px] opacity-60">{def.unit}</span>}
             </button>
           );
         })}
       </div>
-      <div style={{ height: '260px' }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={unifiedData} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
-            <defs>
-              {UNIFIED_KPI_DEFS.map(def => (
-                <linearGradient key={`area-grad-${def.key}`} id={`areaGrad-${def.key}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={def.color} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={def.color} stopOpacity={0.02} />
-                </linearGradient>
-              ))}
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-            <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
-            <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} domain={[0, 100]} width={32} />
-            <Tooltip content={({ active, payload, label }) => {
-              if (!active || !payload?.length) return null;
-              return (
-                <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[180px]">
-                  <div className="font-semibold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">{label}</div>
-                  {payload.filter(p => p.type !== 'none').map((p, i) => {
-                    const def = UNIFIED_KPI_DEFS.find(d => d.key === p.dataKey);
-                    if (!def) return null;
-                    const currentVal = Number(p.value);
-                    const dataIndex = unifiedData.findIndex(d => d.date === label);
-                    const prevVal = dataIndex > 0 ? Number(unifiedData[dataIndex - 1][def.key]) : null;
-                    const diff = prevVal != null ? currentVal - prevVal : null;
-                    return (
-                      <div key={i} className="flex items-center justify-between gap-3 py-0.5">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: def.color }} />
-                          <span className="text-gray-600">{def.label}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="font-semibold" style={{ color: def.color }}>{currentVal.toFixed(1)}{def.unit}</span>
-                          {diff != null && diff !== 0 && (
-                            <span className={`text-[9px] font-medium ${diff > 0 ? (def.key === 'dropout' ? 'text-red-500' : 'text-green-500') : (def.key === 'dropout' ? 'text-green-500' : 'text-red-500')}`}>
-                              {diff > 0 ? '▲' : '▼'}{Math.abs(diff).toFixed(1)}
-                            </span>
+
+      {/* 상태 안내 */}
+      {visibleDefs.length === 0 && (
+        <div className="flex items-center justify-center h-[260px] text-sm text-gray-400">KPI를 1개 이상 선택하세요</div>
+      )}
+
+      {/* 메인 차트 */}
+      {visibleDefs.length > 0 && (
+        <div style={{ height: '280px' }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
+              <defs>
+                {UNIFIED_KPI_DEFS.map(def => (
+                  <linearGradient key={`area-grad-${def.key}`} id={`areaGrad-${def.key}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={def.color} stopOpacity={0.25} />
+                    <stop offset="100%" stopColor={def.color} stopOpacity={0.02} />
+                  </linearGradient>
+                ))}
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
+              <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} domain={yDomain} width={32}
+                tickFormatter={yTickFormatter}
+                label={isNormalized ? { value: '지수(첫 시점=100)', angle: -90, position: 'insideLeft', offset: 12, fontSize: 9, fill: '#9ca3af' } : undefined} />
+              <Tooltip content={({ active, payload, label }) => {
+                if (!active || !payload?.length) return null;
+                // 값 큰 순 정렬
+                const sorted = [...payload]
+                  .filter(p => p.type !== 'none' && !String(p.dataKey).endsWith('_prev'))
+                  .sort((a, b) => Number(b.value) - Number(a.value));
+                return (
+                  <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[210px]">
+                    <div className="font-semibold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">
+                      {label} {isNormalized && <span className="text-[9px] text-indigo-500 font-normal">(정규화)</span>}
+                    </div>
+                    {sorted.map((p, i) => {
+                      const def = UNIFIED_KPI_DEFS.find(d => d.key === p.dataKey);
+                      if (!def) return null;
+                      const val = Number(p.value);
+                      const dataIdx = chartData.findIndex(d => d.date === label);
+                      const prevPointVal = dataIdx > 0 ? Number(chartData[dataIdx - 1][def.key]) : null;
+                      const diff = prevPointVal != null ? val - prevPointVal : null;
+                      const comparePrevVal = isComparePrev ? Number(chartData[dataIdx]?.[`${def.key}_prev`]) : null;
+                      const compareDiff = comparePrevVal != null ? val - comparePrevVal : null;
+                      const unitLabel = isNormalized ? '' : def.unit;
+                      return (
+                        <div key={i} className="py-0.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: def.color }} />
+                              <span className="text-gray-600">{def.label}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="font-semibold" style={{ color: def.color }}>{val.toFixed(1)}{unitLabel}</span>
+                              {diff != null && diff !== 0 && (
+                                <span className={`text-[9px] font-medium ${diff > 0 ? (def.key === 'dropout' ? 'text-red-500' : 'text-green-500') : (def.key === 'dropout' ? 'text-green-500' : 'text-red-500')}`}>
+                                  {diff > 0 ? '▲' : '▼'}{Math.abs(diff).toFixed(1)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {isComparePrev && comparePrevVal != null && (
+                            <div className="flex items-center justify-between ml-3.5 text-[9px] text-gray-400">
+                              <span>{prevPeriodLabel}: {comparePrevVal.toFixed(1)}{unitLabel}</span>
+                              {compareDiff != null && (
+                                <span className={compareDiff > 0 ? (def.key === 'dropout' ? 'text-red-400' : 'text-green-400') : (def.key === 'dropout' ? 'text-green-400' : 'text-red-400')}>
+                                  Δ {compareDiff > 0 ? '+' : ''}{compareDiff.toFixed(1)}{isNormalized ? 'p' : 'pp'}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            }} />
-            {visibleDefs.filter(d => d.target != null).map(d => (
-              <ReferenceLine key={`target-${d.key}`} y={d.target} stroke={d.color} strokeDasharray="6 3" strokeWidth={1.2} strokeOpacity={0.5}>
-                <label value={`목표 ${d.target}${d.unit}`} position="right" fill={d.color} fontSize={9} />
-              </ReferenceLine>
-            ))}
-            {visibleDefs.map(def => (
-              <Area key={`area-${def.key}`} type="monotone" dataKey={def.key}
-                fill={`url(#areaGrad-${def.key})`} stroke="none"
-                fillOpacity={hoveredKey === null || hoveredKey === def.key ? 1 : 0.1}
-                connectNulls />
-            ))}
-            {visibleDefs.map(def => {
-              const isFocused = hoveredKey === null || hoveredKey === def.key;
-              const isLast = true;
-              return (
-                <Line key={def.key} type="monotone" dataKey={def.key}
-                  stroke={def.color}
-                  strokeWidth={isFocused ? (hoveredKey === def.key ? 3 : 2) : 1}
-                  strokeOpacity={isFocused ? 1 : 0.2}
-                  dot={(props: any) => {
-                    const { cx, cy, index, dataKey } = props;
-                    if (index === unifiedData.length - 1) {
-                      return (
-                        <g key={`dot-${dataKey}-${index}`}>
-                          <circle cx={cx} cy={cy} r={5} fill={def.color} stroke="#fff" strokeWidth={2} />
-                          <text x={cx} y={cy - 10} textAnchor="middle" fill={def.color} fontSize={10} fontWeight="700">
-                            {Number(unifiedData[index][def.key]).toFixed(1)}
-                          </text>
-                        </g>
                       );
-                    }
-                    return <g key={`dot-${dataKey}-${index}`} />;
-                  }}
-                  activeDot={{ r: 5, fill: def.color, stroke: '#fff', strokeWidth: 2 }}
+                    })}
+                  </div>
+                );
+              }} />
+              {/* 목표선(정규화 OFF 시에만) */}
+              {!isNormalized && visibleDefs.filter(d => d.target != null).map(d => (
+                <ReferenceLine key={`target-${d.key}`} y={d.target} stroke={d.color} strokeDasharray="6 3" strokeWidth={1.2} strokeOpacity={0.4} />
+              ))}
+              {/* 이전 기간 시리즈 (점선, 비교 ON 시) */}
+              {isComparePrev && visibleDefs.map(def => (
+                <Line key={`prev-${def.key}`} type="monotone" dataKey={`${def.key}_prev`}
+                  stroke={def.color} strokeWidth={1.5} strokeDasharray="5 3" strokeOpacity={0.35}
+                  dot={false} connectNulls activeDot={false} />
+              ))}
+              {/* Area 그라디언트 */}
+              {visibleDefs.map(def => (
+                <Area key={`area-${def.key}`} type="monotone" dataKey={def.key}
+                  fill={`url(#areaGrad-${def.key})`} stroke="none"
+                  fillOpacity={hoveredKey === null || hoveredKey === def.key ? 1 : 0.1}
                   connectNulls />
-              );
-            })}
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-      <div className="flex items-center justify-center gap-4 mt-2 pt-1.5 border-t border-gray-100">
-        <div className="flex items-center gap-1 text-[10px] text-gray-400">
-          <span className="w-4" style={{ borderTop: '2px dashed #9ca3af' }} />
-          <span>목표선</span>
+              ))}
+              {/* 메인 라인 */}
+              {visibleDefs.map(def => {
+                const isFocused = hoveredKey === null || hoveredKey === def.key;
+                return (
+                  <Line key={def.key} type="monotone" dataKey={def.key}
+                    stroke={def.color}
+                    strokeWidth={isFocused ? (hoveredKey === def.key ? 3 : 2) : 1}
+                    strokeOpacity={isFocused ? 1 : 0.15}
+                    dot={(props: any) => {
+                      const { cx, cy, index, dataKey } = props;
+                      if (index === chartData.length - 1) {
+                        return (
+                          <g key={`dot-${dataKey}-${index}`}>
+                            <circle cx={cx} cy={cy} r={5} fill={def.color} stroke="#fff" strokeWidth={2} />
+                            <text x={cx} y={cy - 10} textAnchor="middle" fill={def.color} fontSize={10} fontWeight="700">
+                              {Number(chartData[index][def.key]).toFixed(1)}
+                            </text>
+                          </g>
+                        );
+                      }
+                      return <g key={`dot-${dataKey}-${index}`} />;
+                    }}
+                    activeDot={{ r: 5, fill: def.color, stroke: '#fff', strokeWidth: 2 }}
+                    connectNulls />
+                );
+              })}
+              {/* Brush — 기간 탐색/확대 */}
+              <Brush dataKey="date" height={22} stroke="#94a3b8" fill="#f8fafc"
+                startIndex={brushRange.startIndex} endIndex={brushRange.endIndex}
+                onChange={(range: any) => setBrushRange({ startIndex: range?.startIndex, endIndex: range?.endIndex })} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
-        <div className="text-[10px] text-gray-400">최대 4개 동시 표시 · 칩 hover 시 하이라이트</div>
+      )}
+
+      {/* 하단 범례 / 안내 */}
+      <div className="flex items-center justify-center gap-4 mt-1 pt-1.5 border-t border-gray-100 flex-wrap">
+        {!isNormalized && (
+          <div className="flex items-center gap-1 text-[10px] text-gray-400">
+            <span className="w-4" style={{ borderTop: '2px dashed #9ca3af' }} /><span>목표선</span>
+          </div>
+        )}
+        {isComparePrev && (
+          <div className="flex items-center gap-1 text-[10px] text-gray-400">
+            <span className="w-4" style={{ borderTop: '2px dashed #6b7280' }} /><span>{prevPeriodLabel}</span>
+          </div>
+        )}
+        {isNormalized && <span className="text-[10px] text-indigo-400">첫 시점=100 기준 지수</span>}
+        <span className="text-[10px] text-gray-400">최대 4개 · 칩 hover/클릭으로 시리즈 제어</span>
       </div>
     </div>
   );
@@ -512,23 +641,42 @@ export function RegionalDashboard({ region }: RegionalDashboardProps) {
     });
   }, [statsScopeKey, analyticsPeriod]);
 
-  /* ─── 이탈률 Top 5 데이터 (이전 기간 비교 포함) ─── */
+  /* ─── 이탈률 Top 5 데이터 (이전 기간 비교 + 표본수 N 포함) ─── */
+  type DropoutViewMode = 'value' | 'diffAvg' | 'delta';
+  const [dropoutViewMode, setDropoutViewMode] = useState<DropoutViewMode>('diffAvg');
+
   const dropoutTop5 = useMemo(() => {
-    const items = DISTRICT_NAMES.slice(0, 10).map((name, idx) => {
+    const allItems = DISTRICT_NAMES.slice(0, 10).map((name, idx) => {
       const value = Number(seededValue(`${statsScopeKey}-${analyticsPeriod}-dropout-${idx}`, 5, 22).toFixed(1));
       const prevValue = Number(seededValue(`${statsScopeKey}-${analyticsPeriod}-dropout-prev-${idx}`, 4, 20).toFixed(1));
+      const nCases = Math.round(seededValue(`${statsScopeKey}-${analyticsPeriod}-dropout-n-${idx}`, 30, 600));
       return {
         name: name.length > 4 ? name.slice(0, 3) : name,
         fullName: name,
         value,
         prevValue,
         diff: Number((value - prevValue).toFixed(1)),
+        nCases,
       };
-    }).sort((a, b) => b.value - a.value).slice(0, 5);
-    const avg = Number((items.reduce((s, d) => s + d.value, 0) / items.length).toFixed(1));
+    });
+    const globalAvg = Number((allItems.reduce((s, d) => s + d.value, 0) / allItems.length).toFixed(2));
+    const withDeviation = allItems.map(d => ({
+      ...d,
+      diffFromAvg: Number((d.value - globalAvg).toFixed(2)),
+    }));
+    // viewMode별 정렬
+    const sorted = [...withDeviation].sort((a, b) => {
+      if (dropoutViewMode === 'diffAvg') return Math.abs(b.diffFromAvg) - Math.abs(a.diffFromAvg);
+      if (dropoutViewMode === 'delta') return b.diff - a.diff; // 악화 큰 순
+      return b.value - a.value;
+    }).slice(0, 5);
+    const avg = Number(globalAvg.toFixed(1));
     const threshold = Number((avg + 3).toFixed(1));
-    return { items, avg, threshold };
-  }, [statsScopeKey, analyticsPeriod, DISTRICT_NAMES]);
+    // 값 분산 검사
+    const uniqueRounded = new Set(sorted.map(d => d.value.toFixed(1)));
+    const lowVariance = uniqueRounded.size <= 2;
+    return { items: sorted, avg, threshold, lowVariance, globalAvg };
+  }, [statsScopeKey, analyticsPeriod, DISTRICT_NAMES, dropoutViewMode]);
 
   /* ─── 지도 클릭 핸들러 ─── */
   const handleRegionSelect = useCallback(({ level, name }: { level: string; code: string; name: string }) => {
@@ -889,75 +1037,134 @@ export function RegionalDashboard({ region }: RegionalDashboardProps) {
           {/* KPI 통합 추이 차트 */}
           <KPIUnifiedChart statsScopeKey={statsScopeKey} analyticsPeriod={analyticsPeriod} />
 
-          {/* 이탈률 Top 5 */}
+          {/* ═══ 이탈률 Top 5 — 고도화 ═══ */}
           <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-gray-700">이탈률 Top 5 (시군구별)</span>
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-50 text-red-500 font-medium">
-                  평균 {dropoutTop5.avg}%
-                </span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-50 text-red-500 font-medium">평균 {dropoutTop5.avg}%</span>
               </div>
-              <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
+              {/* 보기 모드 토글 */}
+              <div className="flex items-center gap-1">
+                {([['value', '현재(%)'], ['diffAvg', '편차(pp)'], ['delta', 'Δ(pp)']] as const).map(([mode, label]) => (
+                  <button key={mode} onClick={() => setDropoutViewMode(mode)}
+                    className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+                      dropoutViewMode === mode ? 'bg-red-100 text-red-700 ring-1 ring-red-300' : 'bg-gray-100 text-gray-500 hover:text-gray-700'
+                    }`}>{label}</button>
+                ))}
+                <button className="p-1 hover:bg-gray-100 rounded ml-1"><Download className="h-3 w-3 text-gray-500" /></button>
+              </div>
             </div>
-            <div style={{ height: '180px' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dropoutTop5.items} layout="vertical" margin={{ top: 5, right: 45, left: 45, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
-                  <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} domain={[0, 25]} tickFormatter={(v: number) => `${v}%`} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#374151' }} width={40} />
-                  <Tooltip content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const d = payload[0].payload;
-                    const deviationFromAvg = Number((d.value - dropoutTop5.avg).toFixed(1));
-                    return (
-                      <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[180px]">
-                        <div className="font-semibold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">{d.fullName}</div>
-                        <div className="space-y-1">
-                          <div className="flex justify-between">
-                            <span className="text-gray-500">현재 이탈률</span>
-                            <span className="font-bold text-red-600">{d.value}%</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-500">이전 기간</span>
-                            <span className="font-medium text-gray-600">{d.prevValue}%</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-500">증감</span>
-                            <span className={`font-medium ${d.diff > 0 ? 'text-red-500' : d.diff < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                              {d.diff > 0 ? '▲' : d.diff < 0 ? '▼' : '─'}{Math.abs(d.diff)}%p
-                            </span>
-                          </div>
-                          <div className="flex justify-between pt-1 border-t border-gray-100">
-                            <span className="text-gray-500">평균 대비 편차</span>
-                            <span className={`font-medium ${deviationFromAvg > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                              {deviationFromAvg > 0 ? '+' : ''}{deviationFromAvg}%p
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  }} />
-                  <ReferenceLine x={dropoutTop5.avg} stroke="#6b7280" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: `평균 ${dropoutTop5.avg}%`, position: 'top', fill: '#6b7280', fontSize: 9 }} />
-                  <ReferenceLine x={dropoutTop5.threshold} stroke="#ef4444" strokeDasharray="2 2" strokeWidth={1} strokeOpacity={0.6} label={{ value: `고위험`, position: 'top', fill: '#ef4444', fontSize: 9 }} />
-                  <Bar dataKey="value" radius={[0, 4, 4, 0]} label={{ position: 'right', fill: '#6b7280', fontSize: 10, formatter: (v: number) => `${v}%` }}>
-                    {dropoutTop5.items.map((entry, index) => (
-                      <Cell key={index} fill={entry.value >= dropoutTop5.threshold ? '#ef4444' : entry.value >= dropoutTop5.avg ? '#f97316' : '#86efac'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex items-center justify-center gap-3 mt-1.5 pt-1.5 border-t border-gray-100">
-              <div className="flex items-center gap-1 text-[9px] text-gray-400">
-                <span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#ef4444' }} />고위험
+
+            {/* 값 분산 안전장치 */}
+            {dropoutTop5.lowVariance && dropoutViewMode === 'value' && (
+              <div className="mb-2 px-2 py-1 rounded bg-amber-50 border border-amber-200 text-[10px] text-amber-700 flex items-center gap-1">
+                <span>⚠</span> 값 분산이 낮아 구분이 어렵습니다 — <button onClick={() => setDropoutViewMode('diffAvg')} className="underline font-medium">편차 모드로 전환</button>
               </div>
-              <div className="flex items-center gap-1 text-[9px] text-gray-400">
-                <span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#f97316' }} />평균 이상
+            )}
+
+            {(() => {
+              // 모드별 데이터키 & 도메인 & 라벨 결정
+              const dataKey = dropoutViewMode === 'value' ? 'value' : dropoutViewMode === 'diffAvg' ? 'diffFromAvg' : 'diff';
+              const isDiverging = dropoutViewMode !== 'value';
+              const maxAbs = isDiverging
+                ? Math.max(...dropoutTop5.items.map(d => Math.abs(Number(d[dataKey as keyof typeof d]))), 1)
+                : 0;
+              const domain: [number, number] = isDiverging ? [-Math.ceil(maxAbs + 1), Math.ceil(maxAbs + 1)] : [0, 25];
+              const tickFmt = (v: number) => isDiverging ? `${v > 0 ? '+' : ''}${v}` : `${v}%`;
+
+              return (
+                <div style={{ height: '185px' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={dropoutTop5.items} layout="vertical" margin={{ top: 5, right: 50, left: 50, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
+                      <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} domain={domain} tickFormatter={tickFmt} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#374151' }} width={42} />
+                      {isDiverging && <ReferenceLine x={0} stroke="#374151" strokeWidth={1.5} />}
+                      {!isDiverging && (
+                        <>
+                          <ReferenceLine x={dropoutTop5.avg} stroke="#6b7280" strokeDasharray="4 4" strokeWidth={1.5}
+                            label={{ value: `평균 ${dropoutTop5.avg}%`, position: 'top', fill: '#6b7280', fontSize: 9 }} />
+                          <ReferenceLine x={dropoutTop5.threshold} stroke="#ef4444" strokeDasharray="2 2" strokeWidth={1} strokeOpacity={0.6}
+                            label={{ value: '고위험', position: 'top', fill: '#ef4444', fontSize: 9 }} />
+                        </>
+                      )}
+                      <Tooltip content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const d = payload[0].payload;
+                        return (
+                          <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[200px]">
+                            <div className="font-semibold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">{d.fullName}</div>
+                            <div className="space-y-1">
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">현재 이탈률</span>
+                                <span className="font-bold text-red-600">{d.value}%</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">이전 기간</span>
+                                <span className="font-medium text-gray-600">{d.prevValue}%</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">증감 (Δ)</span>
+                                <span className={`font-medium ${d.diff > 0 ? 'text-red-500' : d.diff < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                                  {d.diff > 0 ? '▲' : d.diff < 0 ? '▼' : '─'}{Math.abs(d.diff)}pp
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">평균 대비 편차</span>
+                                <span className={`font-medium ${d.diffFromAvg > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                                  {d.diffFromAvg > 0 ? '+' : ''}{d.diffFromAvg.toFixed(1)}pp
+                                </span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-gray-100">
+                                <span className="text-gray-500">표본 (N)</span>
+                                <span className="font-medium text-gray-700">{d.nCases.toLocaleString()}건</span>
+                              </div>
+                              {d.nCases < 50 && (
+                                <div className="text-[9px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-0.5">⚠ N이 적어 변동성이 높을 수 있습니다</div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }} />
+                      <Bar dataKey={dataKey} radius={isDiverging ? [4, 4, 4, 4] : [0, 4, 4, 0]}
+                        onClick={(entry: any) => { if (entry?.fullName) setSelectedDistrictName(entry.fullName); }}
+                        style={{ cursor: 'pointer' }}
+                        label={{ position: 'right', fill: '#6b7280', fontSize: 10, formatter: (v: number) => isDiverging ? `${v > 0 ? '+' : ''}${v.toFixed(1)}pp` : `${v}%` }}>
+                        {dropoutTop5.items.map((entry, index) => {
+                          const val = Number(entry[dataKey as keyof typeof entry]);
+                          let fill: string;
+                          if (isDiverging) {
+                            fill = val > 2 ? '#ef4444' : val > 0 ? '#f97316' : '#22c55e'; // 악화=빨강, 약간악화=주황, 개선=초록
+                          } else {
+                            fill = entry.value >= dropoutTop5.threshold ? '#ef4444' : entry.value >= dropoutTop5.avg ? '#f97316' : '#86efac';
+                          }
+                          return <Cell key={index} fill={fill} />;
+                        })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              );
+            })()}
+
+            <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-gray-100">
+              <div className="flex items-center gap-3">
+                {dropoutViewMode === 'value' ? (
+                  <>
+                    <div className="flex items-center gap-1 text-[9px] text-gray-400"><span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#ef4444' }} />고위험</div>
+                    <div className="flex items-center gap-1 text-[9px] text-gray-400"><span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#f97316' }} />평균 이상</div>
+                    <div className="flex items-center gap-1 text-[9px] text-gray-400"><span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#86efac' }} />평균 이하</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-1 text-[9px] text-gray-400"><span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#ef4444' }} />악화(+2pp↑)</div>
+                    <div className="flex items-center gap-1 text-[9px] text-gray-400"><span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#f97316' }} />소폭 악화</div>
+                    <div className="flex items-center gap-1 text-[9px] text-gray-400"><span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#22c55e' }} />개선</div>
+                  </>
+                )}
               </div>
-              <div className="flex items-center gap-1 text-[9px] text-gray-400">
-                <span className="w-2.5 h-2 rounded-sm" style={{ backgroundColor: '#86efac' }} />평균 이하
-              </div>
+              <span className="text-[9px] text-gray-400">구 클릭 시 지도 연동</span>
             </div>
           </div>
 

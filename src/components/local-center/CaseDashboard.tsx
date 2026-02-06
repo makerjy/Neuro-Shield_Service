@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Search, Filter, Star, AlertCircle, Clock, CheckCircle, Phone, ChevronRight, Bell } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Search, Filter, Star, AlertCircle, Clock, CheckCircle, Phone, ChevronRight, Bell, FlaskConical } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -28,33 +28,11 @@ import {
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
-
-type RiskLevel = 'high' | 'medium' | 'low';
-type CaseStatus = 'not_contacted' | 'contacted' | 'consultation_complete' | 'appointment_scheduled';
-type TaskPriority = 'urgent' | 'today' | 'normal';
-
-interface Case {
-  id: string;
-  patientName: string;
-  age: number;
-  riskLevel: RiskLevel;
-  lastContact: string | null;
-  status: CaseStatus;
-  counselor: string;
-  isFavorite: boolean;
-  phone: string;
-}
-
-interface Task {
-  id: string;
-  caseId: string;
-  patientName: string;
-  title: string;
-  description: string;
-  priority: TaskPriority;
-  dueDate: string;
-  type: string;
-}
+import {
+  generateCases, generateTasks, getAgeRangeLabel,
+  SECOND_EXAM_LABELS, SECOND_EXAM_COLORS, EXAM_TYPE_LABELS,
+  type Case, type Task, type RiskLevel, type CaseStatus, type TaskPriority, type SecondExamStatus,
+} from './caseData';
 
 export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string) => void }) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -65,118 +43,9 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
   const [filterDialogOpen, setFilterDialogOpen] = useState(false);
   const [favorites, setFavorites] = useState<Set<string>>(new Set(['CASE-2026-001', 'CASE-2026-003']));
 
-  // Mock data
-  const cases: Case[] = [
-    {
-      id: 'CASE-2026-001',
-      patientName: '김민수',
-      age: 72,
-      riskLevel: 'high',
-      lastContact: '2026-01-28',
-      status: 'contacted',
-      counselor: '이상담',
-      isFavorite: true,
-      phone: '010-1234-5678',
-    },
-    {
-      id: 'CASE-2026-002',
-      patientName: '박영희',
-      age: 68,
-      riskLevel: 'medium',
-      lastContact: '2026-01-30',
-      status: 'consultation_complete',
-      counselor: '김상담',
-      isFavorite: false,
-      phone: '010-2345-6789',
-    },
-    {
-      id: 'CASE-2026-003',
-      patientName: '정철수',
-      age: 75,
-      riskLevel: 'high',
-      lastContact: null,
-      status: 'not_contacted',
-      counselor: '이상담',
-      isFavorite: true,
-      phone: '010-3456-7890',
-    },
-    {
-      id: 'CASE-2026-004',
-      patientName: '최수진',
-      age: 70,
-      riskLevel: 'low',
-      lastContact: '2026-02-01',
-      status: 'appointment_scheduled',
-      counselor: '김상담',
-      isFavorite: false,
-      phone: '010-4567-8901',
-    },
-    {
-      id: 'CASE-2026-005',
-      patientName: '이순자',
-      age: 73,
-      riskLevel: 'medium',
-      lastContact: null,
-      status: 'not_contacted',
-      counselor: '이상담',
-      isFavorite: false,
-      phone: '010-5678-9012',
-    },
-    {
-      id: 'CASE-2026-006',
-      patientName: '장동건',
-      age: 69,
-      riskLevel: 'high',
-      lastContact: '2026-01-25',
-      status: 'contacted',
-      counselor: '김상담',
-      isFavorite: false,
-      phone: '010-6789-0123',
-    },
-  ];
-
-  const tasks: Task[] = [
-    {
-      id: 'TASK-001',
-      caseId: 'CASE-2026-003',
-      patientName: '정철수',
-      title: '초기 접촉 필요',
-      description: '고위험군 케이스, 빠른 시일 내 초기 접촉 및 상담 예약 필요',
-      priority: 'urgent',
-      dueDate: '2026-02-02',
-      type: '초기 접촉',
-    },
-    {
-      id: 'TASK-002',
-      caseId: 'CASE-2026-001',
-      patientName: '김민수',
-      title: '예약 확인 전화',
-      description: '2월 5일 예약에 대한 확인 전화 필요',
-      priority: 'today',
-      dueDate: '2026-02-02',
-      type: '예약 확인',
-    },
-    {
-      id: 'TASK-003',
-      caseId: 'CASE-2026-005',
-      patientName: '이순자',
-      title: '초기 접촉 시도',
-      description: '미접촉 케이스, 전화 상담 시도',
-      priority: 'today',
-      dueDate: '2026-02-02',
-      type: '초기 접촉',
-    },
-    {
-      id: 'TASK-004',
-      caseId: 'CASE-2026-002',
-      patientName: '박영희',
-      title: '후속 상담 일정 조율',
-      description: '상담 완료 후 재검사 일정 조율 필요',
-      priority: 'normal',
-      dueDate: '2026-02-05',
-      type: '후속 조치',
-    },
-  ];
+  // 공유 데이터에서 생성
+  const cases = useMemo(() => generateCases(), []);
+  const tasks = useMemo(() => generateTasks(cases), [cases]);
 
   const getRiskBadge = (level: RiskLevel) => {
     const variants = {
@@ -239,13 +108,22 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
     });
   };
 
-  const getAgeRangeLabel = (age: number) => {
-    if (age >= 80) return '80세 이상';
-    if (age >= 75) return '75~79세';
-    if (age >= 70) return '70~74세';
-    if (age >= 65) return '65~69세';
-    if (age >= 60) return '60~64세';
-    return '60세 미만';
+  const getSecondExamBadge = (status: SecondExamStatus, examType?: string) => {
+    const label = SECOND_EXAM_LABELS[status];
+    const color = SECOND_EXAM_COLORS[status];
+    return (
+      <div className="group relative inline-block">
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>
+          <FlaskConical className="h-3 w-3" />
+          {label}
+        </span>
+        {examType && (
+          <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">
+            검사 유형: {EXAM_TYPE_LABELS[examType as keyof typeof EXAM_TYPE_LABELS] || examType}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const filteredCases = cases
@@ -411,6 +289,7 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
                     <TableHead>위험도</TableHead>
                     <TableHead>최근 접촉</TableHead>
                     <TableHead>상태</TableHead>
+                    <TableHead>2차 검사</TableHead>
                     <TableHead>담당자</TableHead>
                     <TableHead></TableHead>
                   </TableRow>
@@ -446,6 +325,7 @@ export function CaseDashboard({ onCaseSelect }: { onCaseSelect: (caseId: string)
                         {c.lastContact ? new Date(c.lastContact).toLocaleDateString('ko-KR') : '-'}
                       </TableCell>
                       <TableCell>{getStatusBadge(c.status)}</TableCell>
+                      <TableCell>{getSecondExamBadge(c.secondExamStatus, c.secondExamType)}</TableCell>
                       <TableCell>{c.counselor}</TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm">

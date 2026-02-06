@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   User,
   Phone,
@@ -19,6 +19,12 @@ import {
   XCircle,
   AlertCircle,
   ChevronRight,
+  MessageSquare,
+  FlaskConical,
+  Sparkles,
+  Send,
+  ClipboardList,
+  Plus,
 } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -35,54 +41,72 @@ import {
 } from '../ui/select';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
+import {
+  generateCases, 
+  SECOND_EXAM_LABELS, SECOND_EXAM_COLORS, EXAM_TYPE_LABELS,
+  CONTACT_STATUS_LABELS, CONSULT_STATUS_LABELS, RESERVATION_TYPE_LABELS,
+  maskPhone,
+  type Case, type RiskLevel, type SecondExamStatus, type SmsHistoryEntry,
+} from './caseData';
 
-type RiskLevel = 'high' | 'medium' | 'low';
-
-interface CaseDetailData {
-  id: string;
-  age: number;
-  gender: string;
-  registeredDate: string;
-  riskLevel: RiskLevel;
-  riskScore: number;
+// ── AI 분석 + PII 보강 데이터 (케이스별로 고정 mock) ──
+interface AiAnalysisData {
   riskPercentile: number;
-  status: string;
-  counselor: string;
-  lastContact?: string;
-  
-  // AI Analysis
-  aiAnalysis: {
-    riskLevel: RiskLevel;
-    riskScore: number;
-    riskPercentile: number;
-    riskRanking: string;
-    lastUpdated: string;
-    recentChange: string;
-    urgency: 'immediate' | 'within_3_days' | 'routine';
-    keyFactors: {
-      name: string;
-      impact: number;
-      description: string;
-    }[];
-    operationalGuidelines: string[];
-    analysisInfo: {
-      aiModel: string;
-      responsible: string;
-      dataSource: string;
-      updateDate: string;
-      deidentified: boolean;
-    };
+  riskRanking: string;
+  lastUpdated: string;
+  recentChange: string;
+  urgency: 'immediate' | 'within_3_days' | 'routine';
+  keyFactors: { name: string; impact: number; description: string }[];
+  operationalGuidelines: string[];
+  analysisInfo: {
+    aiModel: string; responsible: string; dataSource: string;
+    updateDate: string; deidentified: boolean;
   };
-  
-  // PII (Protected)
-  pii: {
-    fullName: string;
-    fullAddress: string;
-    detailedPhone: string;
-    emergencyContact: string;
-    emergencyContactName: string;
-    residentNumber: string;
-    medicalHistory: string[];
+}
+interface PiiData {
+  fullName: string; fullAddress: string; detailedPhone: string;
+  emergencyContact: string; emergencyContactName: string;
+  residentNumber: string; medicalHistory: string[];
+}
+
+function buildAiAnalysis(c: Case): AiAnalysisData {
+  const urgency: AiAnalysisData['urgency'] =
+    c.riskLevel === 'high' ? 'immediate' : c.riskLevel === 'medium' ? 'within_3_days' : 'routine';
+  return {
+    riskPercentile: c.riskScore >= 70 ? 92 : c.riskScore >= 50 ? 65 : 30,
+    riskRanking: `전체 케이스 중 상위 ${c.riskScore >= 70 ? 8 : c.riskScore >= 50 ? 35 : 70}%`,
+    lastUpdated: c.lastContact || '2026-01-20',
+    recentChange: c.riskLevel === 'high' ? '2주 전 대비 +5점 상승' : c.riskLevel === 'medium' ? '변동 없음' : '1주 전 대비 -3점 하락',
+    urgency,
+    keyFactors: [
+      { name: '최근 기억력 검사 점수', impact: 85, description: '18/30 (2개월 전 대비 -4점 하락)' },
+      { name: '고위험 연령대', impact: 72, description: `${c.age}세, 치매 ${c.riskLevel === 'high' ? '고' : '중'}위험군` },
+      { name: '사회적 고립도', impact: 68, description: '단독 생활, 최근 3개월 사회활동 없음' },
+      { name: '건강검진 미실시', impact: 55, description: '최근 12개월 건강검진 기록 없음' },
+      { name: '생활습관 리스크', impact: 48, description: '운동부족, 식사 불규칙' },
+    ],
+    operationalGuidelines: [
+      '최근 2회 전화 미응답 지속. 우선 SMS로 예약 권고 발송 후, 3일 내 재연락 시도 필요.',
+      '단독 생활이며 인지기능 저하 징후 확인됨. 즉시 초기 선별검사 예약 진행 권장.',
+      '이상 징후 재발생 시 관할 보건소 및 응급연락망 가동 고려 필요.',
+    ],
+    analysisInfo: {
+      aiModel: '치매특화판정모듈 v3.2', responsible: '김행정 (중앙관리자)',
+      dataSource: '건강보험공단 검진데이터, 지역센터 상담이력',
+      updateDate: c.lastContact ? `${c.lastContact} 14:30` : '2026-01-20 14:30',
+      deidentified: true,
+    },
+  };
+}
+
+function buildPii(c: Case): PiiData {
+  const names = ['김민수','박영희','이철수','정은지','최동현','한지영','송재호','윤미선','강태우','오수빈'];
+  const name = names[parseInt(c.id.replace(/\D/g, ''), 10) % names.length] || '김민수';
+  return {
+    fullName: name, fullAddress: '서울시 강남구 테헤란로 123, 아파트 101동 1001호',
+    detailedPhone: c.phone, emergencyContact: '010-9876-5432',
+    emergencyContactName: '보호자 (배우자)', residentNumber: `${String(2026 - c.age).slice(2)}0215-${c.gender === '남' ? '1' : '2'}******`,
+    medicalHistory: c.riskLevel === 'high' ? ['고혈압','당뇨병','고지혈증'] : c.riskLevel === 'medium' ? ['고혈압'] : [],
   };
 }
 
@@ -131,85 +155,30 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
   const [dropoutDetails, setDropoutDetails] = useState('');
   const [recontactPlan, setRecontactPlan] = useState('');
 
-  // Mock data
-  const caseData: CaseDetailData = {
-    id: caseId,
-    age: 72,
-    gender: '남성',
-    registeredDate: '2026-01-15',
-    riskLevel: 'high',
-    riskScore: 78,
-    riskPercentile: 92,
-    status: 'contacted',
-    counselor: '이상담',
-    lastContact: '2026-02-01',
-    
-    aiAnalysis: {
-      riskLevel: 'high',
-      riskScore: 78,
-      riskPercentile: 92,
-      riskRanking: '전체 케이스 중 상위 8%',
-      lastUpdated: '2026-02-01',
-      recentChange: '2주 전 대비 +5점 상승',
-      urgency: 'immediate',
-      keyFactors: [
-        {
-          name: '최근 기억력 검사 점수',
-          impact: 85,
-          description: '18/30 (2개월 전 대비 -4점 하락)',
-        },
-        {
-          name: '고위험 연령대',
-          impact: 72,
-          description: '72세, 치매 고위험군',
-        },
-        {
-          name: '사회적 고립도',
-          impact: 68,
-          description: '단독 생활, 최근 3개월 사회활동 없음',
-        },
-        {
-          name: '건강검진 미실시',
-          impact: 55,
-          description: '최근 12개월 건강검진 기록 없음',
-        },
-        {
-          name: '생활습관 리스크',
-          impact: 48,
-          description: '운동부족, 식사 불규칙',
-        },
-      ],
-      operationalGuidelines: [
-        '최근 2회 전화 미응답 지속. 우선 SMS로 예약 권고 발송 후, 3일 내 재연락 시도 필요.',
-        '단독 생활이며 인지기능 저하 징후 확인됨. 즉시 초기 선별검사 예약 진행 권장.',
-        '이상 징후 재발생 시 관할 보건소 및 응급연락망 가동 고려 필요.',
-      ],
-      analysisInfo: {
-        aiModel: '치매특화판정모듈 v3.2',
-        responsible: '김행정 (중앙관리자)',
-        dataSource: '건강보험공단 검진데이터, 지역센터 상담이력',
-        updateDate: '2026-02-01 14:30',
-        deidentified: true,
-      },
-    },
-    
-    pii: {
-      fullName: '김민수',
-      fullAddress: '서울시 강남구 테헤란로 123, 아파트 101동 1001호',
-      detailedPhone: '010-1234-5678',
-      emergencyContact: '010-9876-5432',
-      emergencyContactName: '김영희 (배우자)',
-      residentNumber: '540215-1******',
-      medicalHistory: ['고혈압', '당뇨병', '고지혈증'],
-    },
-  };
+  // ═══ 신규 state: SMS, 운영메모, RAG ═══
+  const [smsDialogOpen, setSmsDialogOpen] = useState(false);
+  const [smsTemplate, setSmsTemplate] = useState('');
+  const [smsSending, setSmsSending] = useState(false);
+  const [newMemoText, setNewMemoText] = useState('');
+  const [ragLoading, setRagLoading] = useState(false);
+  const [ragResult, setRagResult] = useState<{ actions: string[]; cautions: string[]; churnSignals: string[] } | null>(null);
+
+  // ═══ 공유 데이터에서 케이스 조회 ═══
+  const allCases = useMemo(() => generateCases(), []);
+  const sharedCase = useMemo(() => allCases.find(c => c.id === caseId), [allCases, caseId]);
+  const [localMemoLines, setLocalMemoLines] = useState<string[]>(sharedCase?.autoMemo.lines || []);
+  const [localSmsHistory, setLocalSmsHistory] = useState<SmsHistoryEntry[]>(sharedCase?.smsHistory || []);
+
+  // ═══ 공유 케이스 기반 파생 데이터 ═══
+  const aiAnalysis = useMemo(() => sharedCase ? buildAiAnalysis(sharedCase) : null, [sharedCase]);
+  const piiSource = useMemo(() => sharedCase ? buildPii(sharedCase) : null, [sharedCase]);
 
   // Consultation Scripts (AI Generated)
   const consultationScripts: Record<ConsultationStep, ConsultationScript> = {
     greeting: {
       step: 'greeting',
       title: '1단계: 인사 및 신원 확인',
-      aiSuggestion: `안녕하세요, 저는 강남구 치매안심센터의 ${caseData.counselor} 상담사입니다. 지금 통화 가능하신가요? 본인 확인을 위해 성함과 생년월일을 여쭤봐도 될까요?`,
+      aiSuggestion: `안녕하세요, 저는 강남구 치매안심센터의 ${sharedCase?.counselor ?? '상담사'} 상담사입니다. 지금 통화 가능하신가요? 본인 확인을 위해 성함과 생년월일을 여쭤봐도 될까요?`,
       tips: [
         '차분하고 따뜻한 어조로 시작하세요',
         '통화 가능 여부를 먼저 확인하세요',
@@ -275,14 +244,14 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
     // Log audit trail
     console.log('[AUDIT] PII Access Request:', {
       action: 'PII_ACCESS',
-      caseId: caseData.id,
+      caseId: caseId,
       userId: 'USER-001',
-      userName: caseData.counselor,
+      userName: sharedCase?.counselor ?? '상담사',
       reason: accessReason,
       timestamp: new Date().toISOString(),
     });
     
-    setPiiData(caseData.pii);
+    setPiiData(piiSource);
     alert('개인정보 열람이 승인되었습니다.\n모든 접근 기록이 감사로그에 저장됩니다.');
   };
 
@@ -295,9 +264,9 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
   const handleStartConsultation = () => {
     console.log('[AUDIT] Consultation Started:', {
       action: 'CONSULTATION_START',
-      caseId: caseData.id,
+      caseId: caseId,
       userId: 'USER-001',
-      userName: caseData.counselor,
+      userName: sharedCase?.counselor ?? '상담사',
       timestamp: new Date().toISOString(),
     });
     setConsultationOpen(true);
@@ -336,9 +305,9 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
 
     console.log('[AUDIT] Consultation Completed:', {
       action: 'CONSULTATION_COMPLETE',
-      caseId: caseData.id,
+      caseId: caseId,
       userId: 'USER-001',
-      userName: caseData.counselor,
+      userName: sharedCase?.counselor ?? '상담사',
       result: consultationResult,
       reason: resultReason,
       memo: consultationMemo,
@@ -371,9 +340,9 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
 
     console.log('[AUDIT] Appointment Confirmed:', {
       action: 'APPOINTMENT_CREATE',
-      caseId: caseData.id,
+      caseId: caseId,
       userId: 'USER-001',
-      userName: caseData.counselor,
+      userName: sharedCase?.counselor ?? '상담사',
       referralType,
       appointmentDate,
       appointmentTime,
@@ -399,9 +368,9 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
 
     console.log('[AUDIT] Case Dropout:', {
       action: 'CASE_DROPOUT',
-      caseId: caseData.id,
+      caseId: caseId,
       userId: 'USER-001',
-      userName: caseData.counselor,
+      userName: sharedCase?.counselor ?? '상담사',
       dropoutReason,
       dropoutDetails,
       recontactPlan,
@@ -416,84 +385,206 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
     setRecontactPlan('');
   };
 
-  const riskBadge = getRiskBadge(caseData.riskLevel);
+  const riskBadge = getRiskBadge(sharedCase?.riskLevel ?? 'low');
   const currentScriptData = consultationScripts[currentStep];
   const steps: ConsultationStep[] = ['greeting', 'purpose', 'assessment', 'scheduling'];
   const currentStepIndex = steps.indexOf(currentStep);
 
+  // ═══ SMS 전송 핸들러 ═══
+  const smsTemplates = [
+    { id: 'screening_invite', label: '선별검사 안내', body: '{{name}}님, 치매안심센터에서 무료 인지건강 선별검사를 안내드립니다. 문의: 02-1234-5678' },
+    { id: 'visit_remind', label: '방문 예약 리마인드', body: '{{name}}님, 예약된 치매안심센터 방문일이 다가왔습니다. 일정 확인 부탁드립니다.' },
+    { id: 'follow_up', label: '사후관리 안부', body: '{{name}}님, 최근 건강상태 확인을 위해 연락드렸습니다. 불편사항이 있으시면 02-1234-5678로 연락주세요.' },
+  ];
+
+  const handleSendSms = async () => {
+    if (!smsTemplate || !sharedCase) return;
+    setSmsSending(true);
+    try {
+      const tpl = smsTemplates.find(t => t.id === smsTemplate);
+      // citizen_sms_service 연동 (포트 4120)
+      await fetch('http://localhost:4120/api/outreach/send-sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          case_id: caseId,
+          template_id: smsTemplate,
+          variables: { name: piiSource?.fullName ?? '대상자' },
+          to: sharedCase.phone,
+          dedupe_key: `${caseId}-${smsTemplate}-${Date.now()}`,
+        }),
+      });
+      const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+      const newEntry: SmsHistoryEntry = { date: now, template: tpl?.label ?? smsTemplate, status: 'sent' };
+      setLocalSmsHistory(prev => [newEntry, ...prev]);
+      setLocalMemoLines(prev => [`[${now}] SMS 발송: ${tpl?.label}`, ...prev]);
+      alert('SMS 발송 요청이 완료되었습니다.');
+    } catch {
+      alert('SMS 발송에 실패했습니다. 네트워크를 확인해주세요.');
+    } finally {
+      setSmsSending(false);
+      setSmsDialogOpen(false);
+      setSmsTemplate('');
+    }
+  };
+
+  // ═══ 수동 메모 추가 ═══
+  const handleAddMemo = () => {
+    if (!newMemoText.trim()) return;
+    const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    setLocalMemoLines(prev => [`[${now}] ${newMemoText.trim()}`, ...prev]);
+    setNewMemoText('');
+  };
+
+  // ═══ RAG 가이드 생성 (Mock) ═══
+  const handleGenerateRag = () => {
+    setRagLoading(true);
+    setTimeout(() => {
+      const actions: string[] = [];
+      const cautions: string[] = [];
+      const churnSignals: string[] = [];
+
+      if (sharedCase?.contactStatus === 'UNREACHED') {
+        actions.push('SMS 안내 문자 발송 후 3일 내 재연락 시도');
+        actions.push('주간보호센터 또는 복지관 경유 접촉 시도');
+      }
+      if (sharedCase?.secondExamStatus === 'NONE' && sharedCase?.riskLevel === 'high') {
+        actions.push('2차 정밀검사 예약 즉시 진행 권장');
+      }
+      if (sharedCase?.consultStatus === 'NOT_YET') {
+        actions.push('초기 상담 일정 수립 필요');
+      }
+
+      if (sharedCase?.riskLevel === 'high') {
+        cautions.push('고위험군: 인지기능 저하 징후 면밀히 모니터링');
+        cautions.push('단독 생활 여부 확인 → 응급연락망 점검');
+      }
+      if (sharedCase?.age && sharedCase.age >= 80) {
+        cautions.push('80세 이상 초고령: 낙상 및 건강 악화 위험 높음');
+      }
+
+      if (sharedCase?.contactStatus === 'UNREACHED') {
+        churnSignals.push('3회 이상 접촉 실패 시 이탈 위험 급증');
+      }
+      if (sharedCase?.riskLevel === 'high' && sharedCase?.consultStatus === 'NOT_YET') {
+        churnSignals.push('고위험 + 미상담: 조기 이탈 가능성 높음');
+      }
+
+      // 최소 보장
+      if (actions.length === 0) actions.push('정기 모니터링 유지');
+      if (cautions.length === 0) cautions.push('특이사항 없음 — 현 관리 수준 유지');
+
+      setRagResult({ actions: actions.slice(0, 3), cautions: cautions.slice(0, 3), churnSignals });
+      setRagLoading(false);
+    }, 800);
+  };
+
+  if (!sharedCase) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <AlertTriangle className="h-12 w-12 text-orange-500 mx-auto" />
+          <p className="text-lg text-gray-700">케이스를 찾을 수 없습니다: {caseId}</p>
+          <Button onClick={onBack}>← 목록으로</Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Sticky Header */}
+      {/* ════════ Sticky Header ════════ */}
       <div className="sticky top-0 z-10 bg-white border-b-2 border-gray-300 shadow-sm">
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between mb-3">
-            <Button variant="ghost" onClick={onBack} className="text-gray-600">
+        <div className="px-6 py-3">
+          <div className="flex items-center justify-between mb-2">
+            <Button variant="ghost" onClick={onBack} className="text-gray-600 h-8 px-2">
               ← 뒤로
             </Button>
+            <div className="text-xs text-gray-400">
+              마지막 업데이트: {aiAnalysis?.lastUpdated ?? '-'}
+            </div>
           </div>
-          
+
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 flex-wrap">
               {/* 케이스 ID */}
               <div>
-                <div className="text-xs text-gray-500 mb-1">케이스 ID</div>
-                <div className="text-lg font-bold text-gray-900">{caseData.id}</div>
+                <div className="text-[10px] text-gray-500">케이스 ID</div>
+                <div className="text-base font-bold text-gray-900">{caseId}</div>
               </div>
-              
-              {/* 구분선 */}
-              <div className="h-12 w-px bg-gray-300"></div>
-              
+              <div className="h-10 w-px bg-gray-300" />
+
               {/* 위험도 */}
               <div>
-                <div className="text-xs text-gray-500 mb-1">위험도</div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-lg font-bold ${riskBadge.textColor}`}>{riskBadge.label}</span>
-                  <span className={`text-2xl font-bold ${riskBadge.textColor}`}>{caseData.riskScore}</span>
+                <div className="text-[10px] text-gray-500">위험도</div>
+                <div className="flex items-center gap-1">
+                  <span className={`text-base font-bold ${riskBadge.textColor}`}>{riskBadge.label}</span>
+                  <span className={`text-xl font-bold ${riskBadge.textColor}`}>{sharedCase.riskScore}</span>
                 </div>
               </div>
-              
-              {/* 구분선 */}
-              <div className="h-12 w-px bg-gray-300"></div>
-              
-              {/* 현재 상태 */}
+              <div className="h-10 w-px bg-gray-300" />
+
+              {/* 접촉 상태 */}
               <div>
-                <div className="text-xs text-gray-500 mb-1">현재 케이스 상태</div>
-                <div className="text-lg font-medium text-gray-900">
-                  {caseData.status === 'contacted' ? '접촉완료' : 
-                   caseData.status === 'consultation_complete' ? '상담완료' : 
-                   caseData.status === 'not_contacted' ? '미접촉' : '이탈'}
-                </div>
+                <div className="text-[10px] text-gray-500">접촉상태</div>
+                <Badge variant="outline" className={`text-xs mt-0.5 ${
+                  sharedCase.contactStatus === 'UNREACHED' ? 'border-red-300 text-red-700 bg-red-50' :
+                  sharedCase.contactStatus === 'CONTACTED' ? 'border-green-300 text-green-700 bg-green-50' :
+                  'border-blue-300 text-blue-700 bg-blue-50'
+                }`}>
+                  {CONTACT_STATUS_LABELS[sharedCase.contactStatus]}
+                </Badge>
               </div>
-              
-              {/* 구분선 */}
-              <div className="h-12 w-px bg-gray-300"></div>
-              
-              {/* 최근 접촉일 */}
+              <div className="h-10 w-px bg-gray-300" />
+
+              {/* 상담 상태 */}
               <div>
-                <div className="text-xs text-gray-500 mb-1">최근 접촉일</div>
-                <div className="text-lg font-medium text-gray-900">{caseData.lastContact || '-'}</div>
+                <div className="text-[10px] text-gray-500">상담</div>
+                <span className="text-sm font-medium text-gray-900">
+                  {CONSULT_STATUS_LABELS[sharedCase.consultStatus]}
+                </span>
               </div>
-              
-              {/* 구분선 */}
-              <div className="h-12 w-px bg-gray-300"></div>
-              
+              <div className="h-10 w-px bg-gray-300" />
+
+              {/* 2차 검사 */}
+              <div>
+                <div className="text-[10px] text-gray-500">2차 검사</div>
+                <Badge variant="outline" className={`text-xs mt-0.5 ${SECOND_EXAM_COLORS[sharedCase.secondExamStatus]}`}>
+                  <FlaskConical className="h-3 w-3 mr-1" />
+                  {SECOND_EXAM_LABELS[sharedCase.secondExamStatus]}
+                  {sharedCase.secondExamType && ` (${EXAM_TYPE_LABELS[sharedCase.secondExamType]})`}
+                </Badge>
+              </div>
+              <div className="h-10 w-px bg-gray-300" />
+
               {/* 담당자 */}
               <div>
-                <div className="text-xs text-gray-500 mb-1">담당자</div>
-                <div className="text-lg font-medium text-gray-900">{caseData.counselor}</div>
+                <div className="text-[10px] text-gray-500">담당자</div>
+                <span className="text-sm font-medium text-gray-900">{sharedCase.counselor}</span>
               </div>
             </div>
-            
+
             {/* 우측 버튼 */}
-            <div className="flex gap-3">
+            <div className="flex gap-2 flex-shrink-0">
+              {sharedCase.contactStatus === 'UNREACHED' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSmsDialogOpen(true)}
+                  className="text-orange-700 border-orange-300 hover:bg-orange-50"
+                >
+                  <Send className="h-4 w-4 mr-1" /> 문자 보내기
+                </Button>
+              )}
               <Button
                 variant="outline"
+                size="sm"
                 onClick={() => setPiiDialogOpen(true)}
                 className="text-gray-700"
               >
                 개인정보 보기
               </Button>
-              <Button onClick={handleStartConsultation} className="bg-blue-600 hover:bg-blue-700">
+              <Button size="sm" onClick={handleStartConsultation} className="bg-blue-600 hover:bg-blue-700">
                 상담 시작
               </Button>
             </div>
@@ -515,38 +606,38 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
                   {riskBadge.label}
                 </div>
                 <div className={`text-lg font-semibold ${riskBadge.textColor} mt-1`}>
-                  {caseData.riskScore}점
+                  {sharedCase!.riskScore}점
                 </div>
               </div>
               
               <div>
                 <div className="text-xs text-gray-600 mb-1">위험 순위</div>
                 <div className="text-xl font-bold text-gray-900">
-                  상위 {100 - caseData.riskPercentile}%
+                  상위 {100 - (aiAnalysis?.riskPercentile ?? 0)}%
                 </div>
                 <div className="text-sm text-gray-600 mt-1">
-                  {caseData.aiAnalysis.riskRanking}
+                  {aiAnalysis!.riskRanking}
                 </div>
               </div>
               
               <div>
                 <div className="text-xs text-gray-600 mb-1">최근 위험도 변화</div>
                 <div className="text-base font-semibold text-gray-900">
-                  {caseData.aiAnalysis.recentChange}
+                  {aiAnalysis!.recentChange}
                 </div>
                 <div className="text-xs text-gray-500 mt-1">
-                  AI 산출일: {caseData.aiAnalysis.lastUpdated}
+                  AI 산출일: {aiAnalysis!.lastUpdated}
                 </div>
               </div>
               
               <div>
                 <div className="text-xs text-gray-600 mb-1">권장 대응 시급도</div>
                 <div className={`text-2xl font-bold ${
-                  caseData.aiAnalysis.urgency === 'immediate' ? 'text-red-600' :
-                  caseData.aiAnalysis.urgency === 'within_3_days' ? 'text-orange-600' :
+                  aiAnalysis!.urgency === 'immediate' ? 'text-red-600' :
+                  aiAnalysis!.urgency === 'within_3_days' ? 'text-orange-600' :
                   'text-green-600'
                 }`}>
-                  {getUrgencyText(caseData.aiAnalysis.urgency)}
+                  {getUrgencyText(aiAnalysis!.urgency)}
                 </div>
               </div>
             </div>
@@ -571,7 +662,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
                 </tr>
               </thead>
               <tbody>
-                {caseData.aiAnalysis.keyFactors.map((factor, index) => (
+                {aiAnalysis!.keyFactors.map((factor, index) => (
                   <tr key={index} className="border-b border-gray-200">
                     <td className="px-4 py-3 text-gray-900 font-medium">{index + 1}</td>
                     <td className="px-4 py-3 text-gray-900 font-medium">{factor.name}</td>
@@ -600,7 +691,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
           <h2 className="text-sm font-semibold text-gray-600 mb-4">운영 판단 가이드 (AI 분석 + 정책 기준)</h2>
           
           <div className="border-2 border-blue-200 bg-blue-50 p-6 space-y-4">
-            {caseData.aiAnalysis.operationalGuidelines.map((guideline, index) => (
+            {aiAnalysis!.operationalGuidelines.map((guideline, index) => (
               <div key={index} className="flex items-start gap-3">
                 <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold mt-0.5">
                   {index + 1}
@@ -621,20 +712,20 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
             
             <div className="space-y-3 text-sm text-gray-800">
               <p>
-                <span className="font-semibold">• AI 분석 모델:</span> {caseData.aiAnalysis.analysisInfo.aiModel}
+                <span className="font-semibold">• AI 분석 모델:</span> {aiAnalysis!.analysisInfo.aiModel}
               </p>
               <p>
-                <span className="font-semibold">• 분석 책임자:</span> {caseData.aiAnalysis.analysisInfo.responsible}
+                <span className="font-semibold">• 분석 책임자:</span> {aiAnalysis!.analysisInfo.responsible}
               </p>
               <p>
-                <span className="font-semibold">• 데이터 출처:</span> {caseData.aiAnalysis.analysisInfo.dataSource}
+                <span className="font-semibold">• 데이터 출처:</span> {aiAnalysis!.analysisInfo.dataSource}
               </p>
               <p>
-                <span className="font-semibold">• 데이터 갱신일:</span> {caseData.aiAnalysis.analysisInfo.updateDate}
+                <span className="font-semibold">• 데이터 갱신일:</span> {aiAnalysis!.analysisInfo.updateDate}
               </p>
               <p>
                 <span className="font-semibold">• 비식별 처리:</span>{' '}
-                {caseData.aiAnalysis.analysisInfo.deidentified ? (
+                {aiAnalysis!.analysisInfo.deidentified ? (
                   <span className="text-green-700 font-semibold">완료 ✓</span>
                 ) : (
                   <span className="text-red-700 font-semibold">미완료 ✗</span>
@@ -643,15 +734,211 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
               
               <div className="mt-4 pt-4 border-t border-gray-400">
                 <p className="text-xs text-gray-700 leading-relaxed">
-                  ※ 이 분석 결과는 공공 AI 기관이 {caseData.aiAnalysis.analysisInfo.dataSource} 기준으로 분석하였으며, 
-                  담당자 {caseData.aiAnalysis.analysisInfo.responsible} 책임하에 제공합니다. 
+                  ※ 이 분석 결과는 공공 AI 기관이 {aiAnalysis!.analysisInfo.dataSource} 기준으로 분석하였으며, 
+                  담당자 {aiAnalysis!.analysisInfo.responsible} 책임하에 제공합니다. 
                   모든 데이터는 개인정보보호법에 따라 비식별 처리되었습니다.
                 </p>
               </div>
             </div>
           </div>
         </section>
+
+        {/* 구분선 */}
+        <div className="border-t-2 border-gray-300"></div>
+
+        {/* ═══ (5) 운영 메모 ═══ */}
+        <section>
+          <h2 className="text-sm font-semibold text-gray-600 mb-4 flex items-center gap-2">
+            <ClipboardList className="h-4 w-4" />
+            운영 메모 (자동 + 수동)
+          </h2>
+          <div className="border-2 border-gray-300 bg-white">
+            {/* 메모 입력 */}
+            <div className="p-4 border-b border-gray-200 flex gap-2">
+              <Input
+                value={newMemoText}
+                onChange={(e) => setNewMemoText(e.target.value)}
+                placeholder="메모를 입력하세요…"
+                className="flex-1"
+                onKeyDown={(e) => e.key === 'Enter' && handleAddMemo()}
+              />
+              <Button size="sm" onClick={handleAddMemo} disabled={!newMemoText.trim()}>
+                <Plus className="h-4 w-4 mr-1" /> 추가
+              </Button>
+            </div>
+            {/* 메모 타임라인 */}
+            <div className="max-h-60 overflow-y-auto divide-y divide-gray-100">
+              {localMemoLines.length === 0 ? (
+                <div className="p-4 text-center text-sm text-gray-400">운영 메모가 없습니다.</div>
+              ) : (
+                localMemoLines.map((line, i) => (
+                  <div key={i} className="px-4 py-2 text-sm text-gray-800 hover:bg-gray-50 flex items-start gap-2">
+                    <span className="flex-shrink-0 mt-0.5 w-1.5 h-1.5 rounded-full bg-blue-400" />
+                    <span className="leading-relaxed">{line}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* 구분선 */}
+        <div className="border-t-2 border-gray-300"></div>
+
+        {/* ═══ (6) RAG 가이드 패널 ═══ */}
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold text-gray-600 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-purple-500" />
+              참고 가이드 (AI 기반)
+            </h2>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleGenerateRag}
+              disabled={ragLoading}
+            >
+              {ragLoading ? '분석 중…' : '가이드 생성'}
+            </Button>
+          </div>
+
+          {ragResult ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* 권장 액션 */}
+              <div className="border-2 border-green-200 bg-green-50 p-4 rounded">
+                <h3 className="text-xs font-semibold text-green-800 mb-2">📋 다음 권장 액션</h3>
+                <ul className="space-y-1.5">
+                  {ragResult.actions.map((a, i) => (
+                    <li key={i} className="text-sm text-green-900 flex items-start gap-1.5">
+                      <CheckCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-green-600" />
+                      <span>{a}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* 주의 포인트 */}
+              <div className="border-2 border-amber-200 bg-amber-50 p-4 rounded">
+                <h3 className="text-xs font-semibold text-amber-800 mb-2">⚠️ 주의 포인트</h3>
+                <ul className="space-y-1.5">
+                  {ragResult.cautions.map((c, i) => (
+                    <li key={i} className="text-sm text-amber-900 flex items-start gap-1.5">
+                      <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-amber-600" />
+                      <span>{c}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* 이탈 위험 신호 */}
+              {ragResult.churnSignals.length > 0 && (
+                <div className="border-2 border-red-200 bg-red-50 p-4 rounded">
+                  <h3 className="text-xs font-semibold text-red-800 mb-2">🚨 이탈 위험 신호</h3>
+                  <ul className="space-y-1.5">
+                    {ragResult.churnSignals.map((s, i) => (
+                      <li key={i} className="text-sm text-red-900 flex items-start gap-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-red-600" />
+                        <span>{s}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="border-2 border-dashed border-gray-300 bg-gray-50 p-8 rounded text-center">
+              <Sparkles className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+              <p className="text-sm text-gray-400">"가이드 생성" 버튼을 눌러 현재 케이스 상황에 맞는<br />참고 가이드를 확인하세요.</p>
+              <p className="text-xs text-gray-400 mt-2">※ AI 가이드는 참고 자료이며, 최종 판단은 담당자가 합니다.</p>
+            </div>
+          )}
+        </section>
+
+        {/* SMS 이력 */}
+        {localSmsHistory.length > 0 && (
+          <>
+            <div className="border-t-2 border-gray-300"></div>
+            <section>
+              <h2 className="text-sm font-semibold text-gray-600 mb-4 flex items-center gap-2">
+                <MessageSquare className="h-4 w-4" />
+                SMS 발송 이력
+              </h2>
+              <div className="border-2 border-gray-300 bg-white">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-100 border-b-2 border-gray-300">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">발송일시</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">템플릿</th>
+                      <th className="px-4 py-2 text-left font-semibold text-gray-700">상태</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {localSmsHistory.map((entry, i) => (
+                      <tr key={i} className="border-b border-gray-100">
+                        <td className="px-4 py-2 text-gray-800">{entry.date}</td>
+                        <td className="px-4 py-2 text-gray-800">{entry.template}</td>
+                        <td className="px-4 py-2">
+                          <Badge variant={entry.status === 'sent' ? 'default' : 'destructive'} className="text-xs">
+                            {entry.status === 'sent' ? '발송완료' : '실패'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </>
+        )}
       </div>
+
+      {/* ════════ SMS 발송 모달 ════════ */}
+      <Dialog open={smsDialogOpen} onOpenChange={setSmsDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5 text-orange-600" />
+              문자(SMS) 발송
+            </DialogTitle>
+            <DialogDescription>
+              대상자에게 SMS를 발송합니다. 발송 기록은 운영 메모에 자동 기록됩니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label>수신번호</Label>
+              <Input value={maskPhone(sharedCase?.phone ?? '')} disabled className="mt-1 bg-gray-50" />
+            </div>
+            <div>
+              <Label>발송 템플릿 선택 *</Label>
+              <Select value={smsTemplate} onValueChange={setSmsTemplate}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="템플릿을 선택하세요" />
+                </SelectTrigger>
+                <SelectContent>
+                  {smsTemplates.map(t => (
+                    <SelectItem key={t.id} value={t.id}>{t.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {smsTemplate && (
+              <div className="border border-gray-200 bg-gray-50 p-3 rounded">
+                <p className="text-xs text-gray-500 mb-1">미리보기</p>
+                <p className="text-sm text-gray-800 leading-relaxed">
+                  {smsTemplates.find(t => t.id === smsTemplate)?.body.replace('{{name}}', piiSource?.fullName ?? '대상자')}
+                </p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSmsDialogOpen(false)}>취소</Button>
+            <Button onClick={handleSendSms} disabled={!smsTemplate || smsSending} className="bg-orange-600 hover:bg-orange-700">
+              {smsSending ? '발송 중…' : 'SMS 발송'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* PII Access Dialog */}
       <Dialog open={piiDialogOpen} onOpenChange={setPiiDialogOpen}>
@@ -698,8 +985,8 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
               <div className="bg-gray-100 p-3 rounded text-xs text-gray-700">
                 <p className="font-semibold mb-1">열람 이력 기록 내용:</p>
                 <p>• 접근 일시: {new Date().toLocaleString('ko-KR')}</p>
-                <p>• 접근자: {caseData.counselor} (USER-001)</p>
-                <p>• 케이스 ID: {caseData.id}</p>
+                <p>• 접근자: {sharedCase?.counselor ?? '상담사'} (USER-001)</p>
+                <p>• 케이스 ID: {caseId}</p>
                 <p>• 접근 사유: {accessReason || '(선택 필요)'}</p>
               </div>
             </div>

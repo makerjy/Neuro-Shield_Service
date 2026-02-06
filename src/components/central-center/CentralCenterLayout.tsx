@@ -14,6 +14,7 @@ import {
   Database,
   Activity,
   ClipboardCheck,
+  Brain,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -32,6 +33,7 @@ interface CentralCenterLayoutProps {
 const navigationItems = [
   { id: 'national-dashboard', label: '전국운영대시보드', icon: Home, roles: ['central_admin', 'policy_maker'] },
   { id: 'kpi-dictionary', label: 'KPI 사전', icon: BarChart3, roles: ['central_admin', 'policy_maker'] },
+  { id: 'model-apply', label: '모델 적용 센터', icon: Brain, roles: ['central_admin', 'policy_maker'] },
   { id: 'model-governance', label: '모델/규칙 변경 관리', icon: Shield, roles: ['central_admin'] },
   { id: 'quality-monitoring', label: '데이터&모델 품질', icon: Database, roles: ['central_admin', 'policy_maker'] },
   { id: 'compliance-audit', label: '규정 준수 및 감사', icon: ClipboardCheck, roles: ['central_admin'] },
@@ -229,7 +231,7 @@ export function CentralCenterLayout({
         </header>
 
         {/* Main Content */}
-        <main className="flex-1 w-full overflow-hidden relative">
+        <main className="flex-1 w-full overflow-auto relative">
           {children}
         </main>
       </div>

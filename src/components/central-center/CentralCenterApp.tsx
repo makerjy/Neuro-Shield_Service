@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { CentralCenterLayout } from './CentralCenterLayout';
 import { NationalDashboard } from './NationalDashboard';
 import { KPIDictionary } from './KPIDictionary';
+import ModelApplyDashboard from './ModelApplyDashboard';
 import { ModelGovernance } from './ModelGovernance';
 import { QualityMonitoring } from './QualityMonitoring';
 import { ComplianceAudit } from './ComplianceAudit';
@@ -25,6 +26,8 @@ export function CentralCenterApp({
         return <NationalDashboard />;
       case 'kpi-dictionary':
         return <KPIDictionary />;
+      case 'model-apply':
+        return <ModelApplyDashboard />;
       case 'model-governance':
         return <ModelGovernance />;
       case 'quality-monitoring':

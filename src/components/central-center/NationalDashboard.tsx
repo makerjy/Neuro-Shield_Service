@@ -673,6 +673,73 @@ export function NationalDashboard() {
   const timeFilterLabel = timeFilter === 'week' ? '주간' : timeFilter === 'month' ? '월간' : '분기';
 
   /* ─────────────────────────────────────────────────────────────
+     행정구역 히트맵 (선택 KPI 기준, 푸른 테마)
+  ───────────────────────────────────────────────────────────── */
+  const selectedMapCard = useMemo(
+    () => MAP_KPI_CARDS.find((card) => card.id === selectedMapKpiId) ?? MAP_KPI_CARDS[0],
+    [selectedMapKpiId]
+  );
+
+  const mapHeatmapData = useMemo(() => {
+    const rangeMap: Record<string, { min: number; max: number }> = {
+      total_cases: { min: 300, max: 2200 },
+      completion: { min: 60, max: 98 },
+      consultation_time: { min: 1, max: 15 },
+      followup_dropout: { min: 2, max: 20 },
+      dropout: { min: 3, max: 25 },
+    };
+
+    const range = rangeMap[selectedMapKpiId] ?? { min: 10, max: 100 };
+    const seedPrefix = `${statsScopeKey}-${selectedMapKpiId}-heat`;
+
+    const rawData = [
+      { name: '경기도', value: seededValue(`${seedPrefix}-경기`, range.min, range.max) },
+      { name: '경상남도', value: seededValue(`${seedPrefix}-경남`, range.min, range.max) },
+      { name: '부산광역시', value: seededValue(`${seedPrefix}-부산`, range.min, range.max) },
+      { name: '인천광역시', value: seededValue(`${seedPrefix}-인천`, range.min, range.max) },
+      { name: '충청남도', value: seededValue(`${seedPrefix}-충남`, range.min, range.max) },
+      { name: '전라남도', value: seededValue(`${seedPrefix}-전남`, range.min, range.max) },
+      { name: '경상북도', value: seededValue(`${seedPrefix}-경북`, range.min, range.max) },
+      { name: '대구광역시', value: seededValue(`${seedPrefix}-대구`, range.min, range.max) },
+      { name: '서울특별시', value: seededValue(`${seedPrefix}-서울`, range.min, range.max) },
+      { name: '충청북도', value: seededValue(`${seedPrefix}-충북`, range.min, range.max) },
+      { name: '강원특별자치도', value: seededValue(`${seedPrefix}-강원`, range.min, range.max) },
+      { name: '전북특별자치도', value: seededValue(`${seedPrefix}-전북`, range.min, range.max) },
+      { name: '제주특별자치도', value: seededValue(`${seedPrefix}-제주`, range.min, range.max) },
+      { name: '울산광역시', value: seededValue(`${seedPrefix}-울산`, range.min, range.max) },
+      { name: '광주광역시', value: seededValue(`${seedPrefix}-광주`, range.min, range.max) },
+      { name: '세종특별자치시', value: seededValue(`${seedPrefix}-세종`, range.min, range.max) },
+    ];
+
+    const maxValue = Math.max(...rawData.map((d) => d.value));
+    const minValue = Math.min(...rawData.map((d) => d.value));
+
+    const getBlueHeatmapColor = (value: number) => {
+      const ratio = (value - minValue) / (maxValue - minValue || 1);
+      if (ratio < 0.15) return '#eff6ff'; // blue-50
+      if (ratio < 0.3) return '#bfdbfe'; // blue-200
+      if (ratio < 0.5) return '#60a5fa'; // blue-400
+      if (ratio < 0.7) return '#2563eb'; // blue-600
+      if (ratio < 0.85) return '#1d4ed8'; // blue-700
+      return '#1e3a8a'; // blue-900
+    };
+
+    const isLightColor = (hex: string) => {
+      return ['#eff6ff', '#bfdbfe'].includes(hex);
+    };
+
+    return rawData.map((item) => {
+      const fill = getBlueHeatmapColor(item.value);
+      return {
+        name: item.name,
+        size: Math.round(item.value),
+        fill,
+        textColor: isLightColor(fill) ? '#1e3a8a' : '#ffffff',
+      };
+    });
+  }, [statsScopeKey, selectedMapKpiId]);
+
+  /* ─────────────────────────────────────────────────────────────
      시계열 추이 데이터 - 시간 필터 연동
   ───────────────────────────────────────────────────────────── */
   const timeSeriesData = useMemo(() => {
@@ -918,31 +985,51 @@ export function NationalDashboard() {
             )}
           </div>
           
-          {/* 총 처리건수 + 트리맵 */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1 min-h-[200px]">
+          {/* 총 처리건수 + 히트맵 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1 min-h-[220px]">
             <div className="flex items-center justify-between mb-1">
               <div className="text-xs text-gray-500">{timeFilterLabel} 총 처리건수</div>
               <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{timeFilterLabel}</div>
             </div>
-            <div className="text-2xl font-bold text-blue-600 mb-3">
+            <div className="text-2xl font-bold text-blue-600 mb-2">
               {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
             </div>
-            <div className="h-[calc(100%-60px)] min-h-[140px]">
-              {containerSize.width > 0 && containerSize.height > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <Treemap
-                    data={treemapData}
-                    dataKey="size"
-                    aspectRatio={4 / 3}
-                    stroke="#fff"
-                    content={<CustomTreemapContent />}
-                  />
-                </ResponsiveContainer>
-              ) : (
-                <div className="h-full bg-gray-100 rounded animate-pulse flex items-center justify-center">
-                  <span className="text-xs text-gray-400">로딩 중...</span>
-                </div>
-              )}
+            <div className="text-[10px] text-gray-500 mb-2">{selectedMapCard.label} (행정구역별)</div>
+            <div style={{ width: '100%', aspectRatio: '1 / 1', maxHeight: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <Treemap
+                  data={mapHeatmapData}
+                  dataKey="size"
+                  stroke="#fff"
+                  isAnimationActive={false}
+                  content={({ x, y, width, height, name, fill, textColor }: any) => {
+                    if (!width || !height || width < 2 || height < 2) return null;
+                    const shortName = (name || '').replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim() || (name || '').slice(0, 3);
+                    const tc = textColor || '#fff';
+                    return (
+                      <g>
+                        <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1.5} rx={2} />
+                        {width > 24 && height > 16 && (
+                          <text
+                            x={x + width / 2}
+                            y={y + height / 2}
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fill={tc}
+                            fontSize={Math.min(width / 5, height / 2.5, 11)}
+                            fontWeight="700"
+                            stroke={tc === '#ffffff' ? 'rgba(0,0,0,0.3)' : 'none'}
+                            strokeWidth={tc === '#ffffff' ? 0.3 : 0}
+                            paintOrder="stroke"
+                          >
+                            {shortName}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  }}
+                />
+              </ResponsiveContainer>
             </div>
           </div>
 
@@ -1213,12 +1300,13 @@ export function NationalDashboard() {
                   <div className="text-xs text-gray-500">{timeFilterLabel} 총 처리건수</div>
                   <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{timeFilterLabel}</div>
                 </div>
-                <div className="text-2xl font-bold text-blue-600 mb-3">
+                <div className="text-2xl font-bold text-blue-600 mb-2">
                   {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
                 </div>
+                <div className="text-[10px] text-gray-500 mb-2">{selectedMapCard.label} (행정구역별)</div>
                 <div className="h-[140px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <Treemap data={treemapData} dataKey="size" aspectRatio={4/3} stroke="#fff" content={<CustomTreemapContent />} />
+                    <Treemap data={mapHeatmapData} dataKey="size" aspectRatio={4/3} stroke="#fff" content={<CustomTreemapContent />} />
                   </ResponsiveContainer>
                 </div>
               </div>
@@ -1283,4 +1371,3 @@ export function NationalDashboard() {
     </div>
   );
 }
-

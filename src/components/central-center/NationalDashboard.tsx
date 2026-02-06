@@ -13,6 +13,7 @@ import {
   Cell,
   ComposedChart,
   Line,
+  LineChart,
   Area,
   Legend,
   Treemap,
@@ -544,6 +545,276 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, timeFilter }: {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   KPI 통합 추이 차트 (멀티라인) - 6개 미니차트 → 1개 통합 그래프
+═══════════════════════════════════════════════════════════════════════════════ */
+const UNIFIED_KPI_DEFS = [
+  { key: 'sla',     label: 'SLA 준수율',   unit: '%', mode: 'percent' as const, target: 95,  color: '#3b82f6' },
+  { key: 'data',    label: '데이터 충족률', unit: '%', mode: 'percent' as const, target: 90,  color: '#22c55e' },
+  { key: 'done',    label: '처리 완료율',   unit: '%', mode: 'percent' as const, target: 90,  color: '#f59e0b' },
+  { key: 'ontime',  label: '응답 적시율',   unit: '%', mode: 'percent' as const, target: 85,  color: '#8b5cf6' },
+  { key: 'quality', label: '품질 점수',     unit: '점', mode: 'score' as const,  target: 88,  color: '#ec4899' },
+  { key: 'tat',     label: '평균 처리시간', unit: '일', mode: 'days' as const,   target: 2.5, color: '#06b6d4' },
+] as const;
+
+type UnifiedKpiKey = typeof UNIFIED_KPI_DEFS[number]['key'];
+
+interface KPIUnifiedChartProps {
+  bulletKPIs: KPIDefinition[];
+  kpiDataMap: Record<string, any>;
+  timeFilter: 'week' | 'month' | 'quarter';
+}
+
+function KPIUnifiedChart({ bulletKPIs, kpiDataMap, timeFilter }: KPIUnifiedChartProps) {
+  const [viewMode, setViewMode] = useState<'percent' | 'days'>('percent');
+  const [enabledKeys, setEnabledKeys] = useState<UnifiedKpiKey[]>(['sla', 'data', 'done', 'ontime']);
+
+  const toggleKey = useCallback((key: UnifiedKpiKey) => {
+    setEnabledKeys(prev => {
+      if (prev.includes(key)) return prev.filter(k => k !== key);
+      if (prev.length >= 4) return [...prev.slice(1), key]; // 가장 오래된 1개 제거
+      return [...prev, key];
+    });
+  }, []);
+
+  // KPI 사전 ID → UNIFIED_KPI_DEFS key 매핑
+  const kpiIdToKey: Record<string, UnifiedKpiKey> = {
+    'kpi-sla-rate': 'sla',
+    'kpi-data-rate': 'data',
+    'kpi-completion-rate': 'done',
+    'kpi-response-rate': 'ontime',
+    'kpi-quality-score': 'quality',
+    'kpi-avg-processing-time': 'tat',
+  };
+
+  // 통합 시계열 데이터 생성 (모든 KPI의 dailyData를 date 기준으로 merge)
+  const unifiedData = useMemo(() => {
+    const dateMap: Record<string, Record<string, number>> = {};
+    bulletKPIs.forEach(kpi => {
+      const uKey = kpiIdToKey[kpi.id];
+      if (!uKey) return;
+      const tsData = kpiDataMap[kpi.id] as TimeSeriesKPIData | null;
+      if (!tsData?.dailyData) return;
+      tsData.dailyData.forEach(d => {
+        if (!dateMap[d.date]) dateMap[d.date] = {};
+        dateMap[d.date][uKey] = d.value;
+      });
+    });
+    return Object.entries(dateMap).map(([date, values]) => ({ date, ...values }));
+  }, [bulletKPIs, kpiDataMap]);
+
+  // 현재 모드의 KPI 정의
+  const percentDefs = UNIFIED_KPI_DEFS.filter(d => d.mode === 'percent' || d.mode === 'score');
+  const daysDef = UNIFIED_KPI_DEFS.find(d => d.mode === 'days')!;
+  const activeDefs = viewMode === 'days' ? [daysDef] : percentDefs;
+  const visibleDefs = viewMode === 'days' ? [daysDef] : percentDefs.filter(d => enabledKeys.includes(d.key));
+
+  // Y축 domain
+  const yDomain: [number | string, number | string] = viewMode === 'days'
+    ? ['dataMin - 0.5', 'dataMax + 0.5']
+    : [70, 100];
+
+  const timeRangeLabel = timeFilter === 'week' ? '최근 7일' : timeFilter === 'month' ? '최근 12개월' : '분기별';
+
+  // 현재값 조회
+  const getCurrentValue = (key: UnifiedKpiKey): string | null => {
+    const kpiId = Object.entries(kpiIdToKey).find(([, v]) => v === key)?.[0];
+    if (!kpiId) return null;
+    const tsData = kpiDataMap[kpiId] as TimeSeriesKPIData | null;
+    if (!tsData) return null;
+    return `${tsData.current}`;
+  };
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm">
+      {/* ── 헤더 ── */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-gray-800">KPI 통합 추이</span>
+          <span className="text-[9px] text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{timeRangeLabel}</span>
+        </div>
+        {/* 모드 토글 */}
+        <div className="flex rounded-md border border-gray-200 overflow-hidden">
+          <button
+            onClick={() => setViewMode('percent')}
+            className={`px-2.5 py-1 text-[10px] font-medium transition-colors ${
+              viewMode === 'percent'
+                ? 'bg-blue-500 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            품질/성과(%)
+          </button>
+          <button
+            onClick={() => setViewMode('days')}
+            className={`px-2.5 py-1 text-[10px] font-medium transition-colors border-l border-gray-200 ${
+              viewMode === 'days'
+                ? 'bg-blue-500 text-white'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            처리시간(일)
+          </button>
+        </div>
+      </div>
+
+      {/* ── KPI 토글 칩 (percent/score 모드에서만) ── */}
+      {viewMode === 'percent' && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {percentDefs.map(def => {
+            const isOn = enabledKeys.includes(def.key);
+            const curVal = getCurrentValue(def.key);
+            return (
+              <button
+                key={def.key}
+                onClick={() => toggleKey(def.key)}
+                className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-medium transition-all border ${
+                  isOn
+                    ? 'border-transparent shadow-sm'
+                    : 'border-gray-200 bg-white text-gray-400 hover:text-gray-600 hover:border-gray-300'
+                }`}
+                style={isOn ? {
+                  backgroundColor: `${def.color}15`,
+                  color: def.color,
+                  borderColor: `${def.color}40`,
+                } : undefined}
+              >
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: isOn ? def.color : '#d1d5db' }}
+                />
+                <span>{def.label}</span>
+                {isOn && curVal && (
+                  <span className="font-bold">{curVal}{def.unit}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── days 모드 현재값 표시 ── */}
+      {viewMode === 'days' && (
+        <div className="flex items-center gap-2 mb-3">
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: daysDef.color }} />
+          <span className="text-[10px] font-medium text-gray-700">{daysDef.label}</span>
+          {(() => {
+            const v = getCurrentValue('tat');
+            return v ? <span className="text-xs font-bold" style={{ color: daysDef.color }}>{v}{daysDef.unit}</span> : null;
+          })()}
+          <span className="text-[9px] text-gray-400 ml-auto">목표: {daysDef.target}{daysDef.unit}</span>
+        </div>
+      )}
+
+      {/* ── 차트 ── */}
+      <div style={{ height: '220px' }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={unifiedData} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
+            <defs>
+              {UNIFIED_KPI_DEFS.map(def => (
+                <linearGradient key={def.key} id={`uniGrad-${def.key}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={def.color} stopOpacity={0.12} />
+                  <stop offset="100%" stopColor={def.color} stopOpacity={0.02} />
+                </linearGradient>
+              ))}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10, fill: '#6b7280' }}
+              tickLine={false}
+              axisLine={{ stroke: '#e5e7eb' }}
+              interval={0}
+            />
+            <YAxis
+              tick={{ fontSize: 9, fill: '#9ca3af' }}
+              tickLine={false}
+              axisLine={false}
+              domain={yDomain}
+              width={32}
+              tickFormatter={v => viewMode === 'days' ? `${Number(v).toFixed(1)}` : `${v}`}
+            />
+            <Tooltip
+              content={({ active, payload, label }) => {
+                if (!active || !payload?.length) return null;
+                return (
+                  <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[140px]">
+                    <div className="font-semibold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">{label}</div>
+                    {payload.map((p, i) => {
+                      const def = UNIFIED_KPI_DEFS.find(d => d.key === p.dataKey);
+                      if (!def) return null;
+                      return (
+                        <div key={i} className="flex items-center justify-between gap-3 py-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: def.color }} />
+                            <span className="text-gray-600">{def.label}</span>
+                          </div>
+                          <span className="font-semibold" style={{ color: def.color }}>
+                            {Number(p.value).toFixed(1)}{def.unit}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              }}
+            />
+            {/* 목표선 (percent 모드에서 enabled 된 KPI만) */}
+            {viewMode === 'percent' && visibleDefs
+              .filter(d => d.target != null)
+              .map(d => (
+                <ReferenceLine
+                  key={`target-${d.key}`}
+                  y={d.target}
+                  stroke={d.color}
+                  strokeDasharray="6 3"
+                  strokeWidth={1}
+                  strokeOpacity={0.4}
+                />
+              ))
+            }
+            {/* days 모드 목표선 */}
+            {viewMode === 'days' && daysDef.target != null && (
+              <ReferenceLine
+                y={daysDef.target}
+                stroke={daysDef.color}
+                strokeDasharray="6 3"
+                strokeWidth={1}
+                strokeOpacity={0.5}
+                label={{ value: `목표 ${daysDef.target}${daysDef.unit}`, fontSize: 9, fill: daysDef.color, position: 'right' }}
+              />
+            )}
+            {/* 라인 */}
+            {visibleDefs.map(def => (
+              <Line
+                key={def.key}
+                type="monotone"
+                dataKey={def.key}
+                stroke={def.color}
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4, fill: def.color, stroke: '#fff', strokeWidth: 2 }}
+                connectNulls
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* ── 하단 범례 (percent 모드에서 목표선 설명) ── */}
+      {viewMode === 'percent' && (
+        <div className="flex items-center justify-center gap-4 mt-2 pt-1.5 border-t border-gray-100">
+          <div className="flex items-center gap-1 text-[8px] text-gray-400">
+            <span className="w-4" style={{ borderTop: '2px dashed #9ca3af' }} />
+            <span>목표선</span>
+          </div>
+          <div className="text-[8px] text-gray-400">최대 4개 동시 표시 · 칩 클릭으로 전환</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1265,47 +1536,12 @@ export function NationalDashboard() {
             )}
           </div>
 
-          {/* ═══════════════════════════════════════════════════════
-              KPI 통계 지표 (시계열 그래프) - KPI 사전 기반 자동 생성
-              - 하드코딩 금지: chartEnabled=true인 KPI만 자동 포함
-              - 필터(주간/월간/분기)와 연동되어 일별 데이터 표시
-          ═══════════════════════════════════════════════════════ */}
-          <div className="bg-white border border-gray-200 rounded-lg p-2 flex-1">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-semibold text-gray-700">KPI 통계 지표</span>
-            </div>
-            
-            {/* 시계열 KPI 차트 그리드 - 1열 */}
-            <div className="grid grid-cols-1 gap-2.5">
-              {bulletKPIs.length > 0 ? (
-                bulletKPIs.map((kpi, idx) => (
-                  <KPITimeSeriesChart 
-                    key={kpi.id}
-                    kpiDef={kpi} 
-                    data={kpiDataMap[kpi.id] as TimeSeriesKPIData | null}
-                    colorIndex={idx}
-                    timeFilter={timeFilter}
-                  />
-                ))
-              ) : (
-                <div className="col-span-2 text-xs text-gray-400 text-center py-4">
-                  표시할 KPI 지표가 없습니다
-                </div>
-              )}
-            </div>
-            
-            {/* 범례 */}
-            <div className="flex items-center justify-center gap-3 mt-2 text-[8px] text-gray-500 border-t border-gray-100 pt-1.5">
-              <div className="flex items-center gap-1">
-                <span className="w-3 h-0" style={{ borderTop: '2px dashed #9ca3af' }} />
-                <span>기준선</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="w-3 h-0" style={{ borderTop: '2px solid #ef4444' }} />
-                <span>목표</span>
-              </div>
-            </div>
-          </div>
+          {/* ═══ KPI 통합 추이 차트 (멀티라인) ═══ */}
+          <KPIUnifiedChart
+            bulletKPIs={bulletKPIs}
+            kpiDataMap={kpiDataMap}
+            timeFilter={timeFilter}
+          />
 
           {/* 나머지 KPI 위젯들 (도넛 차트 제외, center-load 제외) */}
           {rightKPIs.filter(kpi => 

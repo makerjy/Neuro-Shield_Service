@@ -14,6 +14,7 @@ export type KoreaDrilldownMapProps = {
   unit?: string;
   year?: number;
   valueFormatter?: (value: number) => string;
+  colorPalette?: string[]; // 외부에서 색상 팔레트 주입
 };
 
 const MIN_SIZE = 50;
@@ -46,7 +47,8 @@ export function KoreaDrilldownMap({
   indicatorLabel = '지표',
   unit = '',
   year,
-  valueFormatter
+  valueFormatter,
+  colorPalette // 외부 색상 팔레트
 }: KoreaDrilldownMapProps) {
   const { ref, width, height } = useResizeObserver<HTMLDivElement>();
   const [tooltip, setTooltip] = useState<{ x: number; y: number; name: string; value: number; code: string } | null>(null);
@@ -68,10 +70,20 @@ export function KoreaDrilldownMap({
     const min = values.length ? Math.min(...values) : 0;
     const max = values.length ? Math.max(...values) : 100;
     const domain = min === max ? [min - 1, max + 1] : [min, max];
+    
+    // 외부 팔레트가 주어지면 해당 팔레트 기반 스케일 생성
+    if (colorPalette && colorPalette.length > 0) {
+      return d3
+        .scaleQuantize<string>()
+        .domain(domain as [number, number])
+        .range(colorPalette);
+    }
+    
+    // 기본: 파란색 연속 스케일
     return d3
       .scaleSequential((t) => d3.interpolateBlues(0.15 + 0.85 * t))
       .domain(domain as [number, number]);
-  }, [stats]);
+  }, [stats, colorPalette]);
 
   const projection = useMemo(() => {
     if (width < MIN_SIZE || height < MIN_SIZE || !features.length) return null;
@@ -204,23 +216,6 @@ export function KoreaDrilldownMap({
           </g>
         </svg>
       )}
-
-      <div className="absolute bottom-3 right-3 flex gap-2">
-        <button
-          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 shadow"
-          onClick={() => handleZoom('in')}
-          type="button"
-        >
-          확대
-        </button>
-        <button
-          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 shadow"
-          onClick={() => handleZoom('out')}
-          type="button"
-        >
-          축소
-        </button>
-      </div>
 
       {tooltip && (
         <div

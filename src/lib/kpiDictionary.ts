@@ -455,12 +455,26 @@ export function fetchKPIData(
     
     case 'bar': {
       if (kpiId === 'case-distribution') {
-        const ages = ['0-4', '5-9', '10-14', '15-19', '20-24', '25-29', '30-34', '35-39', '40-44', '45-49', '50-54', '55-59', '60-64', '65-69'];
-        const colors = ['#3b82f6', '#60a5fa', '#22c55e', '#f59e0b', '#ec4899', '#8b5cf6'];
+        // 이미지처럼 5세 단위로 세분화 (0-4 ~ 85+)
+        const ages = [
+          '20~24', '25~29', '30~34', '35~39', 
+          '40~44', '45~49', '50~54', '55~59', 
+          '60~64', '65~69', '70~74', '75~79', 
+          '80~84', '85~'
+        ];
+        
+        // 연령대별 실제적인 분포 패턴 적용 (중장년층이 많은 패턴)
+        const baseValues = [
+          1200, 1800, 2200, 2300,  // 영유아~청소년
+          2700, 3400, 3600, 3300,  // 청년
+          3900, 3800, 4400, 4200,  // 중년
+          4100, 3500, 2300, 1700,  // 장년~노년
+          1300, 1000               // 고령
+        ];
+        
         return ages.map((age, idx) => ({
           label: age,
-          value: Math.round(seededRandom(`${seedKey}-age-${idx}`, 800, 4500)),
-          color: colors[Math.floor(idx / 3) % colors.length],
+          value: Math.round(baseValues[idx] * (0.9 + seededRandom(`${seedKey}-age-${idx}`, 0, 0.2))),
         }));
       }
       if (kpiId === 'center-load') {
@@ -515,49 +529,67 @@ export function fetchKPIData(
     }
     
     case 'bullet': {
-      // 시계열 차트용 데이터: 일별 데이터 생성 (최근 7/30/90일)
+      // 시계열 차트용 데이터: 시간 필터에 따라 다른 단위로 생성
       const metric = kpi.metric as any;
       const baseline = metric.baseline ?? 85;
       const target = metric.target ?? 90;
       const higherBetter = metric.higherBetter !== false;
       const unit = metric.unit || '%';
       
-      // 필터에 따른 일수 결정
-      const daysCount = timeRange === 'week' ? 7 : timeRange === 'month' ? 30 : 90;
-      const today = new Date(2026, 1, 5); // 2026년 2월 5일
-      
-      // 일별 데이터 생성
       const dailyData: { date: string; value: number }[] = [];
       
-      for (let i = daysCount - 1; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
-        const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
-        
-        let baseValue: number;
+      // KPI별 기준값 설정 함수
+      const getBaseValue = (kpiId: string, seedSuffix: string): number => {
         if (kpiId === 'kpi-sla-rate') {
-          baseValue = 94 + seededRandom(`${seedKey}-sla-d${i}`, -2, 2);
+          return 94 + seededRandom(`${seedKey}-sla-${seedSuffix}`, -2, 2);
         } else if (kpiId === 'kpi-data-rate') {
-          baseValue = 95 + seededRandom(`${seedKey}-data-d${i}`, -3, 2);
+          return 95 + seededRandom(`${seedKey}-data-${seedSuffix}`, -3, 2);
         } else if (kpiId === 'kpi-completion-rate') {
-          baseValue = 95 + seededRandom(`${seedKey}-comp-d${i}`, -2, 2);
+          return 95 + seededRandom(`${seedKey}-comp-${seedSuffix}`, -2, 2);
         } else if (kpiId === 'kpi-response-rate') {
-          baseValue = 87 + seededRandom(`${seedKey}-resp-d${i}`, -3, 3);
+          return 87 + seededRandom(`${seedKey}-resp-${seedSuffix}`, -3, 3);
         } else if (kpiId === 'kpi-quality-score') {
-          baseValue = 92 + seededRandom(`${seedKey}-qual-d${i}`, -2, 2);
+          return 92 + seededRandom(`${seedKey}-qual-${seedSuffix}`, -2, 2);
         } else if (kpiId === 'kpi-avg-processing-time') {
-          baseValue = 2.3 + seededRandom(`${seedKey}-time-d${i}`, -0.5, 0.5);
+          return 2.3 + seededRandom(`${seedKey}-time-${seedSuffix}`, -0.5, 0.5);
         } else {
-          baseValue = baseline + seededRandom(`${seedKey}-d${i}`, -5, 5);
+          return baseline + seededRandom(`${seedKey}-${seedSuffix}`, -5, 5);
         }
-        
-        dailyData.push({
-          date: dateStr,
-          value: Number(baseValue.toFixed(1)),
-        });
+      };
+      
+      if (timeRange === 'week') {
+        // 주간: 최근 7일 (일별)
+        const today = new Date(2026, 1, 5); // 2026년 2월 5일
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date(today);
+          d.setDate(d.getDate() - i);
+          const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+          dailyData.push({
+            date: dateStr,
+            value: Number(getBaseValue(kpiId, `d${i}`).toFixed(1)),
+          });
+        }
+      } else if (timeRange === 'month') {
+        // 월간: 12개월 (월별)
+        const months = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
+        for (let i = 0; i < 12; i++) {
+          dailyData.push({
+            date: months[i],
+            value: Number(getBaseValue(kpiId, `m${i}`).toFixed(1)),
+          });
+        }
+      } else {
+        // 분기: 4분기 (분기별)
+        const quarters = ['1분기', '2분기', '3분기', '4분기'];
+        for (let i = 0; i < 4; i++) {
+          dailyData.push({
+            date: quarters[i],
+            value: Number(getBaseValue(kpiId, `q${i}`).toFixed(1)),
+          });
+        }
       }
       
-      // 현재값 = 마지막 날 값
+      // 현재값 = 마지막 값
       const current = dailyData[dailyData.length - 1].value;
       
       return {

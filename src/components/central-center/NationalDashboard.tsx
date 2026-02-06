@@ -30,7 +30,11 @@ import { KPIDefinition, DrillLevel, DonutDataItem, BarDataItem } from '../../lib
 ═══════════════════════════════════════════════════════════════════════════════ */
 function useResizeObserver<T extends HTMLElement>(): [React.RefObject<T | null>, { width: number; height: number }] {
   const ref = useRef<T | null>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
+  // 초기값을 window 크기로 설정하여 초기 로딩 시 desktop 모드 보장
+  const [size, setSize] = useState({ 
+    width: typeof window !== 'undefined' ? window.innerWidth : 1920, 
+    height: typeof window !== 'undefined' ? window.innerHeight : 1080 
+  });
   const rafRef = useRef<number | null>(null);
   
   useEffect(() => {
@@ -85,7 +89,102 @@ const COLORS = {
   gray: '#6b7280',
 };
 
+// 연령대별 색상 (영유아~노년 구분)
+const AGE_GROUP_COLORS: Record<string, string> = {
+  '영유아': '#93c5fd',      // 연한 파랑 (0-4)
+  '어린이': '#60a5fa',      // 파랑 (5-14)
+  '청소년': '#3b82f6',      // 진한 파랑 (15-19)
+  '청년': '#86efac',        // 연두색 (20-34)
+  '장년': '#fcd34d',        // 노란색 (35-64)
+  '노년': '#f9a8d4',        // 핑크색 (65+)
+};
+
+// 5세 단위 연령대 색상 (life stage 기반)
+const getAgeColor = (ageLabel: string): string => {
+  const age = parseInt(ageLabel);
+  if (isNaN(age)) {
+    // 라벨이 숫자가 아닌 경우 (예: '85~')
+    if (ageLabel.includes('85') || ageLabel.includes('80')) return '#d946ef'; // 보라
+    if (ageLabel.includes('75') || ageLabel.includes('70')) return '#f472b6'; // 핑크
+    return '#f9a8d4';
+  }
+  if (age < 5) return '#bfdbfe';   // 영유아 - 매우 연한 파랑
+  if (age < 10) return '#93c5fd';  // 어린이1 - 연한 파랑
+  if (age < 15) return '#60a5fa';  // 어린이2 - 파랑
+  if (age < 20) return '#3b82f6';  // 청소년 - 진한 파랑
+  if (age < 25) return '#86efac';  // 청년1 - 연두
+  if (age < 30) return '#4ade80';  // 청년2 - 초록
+  if (age < 35) return '#22c55e';  // 청년3 - 진한 초록
+  if (age < 40) return '#fef08a';  // 장년1 - 연한 노랑
+  if (age < 45) return '#fde047';  // 장년2 - 노랑
+  if (age < 50) return '#facc15';  // 장년3 - 진한 노랑
+  if (age < 55) return '#eab308';  // 장년4 - 골드
+  if (age < 60) return '#ca8a04';  // 장년5 - 진한 골드
+  if (age < 65) return '#a16207';  // 장년6 - 브라운
+  if (age < 70) return '#fda4af';  // 노년1 - 연한 핑크
+  if (age < 75) return '#fb7185';  // 노년2 - 핑크
+  if (age < 80) return '#f472b6';  // 노년3 - 진한 핑크
+  if (age < 85) return '#e879f9';  // 노년4 - 연한 보라
+  return '#d946ef';                 // 노년5 - 보라
+};
+
 const AGE_COLORS = ['#3b82f6', '#60a5fa', '#22c55e', '#f59e0b', '#ec4899', '#8b5cf6'];
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   지도 KPI 선택 카드 정의 (상단 통계 카드 → 지도 연동)
+   - geoIndicators.ts의 id와 매핑
+═══════════════════════════════════════════════════════════════════════════════ */
+type MapKpiCardDef = {
+  id: string;           // geoIndicators.ts의 indicatorId
+  label: string;        // 카드 표시명
+  unit: string;         // 단위
+  color: string;        // 카드 강조 색상
+  iconBg: string;       // 아이콘 배경
+  getValue: (seed: string) => number; // Mock 값 생성
+};
+
+const MAP_KPI_CARDS: MapKpiCardDef[] = [
+  {
+    id: 'total_cases',
+    label: '신규 유입',
+    unit: '건',
+    color: 'blue',
+    iconBg: 'bg-blue-100 text-blue-600',
+    getValue: (seed) => Math.round(seededValue(`${seed}-new`, 1200, 2800)),
+  },
+  {
+    id: 'completion',
+    label: '처리 중',
+    unit: '건',
+    color: 'green',
+    iconBg: 'bg-green-100 text-green-600',
+    getValue: (seed) => Math.round(seededValue(`${seed}-progress`, 800, 1500)),
+  },
+  {
+    id: 'consultation_time',
+    label: 'SLA 위반',
+    unit: '%',
+    color: 'red',
+    iconBg: 'bg-red-100 text-red-600',
+    getValue: (seed) => Number(seededValue(`${seed}-sla`, 2.5, 8.5).toFixed(1)),
+  },
+  {
+    id: 'followup_dropout',
+    label: '데이터 부족률',
+    unit: '%',
+    color: 'orange',
+    iconBg: 'bg-amber-100 text-amber-600',
+    getValue: (seed) => Number(seededValue(`${seed}-data`, 3.0, 12.0).toFixed(1)),
+  },
+  {
+    id: 'dropout',
+    label: '재접촉 필요',
+    unit: '%',
+    color: 'purple',
+    iconBg: 'bg-purple-100 text-purple-600',
+    getValue: (seed) => Number(seededValue(`${seed}-recontact`, 5.0, 15.0).toFixed(1)),
+  },
+];
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    도넛 차트 내부 라벨 컴포넌트
@@ -199,24 +298,80 @@ function KPIWidget({ kpi, data, statsScopeKey, activeDonutIndex, setActiveDonutI
   
   if (chartType === 'bar') {
     const barData = data as BarDataItem[];
+    const isAgeDistribution = kpi.id === 'case-distribution';
+    
+    // 연령대 분포 차트는 특별한 색상 스키마 적용
+    const enhancedBarData = isAgeDistribution 
+      ? barData.map(item => ({
+          ...item,
+          fill: getAgeColor(item.label),
+        }))
+      : barData;
+    
     return (
-      <div style={{ height: '150px' }}>
+      <div style={{ height: '180px' }}>
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={barData} margin={{ top: 5, right: 5, left: -15, bottom: 5 }}>
+          <BarChart 
+            data={enhancedBarData} 
+            margin={{ top: 15, right: 10, left: -10, bottom: 25 }}
+            barCategoryGap="8%"
+          >
             <defs>
-              {AGE_COLORS.map((color, idx) => (
+              {enhancedBarData.map((item, idx) => (
                 <linearGradient key={idx} id={`barGrad-${kpi.id}-${idx}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity={0.9} />
-                  <stop offset="100%" stopColor={color} stopOpacity={0.7} />
+                  <stop offset="0%" stopColor={item.fill || item.color || AGE_COLORS[idx % AGE_COLORS.length]} stopOpacity={0.95} />
+                  <stop offset="100%" stopColor={item.fill || item.color || AGE_COLORS[idx % AGE_COLORS.length]} stopOpacity={0.75} />
                 </linearGradient>
               ))}
             </defs>
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-            <XAxis dataKey="label" tick={{ fontSize: 9 }} interval={0} angle={-45} textAnchor="end" height={35} />
-            <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} />
-            <Tooltip formatter={(v: number) => v.toLocaleString()} />
-            <Bar dataKey="value" radius={[2, 2, 0, 0]}>
-              {barData.map((entry, idx) => <Cell key={idx} fill={entry.color || `url(#barGrad-${kpi.id}-${idx % AGE_COLORS.length})`} />)}
+            <XAxis 
+              dataKey="label" 
+              tick={{ fontSize: 11, fill: '#4b5563' }} 
+              interval={0} 
+              tickLine={false}
+              axisLine={{ stroke: '#d1d5db' }}
+            />
+            <YAxis 
+              tick={{ fontSize: 10, fill: '#6b7280' }} 
+              tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v}
+              axisLine={false}
+              tickLine={false}
+              width={35}
+            />
+            <Tooltip 
+              formatter={(v: number) => [v.toLocaleString() + '건', '건수']}
+              contentStyle={{ 
+                backgroundColor: 'rgba(255,255,255,0.95)', 
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
+              }}
+              cursor={{ fill: 'rgba(59, 130, 246, 0.1)' }}
+            />
+            <Bar 
+              dataKey="value" 
+              radius={[6, 6, 0, 0]}
+              label={({ x, y, width, value }) => (
+                <text 
+                  x={x + width / 2} 
+                  y={y - 5} 
+                  fill="#374151" 
+                  textAnchor="middle" 
+                  fontSize={9}
+                  fontWeight={500}
+                >
+                  {value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toLocaleString()}
+                </text>
+              )}
+            >
+              {enhancedBarData.map((entry, idx) => (
+                <Cell 
+                  key={idx} 
+                  fill={`url(#barGrad-${kpi.id}-${idx})`}
+                  style={{ filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.1))' }}
+                />
+              ))}
             </Bar>
           </BarChart>
         </ResponsiveContainer>
@@ -283,11 +438,16 @@ const KPI_LINE_COLORS = [
   '#06b6d4', // cyan
 ];
 
-function KPITimeSeriesChart({ kpiDef, data, colorIndex }: { kpiDef: KPIDefinition; data: TimeSeriesKPIData | null; colorIndex: number }) {
+function KPITimeSeriesChart({ kpiDef, data, colorIndex, timeFilter }: { 
+  kpiDef: KPIDefinition; 
+  data: TimeSeriesKPIData | null; 
+  colorIndex: number;
+  timeFilter: 'week' | 'month' | 'quarter';
+}) {
   if (!data) {
     return (
-      <div className="bg-gray-50 rounded-lg p-2 h-[120px] flex items-center justify-center">
-        <div className="w-full h-16 bg-gray-100 rounded animate-pulse" />
+      <div className="bg-gray-50 rounded-lg p-2 h-[80px] flex items-center justify-center border border-gray-200 shadow-sm">
+        <div className="w-full h-10 bg-gray-100 rounded animate-pulse" />
       </div>
     );
   }
@@ -296,50 +456,72 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex }: { kpiDef: KPIDefinitio
   const lineColor = KPI_LINE_COLORS[colorIndex % KPI_LINE_COLORS.length];
   const isMet = higherBetter ? current >= target : current <= target;
   
+  // 시간 필터에 따른 X축 라벨 간격 및 포맷 조정
+  // 주간: 7일 모두 표시, 월간: 3개월마다 표시, 분기: 모두 표시
+  const xAxisInterval = timeFilter === 'week' ? 0 : timeFilter === 'month' ? 2 : 0;
+  const timeRangeLabel = timeFilter === 'week' ? '주간' : timeFilter === 'month' ? '월간' : '분기';
+  
+  // 차트별 배경색 그라데이션 (구분용)
+  const bgColors = [
+    'bg-blue-50/50',
+    'bg-green-50/50', 
+    'bg-amber-50/50',
+    'bg-purple-50/50',
+    'bg-pink-50/50',
+    'bg-cyan-50/50',
+  ];
+  const bgColor = bgColors[colorIndex % bgColors.length];
+  
   return (
-    <div className="bg-gray-50 rounded-lg p-2">
+    <div className={`${bgColor} rounded-lg p-2 border border-gray-200 shadow-sm`}>
       {/* 헤더 */}
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] font-medium text-gray-600">{kpiDef.name}</span>
-        <span className={`text-xs font-bold ${isMet ? 'text-green-600' : 'text-amber-600'}`}>
+      <div className="flex items-center justify-between mb-1 pb-1 border-b border-gray-200/60">
+        <div className="flex items-center gap-1.5">
+          <span 
+            className="w-2 h-2 rounded-full flex-shrink-0" 
+            style={{ backgroundColor: lineColor }}
+          />
+          <span className="text-[10px] font-semibold text-gray-700 truncate">{kpiDef.name}</span>
+        </div>
+        <span className={`text-[11px] font-bold flex-shrink-0 ${isMet ? 'text-green-600' : 'text-amber-600'}`}>
           {current}{unit}
         </span>
       </div>
       
-      {/* 미니 라인 차트 */}
-      <div style={{ height: '80px' }}>
+      {/* 라인 차트 - 높이 증가 */}
+      <div style={{ height: '90px' }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={dailyData} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+          <ComposedChart data={dailyData} margin={{ top: 5, right: 5, left: -18, bottom: 2 }}>
             <defs>
               <linearGradient id={`kpiGrad-${kpiDef.id}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={lineColor} stopOpacity={0.3} />
+                <stop offset="0%" stopColor={lineColor} stopOpacity={0.35} />
                 <stop offset="100%" stopColor={lineColor} stopOpacity={0.05} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="2 2" vertical={false} stroke="#e5e7eb" />
+            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
             <XAxis 
               dataKey="date" 
-              tick={{ fontSize: 8 }} 
+              tick={{ fontSize: 10, fill: '#374151', fontWeight: 500 }} 
               tickLine={false}
-              axisLine={{ stroke: '#e5e7eb' }}
-              interval={Math.floor(dailyData.length / 4)}
+              axisLine={{ stroke: '#d1d5db' }}
+              interval={xAxisInterval}
             />
             <YAxis 
-              tick={{ fontSize: 8 }} 
+              tick={{ fontSize: 9, fill: '#6b7280' }} 
               tickLine={false}
               axisLine={false}
               domain={['auto', 'auto']}
-              width={30}
+              width={28}
             />
             <Tooltip 
-              contentStyle={{ fontSize: '10px', padding: '4px 8px' }}
+              contentStyle={{ fontSize: '11px', padding: '6px 10px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}
               formatter={(v: number) => [`${v}${unit}`, kpiDef.name]}
               labelFormatter={(label) => `${label}일`}
             />
             {/* 목표선 */}
-            <ReferenceLine y={target} stroke="#ef4444" strokeDasharray="3 3" strokeWidth={1} />
+            <ReferenceLine y={target} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1.5} label={{ value: '목표', fontSize: 8, fill: '#ef4444', position: 'right' }} />
             {/* 기준선 */}
-            <ReferenceLine y={baseline} stroke="#9ca3af" strokeDasharray="2 2" strokeWidth={1} />
+            <ReferenceLine y={baseline} stroke="#9ca3af" strokeDasharray="3 3" strokeWidth={1} />
             {/* 영역 */}
             <Area 
               type="monotone" 
@@ -354,7 +536,7 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex }: { kpiDef: KPIDefinitio
               stroke={lineColor} 
               strokeWidth={2}
               dot={false}
-              activeDot={{ r: 3, fill: lineColor }}
+              activeDot={{ r: 4, fill: lineColor, stroke: '#fff', strokeWidth: 2 }}
             />
           </ComposedChart>
         </ResponsiveContainer>
@@ -372,6 +554,9 @@ export function NationalDashboard() {
   const [showKpiSummaryTable, setShowKpiSummaryTable] = useState(false); // KPI 요약 테이블 토글
   const [timeFilter, setTimeFilter] = useState<'week' | 'month' | 'quarter'>('week'); // 시간 필터
   
+  // ═══ 지오맵 KPI 선택 상태 (상단 카드 클릭 → 지도 히트맵 KPI 변경) ═══
+  const [selectedMapKpiId, setSelectedMapKpiId] = useState<string>('total_cases');
+  
   // ResizeObserver 훅으로 컨테이너 크기 추적 (반응형)
   const [containerRef, containerSize] = useResizeObserver<HTMLDivElement>();
   
@@ -382,10 +567,32 @@ export function NationalDashboard() {
   
   // 반응형 레이아웃 모드 결정
   const layoutMode = useMemo(() => {
-    if (containerSize.width >= 1280) return 'desktop'; // 1:3:2
-    if (containerSize.width >= 768) return 'tablet';   // 2단
+    // containerSize가 아직 측정되지 않았으면 desktop 기본값
+    const width = containerSize.width || (typeof window !== 'undefined' ? window.innerWidth : 1920);
+    if (width >= 1024) return 'desktop'; // 3열 레이아웃
+    if (width >= 768) return 'tablet';   // 2단
     return 'mobile'; // 1열 스택
   }, [containerSize.width]);
+
+  const columnFlex = useMemo(() => {
+  const w = containerSize.width;
+
+  // 모바일/태블릿은 기존 로직 유지
+  if (w < 768) return { left: 1, center: 1, right: 1 };
+  if (w < 1024) return { left: 1, center: 1, right: 1 }; // tablet에서는 아래 별도 레이아웃 쓰니까 의미 없음
+
+  // desktop: 1024~1920 사이에서 연속적으로 보정
+  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+  const t = clamp((w - 1024) / (1920 - 1024), 0, 1); // 0~1
+
+  // t가 커질수록(화면이 넓을수록) center↑ right↓
+  const left = 1;
+  const center = 6 + 2 * t;  // 6 → 8
+  const right = 1.6 - 0.4 * t;   // 1.6 → 1.2
+
+  return { left, center, right };
+}, [containerSize.width]);
+
 
   // KPI 사전에서 패널별 KPI 가져오기
   const leftKPIs = useMemo(() => getKPIsByPanel('left'), []);
@@ -413,27 +620,31 @@ export function NationalDashboard() {
   }, [leftKPIs, rightKPIs, bottomKPIs, bulletKPIs, selectedRegion, drillLevel, timeFilter]);
 
   /* ─────────────────────────────────────────────────────────────
-     트리맵 데이터 (지역별 케이스) - 히트맵 스타일
+     트리맵 데이터 (지역별 케이스) - 히트맵 스타일 + 시간필터 연동
   ───────────────────────────────────────────────────────────── */
   const treemapData = useMemo(() => {
+    // 시간 필터에 따른 배율 (주간 < 월간 < 분기)
+    const multiplier = timeFilter === 'week' ? 1 : timeFilter === 'month' ? 4.2 : 13;
+    const filterKey = `${statsScopeKey}-${timeFilter}`; // 필터별 다른 시드
+    
     // 지역별 데이터 생성
     const rawData = [
-      { name: '경기도', size: Math.round(seededValue(`${statsScopeKey}-tree-경기`, 2500, 3500)) },
-      { name: '경상남도', size: Math.round(seededValue(`${statsScopeKey}-tree-경남`, 1800, 2500)) },
-      { name: '부산광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-부산`, 1500, 2200)) },
-      { name: '인천광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-인천`, 1200, 1800)) },
-      { name: '충청남도', size: Math.round(seededValue(`${statsScopeKey}-tree-충남`, 1000, 1500)) },
-      { name: '전라남도', size: Math.round(seededValue(`${statsScopeKey}-tree-전남`, 900, 1400)) },
-      { name: '경상북도', size: Math.round(seededValue(`${statsScopeKey}-tree-경북`, 800, 1300)) },
-      { name: '대구광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-대구`, 700, 1100)) },
-      { name: '서울특별시', size: Math.round(seededValue(`${statsScopeKey}-tree-서울`, 600, 1000)) },
-      { name: '충청북도', size: Math.round(seededValue(`${statsScopeKey}-tree-충북`, 500, 900)) },
-      { name: '강원특별자치도', size: Math.round(seededValue(`${statsScopeKey}-tree-강원`, 400, 800)) },
-      { name: '전북특별자치도', size: Math.round(seededValue(`${statsScopeKey}-tree-전북`, 350, 700)) },
-      { name: '제주특별자치도', size: Math.round(seededValue(`${statsScopeKey}-tree-제주`, 300, 600)) },
-      { name: '울산광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-울산`, 400, 700)) },
-      { name: '광주광역시', size: Math.round(seededValue(`${statsScopeKey}-tree-광주`, 450, 750)) },
-      { name: '세종특별자치시', size: Math.round(seededValue(`${statsScopeKey}-tree-세종`, 250, 500)) },
+      { name: '경기도', size: Math.round(seededValue(`${filterKey}-tree-경기`, 2500, 3500) * multiplier) },
+      { name: '경상남도', size: Math.round(seededValue(`${filterKey}-tree-경남`, 1800, 2500) * multiplier) },
+      { name: '부산광역시', size: Math.round(seededValue(`${filterKey}-tree-부산`, 1500, 2200) * multiplier) },
+      { name: '인천광역시', size: Math.round(seededValue(`${filterKey}-tree-인천`, 1200, 1800) * multiplier) },
+      { name: '충청남도', size: Math.round(seededValue(`${filterKey}-tree-충남`, 1000, 1500) * multiplier) },
+      { name: '전라남도', size: Math.round(seededValue(`${filterKey}-tree-전남`, 900, 1400) * multiplier) },
+      { name: '경상북도', size: Math.round(seededValue(`${filterKey}-tree-경북`, 800, 1300) * multiplier) },
+      { name: '대구광역시', size: Math.round(seededValue(`${filterKey}-tree-대구`, 700, 1100) * multiplier) },
+      { name: '서울특별시', size: Math.round(seededValue(`${filterKey}-tree-서울`, 600, 1000) * multiplier) },
+      { name: '충청북도', size: Math.round(seededValue(`${filterKey}-tree-충북`, 500, 900) * multiplier) },
+      { name: '강원특별자치도', size: Math.round(seededValue(`${filterKey}-tree-강원`, 400, 800) * multiplier) },
+      { name: '전북특별자치도', size: Math.round(seededValue(`${filterKey}-tree-전북`, 350, 700) * multiplier) },
+      { name: '제주특별자치도', size: Math.round(seededValue(`${filterKey}-tree-제주`, 300, 600) * multiplier) },
+      { name: '울산광역시', size: Math.round(seededValue(`${filterKey}-tree-울산`, 400, 700) * multiplier) },
+      { name: '광주광역시', size: Math.round(seededValue(`${filterKey}-tree-광주`, 450, 750) * multiplier) },
+      { name: '세종특별자치시', size: Math.round(seededValue(`${filterKey}-tree-세종`, 250, 500) * multiplier) },
     ];
     
     // 최대/최소 값 계산
@@ -454,21 +665,46 @@ export function NationalDashboard() {
       ...item,
       fill: getHeatmapColor(item.size),
     }));
-  }, [statsScopeKey]);
+  }, [statsScopeKey, timeFilter]);
 
   const totalCases = useMemo(() => treemapData.reduce((sum, item) => sum + item.size, 0), [treemapData]);
+  
+  // 시간 필터 레이블
+  const timeFilterLabel = timeFilter === 'week' ? '주간' : timeFilter === 'month' ? '월간' : '분기';
 
   /* ─────────────────────────────────────────────────────────────
-     시계열 추이 데이터
+     시계열 추이 데이터 - 시간 필터 연동
   ───────────────────────────────────────────────────────────── */
   const timeSeriesData = useMemo(() => {
-    const years = ['2018', '2019', '2020', '2021', '2022', '2023', '2024', '2025', '2026'];
-    return years.map((year, idx) => ({
-      year,
-      처리량: Math.round(seededValue(`${statsScopeKey}-ts-${idx}`, 12000, 18000)),
-      증감률: Number(seededValue(`${statsScopeKey}-ts-rate-${idx}`, -5, 10).toFixed(1)),
-    }));
-  }, [statsScopeKey]);
+    const filterKey = `${statsScopeKey}-${timeFilter}`;
+    
+    // 시간 필터에 따른 X축 라벨 및 데이터 포인트
+    if (timeFilter === 'week') {
+      // 주간: 최근 7일
+      const days = ['월', '화', '수', '목', '금', '토', '일'];
+      return days.map((day, idx) => ({
+        month: day,
+        처리량: Math.round(seededValue(`${filterKey}-ts-${idx}`, 1500, 2500)),
+        증감률: Number(seededValue(`${filterKey}-ts-rate-${idx}`, -8, 12).toFixed(1)),
+      }));
+    } else if (timeFilter === 'month') {
+      // 월간: 4주
+      const weeks = ['1주차', '2주차', '3주차', '4주차'];
+      return weeks.map((week, idx) => ({
+        month: week,
+        처리량: Math.round(seededValue(`${filterKey}-ts-${idx}`, 8000, 15000)),
+        증감률: Number(seededValue(`${filterKey}-ts-rate-${idx}`, -5, 10).toFixed(1)),
+      }));
+    } else {
+      // 분기: 3개월
+      const months = ['1월', '2월', '3월'];
+      return months.map((m, idx) => ({
+        month: m,
+        처리량: Math.round(seededValue(`${filterKey}-ts-${idx}`, 35000, 55000)),
+        증감률: Number(seededValue(`${filterKey}-ts-rate-${idx}`, -3, 8).toFixed(1)),
+      }));
+    }
+  }, [statsScopeKey, timeFilter]);
 
   /* ─────────────────────────────────────────────────────────────
      커스텀 트리맵 컨텐트
@@ -513,21 +749,70 @@ export function NationalDashboard() {
 
   /* ─────────────────────────────────────────────────────────────
      지도 클릭 핸들러 (드릴다운 연동)
+     - GeoMapPanel에서 이미 다음 레벨(sig/emd)로 변환해서 전달함
+     - sig 클릭 -> 'sig' 전달 -> sido 드릴레벨로 이동
+     - emd 클릭 -> 'emd' 전달 -> sigungu 드릴레벨로 이동
   ───────────────────────────────────────────────────────────── */
   const handleRegionSelect = useCallback(({ level, code, name }: { level: string; code: string; name: string }) => {
+    // GeoMapPanel에서 이미 다음 레벨(sig/emd)로 변환해서 전달함
+    // sig -> sido, emd -> sigungu 드릴레벨로 매핑
     const drillLevelMap: Record<string, DrillLevel> = {
-      'ctprvn': 'sido',
-      'sig': 'sigungu',
-      'emd': 'center',
+      'sig': 'sido',      // 시군구 레벨로 이동 -> sido 드릴레벨
+      'emd': 'sigungu',   // 읍면동 레벨로 이동 -> sigungu 드릴레벨
     };
-    const newLevel = drillLevelMap[level] || 'nation';
-    if (newLevel !== 'nation') {
+    const newLevel = drillLevelMap[level];
+    if (newLevel) {
+      console.log('[DrillDown] 지역 선택:', { geoLevel: level, code, name, drillLevel: newLevel });
       drillDown({ code, name, level: newLevel });
     }
   }, [drillDown]);
 
   return (
-    <div ref={containerRef} className="h-[100dvh] min-h-screen flex flex-col bg-gray-50 overflow-hidden">
+    <div ref={containerRef} className="absolute inset-0 flex flex-col bg-gray-50 overflow-hidden">
+      {/* ═══════════════════════════════════════════════════════════
+          상단 KPI 선택 카드 (버튼) - 지도 히트맵 KPI 변경
+      ═══════════════════════════════════════════════════════════ */}
+      <div className="bg-white border-b border-gray-200 px-4 py-2 shrink-0">
+        <div className="flex items-center gap-2 overflow-x-auto">
+          {MAP_KPI_CARDS.map((card) => {
+            const isActive = selectedMapKpiId === card.id;
+            const value = card.getValue(statsScopeKey);
+            return (
+              <button
+                key={card.id}
+                onClick={() => setSelectedMapKpiId(card.id)}
+                aria-pressed={isActive}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all min-w-[140px] text-left ${
+                  isActive
+                    ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200 shadow-sm'
+                    : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <div className={`p-1.5 rounded-md ${card.iconBg}`}>
+                  {card.id === 'total_cases' && <TrendingUp className="h-4 w-4" />}
+                  {card.id === 'completion' && <BarChart3 className="h-4 w-4" />}
+                  {card.id === 'consultation_time' && <Download className="h-4 w-4" />}
+                  {card.id === 'followup_dropout' && <HelpCircle className="h-4 w-4" />}
+                  {card.id === 'dropout' && <ChevronRight className="h-4 w-4" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-[10px] font-medium truncate ${isActive ? 'text-blue-700' : 'text-gray-500'}`}>
+                    {card.label}
+                  </div>
+                  <div className={`text-sm font-bold ${isActive ? 'text-blue-600' : 'text-gray-800'}`}>
+                    {value.toLocaleString()}
+                    <span className="text-[10px] font-normal ml-0.5">{card.unit}</span>
+                  </div>
+                </div>
+                {isActive && (
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* ═══════════════════════════════════════════════════════════
           HEADER
       ═══════════════════════════════════════════════════════════ */}
@@ -613,15 +898,15 @@ export function NationalDashboard() {
         
         {/* ═══════════════════════════════════════════════════════
             LEFT COLUMN - 요약 통계
-            Desktop: flex-[3], Tablet: 하단 2열 중 1열, Mobile: 전체 폭
+            Desktop: 15% 너비
         ═══════════════════════════════════════════════════════ */}
         <div className={`flex flex-col gap-2 ${
           layoutMode === 'desktop' 
-            ? 'flex-[3] min-w-[280px]' 
+            ? 'w-[20%] min-w-0 shrink-0' 
             : layoutMode === 'tablet'
-            ? 'hidden' // 태블릿에선 하단에 배치
+            ? 'hidden'
             : 'w-full shrink-0'
-        }`}>
+        }`}style={{width: "15%"}}>
           
           {/* 현재 드릴 레벨 표시 */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-center">
@@ -635,7 +920,10 @@ export function NationalDashboard() {
           
           {/* 총 처리건수 + 트리맵 */}
           <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1 min-h-[200px]">
-            <div className="text-xs text-gray-500 mb-1">총 처리건수</div>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-xs text-gray-500">{timeFilterLabel} 총 처리건수</div>
+              <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{timeFilterLabel}</div>
+            </div>
             <div className="text-2xl font-bold text-blue-600 mb-3">
               {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
             </div>
@@ -675,34 +963,52 @@ export function NationalDashboard() {
 
         {/* ═══════════════════════════════════════════════════════
             CENTER COLUMN - GeoMap
-            Desktop: flex-[4], Tablet: 전체 폭, Mobile: 전체 폭
+            Desktop: 50% 너비 (하드코딩)
         ═══════════════════════════════════════════════════════ */}
         <div className={`${
           layoutMode === 'desktop' 
-            ? 'flex-[4] min-w-0' 
+            ? 'w-[60%] min-w-0 shrink-0' 
             : 'w-full shrink-0'
-        }`}>
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col min-h-[300px]">
+        }`}style={{width: "40%"}}>
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col min-h-[400px]">
             <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
               <div className="flex items-center gap-2">
+                {/* 뒤로가기 버튼 */}
+                {drillLevel !== 'nation' && (
+                  <button
+                    onClick={drillUp}
+                    className="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+                  >
+                    <ChevronLeft className="h-3 w-3" />
+                    <span>뒤로</span>
+                  </button>
+                )}
                 <span className="text-xs font-medium text-gray-700">지도</span>
+                {/* 현재 선택된 KPI 표시 */}
+                <span className="px-2 py-0.5 bg-blue-500 text-white text-[10px] rounded font-medium">
+                  {MAP_KPI_CARDS.find(c => c.id === selectedMapKpiId)?.label || '케이스 처리율'}
+                </span>
                 <span className="px-2 py-0.5 bg-red-500 text-white text-[10px] rounded">
                   {getDrillLevelLabel(drillLevel)}
                 </span>
+                {selectedRegion && (
+                  <span className="text-xs text-gray-500">- {selectedRegion.name}</span>
+                )}
               </div>
               <button className="p-1 hover:bg-gray-200 rounded"><Download className="h-3.5 w-3.5 text-gray-500" /></button>
             </div>
             <div className="flex-1 p-2">
               <GeoMapPanel
-                key={`national-${selectedKPI || 'default'}-${drillLevel}`}
+                key={`national-${selectedMapKpiId}-${drillLevel}-${selectedRegion?.code || 'all'}`}
                 title=""
-                indicatorId={selectedKPI || 'completion'}
+                indicatorId={selectedMapKpiId}
                 year={2026}
                 scope={{ mode: 'national' }}
                 variant="portal"
-                mapHeight={400}
+                mapHeight={1000}
                 hideBreadcrumb
                 externalLevel={drillLevel === 'nation' ? 'ctprvn' : drillLevel === 'sido' ? 'sig' : 'emd'}
+                externalSelectedCode={selectedRegion?.code}
                 onRegionSelect={handleRegionSelect}
                 onGoBack={drillUp}
               />
@@ -712,47 +1018,42 @@ export function NationalDashboard() {
 
         {/* ═══════════════════════════════════════════════════════
             RIGHT COLUMN - KPI 사전 기반 자동 렌더링
-            Desktop: flex-[3], Tablet: 하단 2열 중 1열, Mobile: 전체 폭
+            Desktop: 25% 너비
         ═══════════════════════════════════════════════════════ */}
         <div className={`flex flex-col gap-2 overflow-y-auto ${
           layoutMode === 'desktop' 
-            ? 'flex-[3] min-w-[280px]' 
+            ? 'min-w-0 shrink-0' 
             : layoutMode === 'tablet'
-            ? 'hidden' // 태블릿에선 하단에 배치
+            ? 'hidden'
             : 'w-full shrink-0'
-        }`}>
+        }`}style={{width: "44%"}} >
           
           {/* 파이 차트들을 같은 선상에 배치 (2열 그리드) */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-1.5">
             {rightKPIs.filter(kpi => kpi.visualization.chartType === 'donut').map(kpi => {
               const data = kpiDataMap[kpi.id];
               if (!data) return null;
               
               return (
-                <div key={kpi.id} className="bg-white border border-gray-200 rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium text-gray-700">{kpi.name}</span>
-                      <HelpCircle className="h-3 w-3 text-gray-400" />
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
-                      <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
-                    </div>
+                <div key={kpi.id} className="bg-white border border-gray-200 rounded-lg p-1.5">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-[9px] font-medium text-gray-700 truncate">{kpi.name}</span>
                   </div>
-                  <KPIWidget 
-                    kpi={kpi} 
-                    data={data} 
-                    statsScopeKey={statsScopeKey}
-                    activeDonutIndex={activeDonutIndex}
-                    setActiveDonutIndex={setActiveDonutIndex}
-                  />
+                  <div className="h-[70px]">
+                    <KPIWidget 
+                      kpi={kpi} 
+                      data={data} 
+                      statsScopeKey={statsScopeKey}
+                      activeDonutIndex={activeDonutIndex}
+                      setActiveDonutIndex={setActiveDonutIndex}
+                    />
+                  </div>
                   {/* 도넛 차트 범례 */}
                   {Array.isArray(data) && (
-                    <div className="flex flex-wrap justify-center gap-2 mt-2">
+                    <div className="flex flex-wrap justify-center gap-1 mt-1">
                       {(data as DonutDataItem[]).map((item, idx) => (
-                        <div key={idx} className="flex items-center gap-1 text-[10px]">
-                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
+                        <div key={idx} className="flex items-center gap-0.5 text-[9px]">
+                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.color }} />
                           <span>{item.name} {((item.value / (data as DonutDataItem[]).reduce((s, i) => s + i.value, 0)) * 100).toFixed(1)}%</span>
                         </div>
                       ))}
@@ -768,20 +1069,13 @@ export function NationalDashboard() {
               - 하드코딩 금지: chartEnabled=true인 KPI만 자동 포함
               - 필터(주간/월간/분기)와 연동되어 일별 데이터 표시
           ═══════════════════════════════════════════════════════ */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1 min-h-[300px]">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-gray-700">KPI 통계 지표</span>
-                <HelpCircle className="h-3 w-3 text-gray-400" title="KPI 사전에 등록된 지표만 자동 표시됩니다" />
-              </div>
-              <div className="flex items-center gap-1">
-                <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
-                <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
-              </div>
+          <div className="bg-white border border-gray-200 rounded-lg p-2 flex-1">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-semibold text-gray-700">KPI 통계 지표</span>
             </div>
             
-            {/* 시계열 KPI 차트 그리드 - 2열 */}
-            <div className="grid grid-cols-2 gap-2">
+            {/* 시계열 KPI 차트 그리드 - 1열 */}
+            <div className="grid grid-cols-1 gap-2.5">
               {bulletKPIs.length > 0 ? (
                 bulletKPIs.map((kpi, idx) => (
                   <KPITimeSeriesChart 
@@ -789,6 +1083,7 @@ export function NationalDashboard() {
                     kpiDef={kpi} 
                     data={kpiDataMap[kpi.id] as TimeSeriesKPIData | null}
                     colorIndex={idx}
+                    timeFilter={timeFilter}
                   />
                 ))
               ) : (
@@ -799,13 +1094,13 @@ export function NationalDashboard() {
             </div>
             
             {/* 범례 */}
-            <div className="flex items-center justify-center gap-4 mt-3 text-[10px] text-gray-500 border-t border-gray-100 pt-2">
+            <div className="flex items-center justify-center gap-3 mt-2 text-[8px] text-gray-500 border-t border-gray-100 pt-1.5">
               <div className="flex items-center gap-1">
-                <span className="w-4 h-0.5 bg-gray-400" style={{ borderTop: '1px dashed #9ca3af' }} />
+                <span className="w-3 h-0" style={{ borderTop: '2px dashed #9ca3af' }} />
                 <span>기준선</span>
               </div>
               <div className="flex items-center gap-1">
-                <span className="w-4 h-0.5 bg-red-500" style={{ borderTop: '1px dashed #ef4444' }} />
+                <span className="w-3 h-0" style={{ borderTop: '2px solid #ef4444' }} />
                 <span>목표</span>
               </div>
             </div>
@@ -914,7 +1209,10 @@ export function NationalDashboard() {
                 )}
               </div>
               <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1">
-                <div className="text-xs text-gray-500 mb-1">총 처리건수</div>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="text-xs text-gray-500">{timeFilterLabel} 총 처리건수</div>
+                  <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{timeFilterLabel}</div>
+                </div>
                 <div className="text-2xl font-bold text-blue-600 mb-3">
                   {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
                 </div>
@@ -938,6 +1236,7 @@ export function NationalDashboard() {
                       kpiDef={kpi} 
                       data={kpiDataMap[kpi.id] as TimeSeriesKPIData | null}
                       colorIndex={idx}
+                      timeFilter={timeFilter}
                     />
                   ))}
                 </div>
@@ -953,7 +1252,7 @@ export function NationalDashboard() {
       <div className="shrink-0 px-3 pb-3">
         <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-700">연간 처리량 추이</span>
+            <span className="text-sm font-semibold text-gray-700">{timeFilterLabel} 처리량 추이</span>
             <div className="flex items-center gap-1">
               <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
               <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
@@ -964,18 +1263,18 @@ export function NationalDashboard() {
               <ComposedChart data={timeSeriesData} margin={{ top: 10, right: 40, left: 0, bottom: 5 }}>
                 <defs>
                   <linearGradient id="timeBarGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#22c55e" stopOpacity={0.9}/>
-                    <stop offset="100%" stopColor="#16a34a" stopOpacity={0.9}/>
+                    <stop offset="0%" stopColor="#bf6ce3" stopOpacity={0.9}/>
+                    <stop offset="100%" stopColor="#dc6fe8" stopOpacity={0.9}/>
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                <XAxis dataKey="year" tick={{ fontSize: 10 }} />
+                <XAxis dataKey="month" tick={{ fontSize: 13 }} />
                 <YAxis yAxisId="left" tick={{ fontSize: 10 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} domain={[-20, 20]} />
                 <Tooltip formatter={(value: number, name: string) => [name === '처리량' ? value.toLocaleString() + '건' : value + '%', name]} />
                 <Legend wrapperStyle={{ fontSize: '11px' }} />
                 <Bar yAxisId="left" dataKey="처리량" fill="url(#timeBarGradient)" radius={[6, 6, 0, 0]} name="처리량" />
-                <Line yAxisId="right" type="monotone" dataKey="증감률" stroke="#16a34a" strokeWidth={3} dot={{ fill: '#16a34a', r: 5, strokeWidth: 2, stroke: '#fff' }} name="증감률" />
+                <Line yAxisId="right" type="monotone" dataKey="증감률" stroke="#6ce3a2" strokeWidth={3} dot={{ fill: '#6ce3a2', r: 5, strokeWidth: 2, stroke: '#fff' }} name="증감률" />
               </ComposedChart>
             </ResponsiveContainer>
           </div>

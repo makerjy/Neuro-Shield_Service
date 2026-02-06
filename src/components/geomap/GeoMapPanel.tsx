@@ -1,8 +1,28 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Palette, ChevronDown, ChevronUp, Eye, EyeOff, Settings2 } from 'lucide-react';
 import { KoreaDrilldownMap, Level } from './KoreaDrilldownMap';
 import { formatGeoValue, getGeoIndicator } from './geoIndicators';
 import { buildComposition, buildMetrics, buildRegionSeries } from './metrics';
-import { ChoroplethScale, formatRange, formatNumber as formatChoroplethNumber } from '../../lib/choroplethScale';
+import { ChoroplethScale, formatRange, formatNumber as formatChoroplethNumber, COLOR_PALETTES } from '../../lib/choroplethScale';
+
+/* ═════════════════════════════════════════════════════════════
+   GeoMap UI State Types - 색상 팔레트 및 범례 컨트롤
+═════════════════════════════════════════════════════════════ */
+export type MapColorScheme = 'blue' | 'green' | 'purple' | 'orange' | 'red' | 'heat';
+
+const COLOR_SCHEME_LABELS: Record<MapColorScheme, string> = {
+  blue: '파랑 (Blue)',
+  green: '초록 (Green)',
+  purple: '보라 (Purple)',
+  orange: '주황 (Orange)',
+  red: '빨강 (Red)',
+  heat: '열지도 (Heat)',
+};
+
+// 타입 안전한 색상 팔레트 접근
+const getColorPalette = (scheme: MapColorScheme): string[] => {
+  return COLOR_PALETTES[scheme] as string[];
+};
 
 const GEO_URLS: Record<Level, string> = {
   ctprvn: 'https://raw.githubusercontent.com/southkorea/southkorea-maps/master/kostat/2018/json/skorea-provinces-2018-geo.json',
@@ -11,13 +31,10 @@ const GEO_URLS: Record<Level, string> = {
 };
 
 const levelLabel: Record<Level, string> = {
-  ctprvn: '시도',
-  sig: '시군구',
-  emd: '읍면동'
+  ctprvn: '전국',
+  sig: '시/군/구',
+  emd: '읍/면/동'
 };
-
-// 구간형 색상 스케일 (7단계 - 더 명확한 대비)
-const CHOROPLETH_COLORS = ['#eff6ff', '#bfdbfe', '#93c5fd', '#60a5fa', '#3b82f6', '#2563eb', '#1d4ed8'];
 
 export type GeoScope = {
   mode: 'national' | 'regional';
@@ -39,6 +56,7 @@ type GeoMapPanelProps = {
   mapHeight?: number;
   className?: string;
   externalLevel?: Level; // 외부에서 제어하는 레벨 (드릴다운 동기화)
+  externalSelectedCode?: string; // 외부에서 선택된 지역 코드
   onRegionSelect?: (payload: { level: Level; code: string; name: string }) => void;
   onGoBack?: () => void; // 상위 레벨로 돌아가기 콜백
 };
@@ -101,6 +119,7 @@ export function GeoMapPanel({
   mapHeight = 420,
   className,
   externalLevel,
+  externalSelectedCode,
   onRegionSelect,
   onGoBack
 }: GeoMapPanelProps) {
@@ -136,6 +155,12 @@ export function GeoMapPanel({
     ctprvn: initialCtprvn
   });
   const [selectedNames, setSelectedNames] = useState<{ ctprvn?: string; sig?: string; emd?: string }>({});
+  
+  // ═══ GeoMap UI State: 색상 팔레트 및 범례 컨트롤 ═══
+  const [colorScheme, setColorScheme] = useState<MapColorScheme>('blue');
+  const [showLegend, setShowLegend] = useState(true);
+  const [legendCollapsed, setLegendCollapsed] = useState(true);
+  const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -213,16 +238,47 @@ export function GeoMapPanel({
     }
   }, [isRegional, scopedCtprvnCodes, level]);
 
-  // 외부 레벨 변경 시 내부 상태 동기화
+  // 외부 레벨 및 선택 코드 변경 시 내부 상태 동기화
   useEffect(() => {
     if (!externalLevel) return;
+    
     // 외부 레벨이 전국(ctprvn)이면 선택 상태 초기화
     if (externalLevel === 'ctprvn') {
       setLevel('ctprvn');
       setSelectedCodes({});
       setSelectedNames({});
+      return;
     }
-  }, [externalLevel]);
+    
+    // 시군구(sig) 레벨로 변경 - 시도 코드가 필요
+    if (externalLevel === 'sig' && externalSelectedCode) {
+      const ctprvnCode = externalSelectedCode.slice(0, 2); // 시도 코드 추출
+      setLevel('sig');
+      setSelectedCodes({ ctprvn: ctprvnCode });
+      // 시도 이름 찾기
+      const ctprvnFeature = ctprvnGeo?.find(f => getFeatureCode(f).startsWith(ctprvnCode));
+      if (ctprvnFeature) {
+        setSelectedNames({ ctprvn: getFeatureName(ctprvnFeature) });
+      }
+      return;
+    }
+    
+    // 읍면동(emd) 레벨로 변경 - 시군구 코드가 필요
+    if (externalLevel === 'emd' && externalSelectedCode) {
+      const ctprvnCode = externalSelectedCode.slice(0, 2);
+      const sigCode = externalSelectedCode.slice(0, 5);
+      setLevel('emd');
+      setSelectedCodes({ ctprvn: ctprvnCode, sig: sigCode });
+      // 시도/시군구 이름 찾기
+      const ctprvnFeature = ctprvnGeo?.find(f => getFeatureCode(f).startsWith(ctprvnCode));
+      const sigFeature = sigGeo?.find(f => getFeatureCode(f) === sigCode);
+      setSelectedNames({
+        ctprvn: ctprvnFeature ? getFeatureName(ctprvnFeature) : undefined,
+        sig: sigFeature ? getFeatureName(sigFeature) : undefined,
+      });
+      return;
+    }
+  }, [externalLevel, externalSelectedCode, ctprvnGeo, sigGeo]);
 
   const filteredCtprvn = useMemo(() => {
     if (!ctprvnGeo) return [];
@@ -286,11 +342,11 @@ export function GeoMapPanel({
       if (fixedLevel === 'ctprvn') {
         setSelectedCodes({ ctprvn: code });
         setSelectedNames({ ctprvn: name });
-        onRegionSelect?.({ level: 'ctprvn', code, name });
+        onRegionSelect?.({ level: 'sig', code, name }); // 다음 레벨로 이동
       } else if (fixedLevel === 'sig') {
         setSelectedCodes((prev) => ({ ctprvn: prev.ctprvn, sig: code }));
         setSelectedNames((prev) => ({ ctprvn: prev.ctprvn, sig: name }));
-        onRegionSelect?.({ level: 'sig', code, name });
+        onRegionSelect?.({ level: 'emd', code, name }); // 다음 레벨로 이동
       } else {
         setSelectedCodes((prev) => ({ ...prev, emd: code }));
         setSelectedNames((prev) => ({ ...prev, emd: name }));
@@ -299,22 +355,25 @@ export function GeoMapPanel({
       return;
     }
 
+    // 시도 클릭 -> 시군구(sig) 레벨로 이동
     if (level === 'ctprvn') {
       setSelectedCodes({ ctprvn: code });
       setSelectedNames({ ctprvn: name });
-      setLevel(nextLevel);
-      onRegionSelect?.({ level: 'ctprvn', code, name });
+      setLevel(nextLevel); // 'sig'로 변경
+      onRegionSelect?.({ level: nextLevel, code, name }); // nextLevel = 'sig'
       return;
     }
 
+    // 시군구 클릭 -> 읍면동(emd) 레벨로 이동
     if (level === 'sig') {
       setSelectedCodes((prev) => ({ ctprvn: prev.ctprvn, sig: code }));
       setSelectedNames((prev) => ({ ctprvn: prev.ctprvn, sig: name }));
-      setLevel(nextLevel);
-      onRegionSelect?.({ level: 'sig', code, name });
+      setLevel(nextLevel); // 'emd'로 변경
+      onRegionSelect?.({ level: nextLevel, code, name }); // nextLevel = 'emd'
       return;
     }
 
+    // 읍면동 클릭 -> 마지막 레벨
     if (level === 'emd') {
       setSelectedCodes((prev) => ({ ...prev, emd: code }));
       setSelectedNames((prev) => ({ ...prev, emd: name }));
@@ -444,12 +503,17 @@ export function GeoMapPanel({
     return buckets.map((count) => count / maxBucket);
   }, [metricPoints]);
 
-  // ═══ 구간형 Choropleth Scale 생성 ═══
+  // ═══ 구간형 Choropleth Scale 생성 (선택된 색상 팔레트 적용) ═══
   const choroplethScale = useMemo(() => {
     const values = metricPoints.map(m => m.value);
     if (values.length === 0) return null;
-    return new ChoroplethScale(values, 'quantile', 7, 'blue');
-  }, [metricPoints]);
+    return new ChoroplethScale(values, 'quantile', 7, colorScheme);
+  }, [metricPoints, colorScheme]);
+
+  // 색상 팔레트 변경 시 KoreaDrilldownMap에 전달할 색상 배열
+  const currentColors = useMemo(() => {
+    return getColorPalette(colorScheme);
+  }, [colorScheme]);
 
   const legendBins = useMemo(() => {
     return choroplethScale?.getLegendBins() ?? [];
@@ -565,71 +629,165 @@ export function GeoMapPanel({
                     unit={indicator.unit}
                     year={year}
                     valueFormatter={(value) => formatGeoValue(value, indicator)}
+                    colorPalette={currentColors}
                   />
                 )}
               </div>
 
-              {/* SGIS Style Legend - 구간형 스케일 개선 */}
-              <div className="mt-3 relative">
-                <div className="flex items-start gap-3">
-                  {/* Color Legend - 구간형 범례 */}
-                  <div className="flex-1">
-                    <div className="text-[11px] text-gray-500 mb-2">{indicator.label} 단계 (구간형)</div>
-                    <div className="space-y-1">
-                      {legendBins.length > 0 ? (
-                        legendBins.map((bin, idx) => (
-                          <div key={idx} className="flex items-center gap-2 text-[11px]">
-                            <div 
-                              className="w-4 h-3 rounded border border-gray-300" 
-                              style={{ backgroundColor: bin.color }}
-                            />
-                            <span className="text-gray-700 font-medium">
-                              {formatChoroplethNumber(bin.min)} ~ {formatChoroplethNumber(bin.max)}
-                            </span>
-                            {bin.count !== undefined && (
-                              <span className="text-gray-400">({bin.count}개 지역)</span>
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        CHOROPLETH_COLORS.map((color, idx) => {
-                          const step = CHOROPLETH_COLORS.length;
-                          const values = metricPoints.map(m => m.value);
-                          const min = Math.min(...values, indicator.scale[0]);
-                          const max = Math.max(...values, indicator.scale[1]);
-                          const range = max - min;
-                          const stepSize = range / step;
-                          const minVal = min + (idx * stepSize);
-                          const maxVal = idx === step - 1 ? max : min + ((idx + 1) * stepSize);
-                          
-                          return (
-                            <div key={idx} className="flex items-center gap-2 text-[11px]">
-                              <div 
-                                className="w-4 h-3 rounded border border-gray-300" 
-                                style={{ backgroundColor: color }}
-                              />
-                              <span className="text-gray-700">
-                                {formatGeoValue(minVal, indicator)} ~ {formatGeoValue(maxVal, indicator)}
-                              </span>
+              {/* ═══════════════════════════════════════════════════════
+                  SGIS Style Legend Control - 드롭다운 패널
+                  - 색상 팔레트 선택
+                  - 범례 표시/숨김 토글
+                  - 접기/펼치기 기능
+              ═══════════════════════════════════════════════════════ */}
+              <div className="mt-2 relative">
+                <div className="flex items-start justify-between gap-2">
+                  {/* 왼쪽: 범례 영역 (조건부 표시) */}
+                  {showLegend && (
+                    <div className="flex-1">
+                      {/* 범례 헤더 (접기/펼치기) */}
+                      <button
+                        onClick={() => setLegendCollapsed(!legendCollapsed)}
+                        className="flex items-center gap-1 text-[11px] text-gray-600 hover:text-gray-900 mb-1"
+                      >
+                        {legendCollapsed ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+                        <span className="font-medium">{indicator.label} 단계 (구간형)</span>
+                      </button>
+                      
+                      {/* 범례 상세 (접힘 상태에 따라 표시) */}
+                      {!legendCollapsed && (
+                        <div className="space-y-1 pl-4 border-l-2 border-gray-200">
+                          {legendBins.length > 0 ? (
+                            legendBins.map((bin, idx) => (
+                              <div key={idx} className="flex items-center gap-2 text-[10px]">
+                                <div 
+                                  className="w-4 h-2.5 rounded-sm border border-gray-300" 
+                                  style={{ backgroundColor: bin.color }}
+                                />
+                                <span className="text-gray-700">
+                                  {formatChoroplethNumber(bin.min)} ~ {formatChoroplethNumber(bin.max)}
+                                </span>
+                                {bin.count !== undefined && (
+                                  <span className="text-gray-400">({bin.count}개)</span>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            currentColors.slice(0, 7).map((color, idx) => {
+                              const values = metricPoints.map(m => m.value);
+                              const min = Math.min(...values, indicator.scale[0]);
+                              const max = Math.max(...values, indicator.scale[1]);
+                              const range = max - min;
+                              const stepSize = range / 7;
+                              const minVal = min + (idx * stepSize);
+                              const maxVal = idx === 6 ? max : min + ((idx + 1) * stepSize);
+                              
+                              return (
+                                <div key={idx} className="flex items-center gap-2 text-[10px]">
+                                  <div 
+                                    className="w-4 h-2.5 rounded-sm border border-gray-300" 
+                                    style={{ backgroundColor: color }}
+                                  />
+                                  <span className="text-gray-700">
+                                    {formatGeoValue(minVal, indicator)} ~ {formatGeoValue(maxVal, indicator)}
+                                  </span>
+                                </div>
+                              );
+                            })
+                          )}
+                          {/* 통계 요약 */}
+                          {scaleStats.total > 0 && (
+                            <div className="mt-1 pt-1 border-t border-gray-200 text-[9px] text-gray-500">
+                              <span>전국 합계: <strong>{scaleStats.total.toLocaleString()}</strong></span>
+                              <span className="ml-2">평균: <strong>{scaleStats.avg.toLocaleString()}</strong></span>
                             </div>
-                          );
-                        })
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* 접힌 상태: 컬러 바 요약만 표시 */}
+                      {legendCollapsed && (
+                        <div className="flex items-center gap-0.5 pl-4">
+                          {currentColors.slice(0, 7).map((color, idx) => (
+                            <div 
+                              key={idx}
+                              className="w-4 h-2 rounded-sm"
+                              style={{ backgroundColor: color }}
+                            />
+                          ))}
+                          <span className="ml-2 text-[9px] text-gray-500">
+                            {formatChoroplethNumber(scaleStats.min)} ~ {formatChoroplethNumber(scaleStats.max)}
+                          </span>
+                        </div>
                       )}
                     </div>
-                    {/* 통계 요약 */}
-                    {scaleStats.total > 0 && (
-                      <div className="mt-2 pt-2 border-t border-gray-200 text-[10px] text-gray-500">
-                        <div className="flex gap-3">
-                          <span>전국 합계: <strong className="text-gray-700">{scaleStats.total.toLocaleString()}</strong></span>
-                          <span>평균: <strong className="text-gray-700">{scaleStats.avg.toLocaleString()}</strong></span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                  )}
                   
-                  {/* Hint Text */}
-                  <div className="text-[11px] text-gray-500 text-right">
-                    {hintText ?? '지도 클릭 시 하위 행정구역으로 이동'}
+                  {/* 오른쪽: 설정 드롭다운 버튼 */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowSettingsDropdown(!showSettingsDropdown)}
+                      className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-600 bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+                    >
+                      <Settings2 className="h-3 w-3" />
+                      <span>범례 설정</span>
+                      <ChevronDown className={`h-3 w-3 transition-transform ${showSettingsDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+                    
+                    {/* 설정 드롭다운 패널 */}
+                    {showSettingsDropdown && (
+                      <>
+                        {/* 배경 클릭 시 닫기 */}
+                        <div 
+                          className="fixed inset-0 z-40" 
+                          onClick={() => setShowSettingsDropdown(false)} 
+                        />
+                        <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-2">
+                          {/* 색상 팔레트 선택 */}
+                          <div className="mb-2">
+                            <label className="text-[10px] font-medium text-gray-700 mb-1 block">
+                              <Palette className="h-3 w-3 inline mr-1" />
+                              색상 팔레트
+                            </label>
+                            <select
+                              value={colorScheme}
+                              onChange={(e) => setColorScheme(e.target.value as MapColorScheme)}
+                              className="w-full px-2 py-1 text-[11px] border border-gray-300 rounded bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            >
+                              {Object.entries(COLOR_SCHEME_LABELS).map(([key, label]) => (
+                                <option key={key} value={key}>{label}</option>
+                              ))}
+                            </select>
+                            {/* 색상 미리보기 */}
+                            <div className="flex gap-0.5 mt-1">
+                              {getColorPalette(colorScheme).slice(0, 7).map((color, idx) => (
+                                <div 
+                                  key={idx}
+                                  className="flex-1 h-2 rounded-sm"
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                          
+                          {/* 범례 표시 토글 */}
+                          <div className="border-t border-gray-200 pt-2">
+                            <button
+                              onClick={() => setShowLegend(!showLegend)}
+                              className="flex items-center gap-2 w-full px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                            >
+                              {showLegend ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                              <span>{showLegend ? '범례 숨기기' : '범례 표시'}</span>
+                            </button>
+                          </div>
+                          
+                          {/* 힌트 텍스트 */}
+                          <div className="border-t border-gray-200 pt-2 mt-2 text-[9px] text-gray-400">
+                            {hintText ?? '지도 클릭 시 하위 행정구역으로 이동'}
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>

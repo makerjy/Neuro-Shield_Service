@@ -442,11 +442,11 @@ const KPI_LINE_COLORS = [
   '#06b6d4', // cyan
 ];
 
-function KPITimeSeriesChart({ kpiDef, data, colorIndex, timeFilter }: { 
+function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: { 
   kpiDef: KPIDefinition; 
   data: TimeSeriesKPIData | null; 
   colorIndex: number;
-  timeFilter: 'week' | 'month' | 'quarter';
+  analyticsPeriod: 'week' | 'month' | 'quarter';
 }) {
   if (!data) {
     return (
@@ -462,8 +462,8 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, timeFilter }: {
   
   // 시간 필터에 따른 X축 라벨 간격 및 포맷 조정
   // 주간: 7일 모두 표시, 월간: 3개월마다 표시, 분기: 모두 표시
-  const xAxisInterval = timeFilter === 'week' ? 0 : timeFilter === 'month' ? 2 : 0;
-  const timeRangeLabel = timeFilter === 'week' ? '주간' : timeFilter === 'month' ? '월간' : '분기';
+  const xAxisInterval = analyticsPeriod === 'week' ? 0 : analyticsPeriod === 'month' ? 2 : 0;
+  const timeRangeLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : '분기';
   
   // 차트별 배경색 그라데이션 (구분용)
   const bgColors = [
@@ -566,10 +566,10 @@ type UnifiedKpiKey = typeof UNIFIED_KPI_DEFS[number]['key'];
 interface KPIUnifiedChartProps {
   bulletKPIs: KPIDefinition[];
   kpiDataMap: Record<string, any>;
-  timeFilter: 'week' | 'month' | 'quarter';
+  analyticsPeriod: 'week' | 'month' | 'quarter';
 }
 
-function KPIUnifiedChart({ bulletKPIs, kpiDataMap, timeFilter }: KPIUnifiedChartProps) {
+function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnifiedChartProps) {
   const [viewMode, setViewMode] = useState<'percent' | 'days'>('percent');
   const [enabledKeys, setEnabledKeys] = useState<UnifiedKpiKey[]>(['sla', 'data', 'done', 'ontime']);
 
@@ -618,7 +618,7 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, timeFilter }: KPIUnifiedChart
     ? ['dataMin - 0.5', 'dataMax + 0.5']
     : [70, 100];
 
-  const timeRangeLabel = timeFilter === 'week' ? '최근 7일' : timeFilter === 'month' ? '최근 12개월' : '분기별';
+  const timeRangeLabel = analyticsPeriod === 'week' ? '최근 7일' : analyticsPeriod === 'month' ? '최근 12개월' : '분기별';
 
   // 현재값 조회
   const getCurrentValue = (key: UnifiedKpiKey): string | null => {
@@ -826,7 +826,7 @@ export function NationalDashboard() {
   const [selectedKPI, setSelectedKPI] = useState<string | null>(null);
   const [activeDonutIndex, setActiveDonutIndex] = useState<number | null>(null);
   const [showKpiSummaryTable, setShowKpiSummaryTable] = useState(false); // KPI 요약 테이블 토글
-  const [timeFilter, setTimeFilter] = useState<'week' | 'month' | 'quarter'>('week'); // 시간 필터
+  const [analyticsPeriod, setAnalyticsPeriod] = useState<'week' | 'month' | 'quarter'>('week'); // 분석 기간 (좌측 요약 + 우측 분석에만 적용)
   
   // ═══ 지오맵 KPI 선택 상태 (상단 카드 클릭 → 지도 히트맵 KPI 변경) ═══
   const [selectedMapKpiId, setSelectedMapKpiId] = useState<string>('total_cases');
@@ -892,18 +892,18 @@ export function NationalDashboard() {
   const kpiDataMap = useMemo(() => {
     const result: Record<string, any> = {};
     [...leftKPIs, ...rightKPIs, ...bottomKPIs, ...bulletKPIs].forEach(kpi => {
-      result[kpi.id] = fetchKPIData(kpi.id, selectedRegion?.code || 'KR', drillLevel, timeFilter);
+      result[kpi.id] = fetchKPIData(kpi.id, selectedRegion?.code || 'KR', drillLevel, analyticsPeriod);
     });
     return result;
-  }, [leftKPIs, rightKPIs, bottomKPIs, bulletKPIs, selectedRegion, drillLevel, timeFilter]);
+  }, [leftKPIs, rightKPIs, bottomKPIs, bulletKPIs, selectedRegion, drillLevel, analyticsPeriod]);
 
   /* ─────────────────────────────────────────────────────────────
      트리맵 데이터 (지역별 케이스) - 히트맵 스타일 + 시간필터 연동
   ───────────────────────────────────────────────────────────── */
   const treemapData = useMemo(() => {
-    // 시간 필터에 따른 배율 (주간 < 월간 < 분기)
-    const multiplier = timeFilter === 'week' ? 1 : timeFilter === 'month' ? 4.2 : 13;
-    const filterKey = `${statsScopeKey}-${timeFilter}`; // 필터별 다른 시드
+    // 분석 기간에 따른 배율 (주간 < 월간 < 분기)
+    const multiplier = analyticsPeriod === 'week' ? 1 : analyticsPeriod === 'month' ? 4.2 : 13;
+    const filterKey = `${statsScopeKey}-${analyticsPeriod}`; // 기간별 다른 시드
     
     // 지역별 데이터 생성
     const rawData = [
@@ -943,12 +943,12 @@ export function NationalDashboard() {
       ...item,
       fill: getHeatmapColor(item.size),
     }));
-  }, [statsScopeKey, timeFilter]);
+  }, [statsScopeKey, analyticsPeriod]);
 
   const totalCases = useMemo(() => treemapData.reduce((sum, item) => sum + item.size, 0), [treemapData]);
   
-  // 시간 필터 레이블
-  const timeFilterLabel = timeFilter === 'week' ? '주간' : timeFilter === 'month' ? '월간' : '분기';
+  // 분석 기간 레이블
+  const analyticsPeriodLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : '분기';
 
   /* ─────────────────────────────────────────────────────────────
      행정구역 히트맵 (선택 KPI 기준, 푸른 테마)
@@ -1033,13 +1033,13 @@ export function NationalDashboard() {
       { id: '50', name: '제주' }, { id: '51', name: '강원' },
     ];
     return regions.map(r => {
-      const seed = `${statsScopeKey}-${timeFilter}-risk-${r.id}`;
+      const seed = `${statsScopeKey}-${analyticsPeriod}-risk-${r.id}`;
       const slaRate = Number(seededValue(`${seed}-sla`, 78, 100).toFixed(1));
       const dataRate = Number(seededValue(`${seed}-data`, 75, 100).toFixed(1));
       const totalCases = Math.round(seededValue(`${seed}-cases`, 200, 3000));
       return { regionId: r.id, regionName: r.name, slaRate, dataRate, totalCases };
     });
-  }, [statsScopeKey, timeFilter]);
+  }, [statsScopeKey, analyticsPeriod]);
 
   /* ─────────────────────────────────────────────────────────────
      처리 단계 분포 스택형 바 데이터
@@ -1058,7 +1058,7 @@ export function NationalDashboard() {
     const regions = ['서울', '부산', '대구', '인천', '광주', '대전', '울산', '세종',
                      '경기', '충북', '충남', '전북', '전남', '경북', '경남', '제주', '강원'];
     return regions.map(name => {
-      const seed = `${statsScopeKey}-${timeFilter}-stage-${name}`;
+      const seed = `${statsScopeKey}-${analyticsPeriod}-stage-${name}`;
       return {
         regionName: name,
         incoming: Math.round(seededValue(`${seed}-inc`, 50, 300)),
@@ -1068,7 +1068,7 @@ export function NationalDashboard() {
         completed: Math.round(seededValue(`${seed}-cmp`, 200, 800)),
       };
     });
-  }, [statsScopeKey, timeFilter]);
+  }, [statsScopeKey, analyticsPeriod]);
 
   /* ─────────────────────────────────────────────────────────────
      연령 × 상태 분포 (5그룹 × 4상태) - Left Panel용
@@ -1083,7 +1083,7 @@ export function NationalDashboard() {
 
   const ageStatusData = useMemo(() => {
     const groups = ['20-39', '40-59', '60-69', '70-79', '80+'];
-    const filterKey = `${statsScopeKey}-${timeFilter}-agestat`;
+    const filterKey = `${statsScopeKey}-${analyticsPeriod}-agestat`;
     return groups.map(g => {
       const s = `${filterKey}-${g}`;
       return {
@@ -1094,7 +1094,7 @@ export function NationalDashboard() {
         slaViolation: Math.round(seededValue(`${s}-s`, 5, 40)),
       };
     });
-  }, [statsScopeKey, timeFilter]);
+  }, [statsScopeKey, analyticsPeriod]);
 
   /* ─────────────────────────────────────────────────────────────
      커스텀 트리맵 컨텐트
@@ -1206,24 +1206,8 @@ export function NationalDashboard() {
       {/* ═══════════════════════════════════════════════════════════
           HEADER
       ═══════════════════════════════════════════════════════════ */}
-      <header className="h-10 bg-white border-b border-gray-200 flex items-center px-4 shrink-0">
-        <h1 className="text-sm font-bold text-gray-800">전국 운영 대시보드</h1>
-        {/* 시간 필터 버튼 - 상태 연동 */}
-        <div className="flex items-center gap-1 ml-4">
-          {(['week', 'month', 'quarter'] as const).map(filter => (
-            <button
-              key={filter}
-              onClick={() => setTimeFilter(filter)}
-              className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
-                timeFilter === filter 
-                  ? 'bg-blue-500 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {filter === 'week' ? '주간' : filter === 'month' ? '월간' : '분기'}
-            </button>
-          ))}
-        </div>
+      <header className="h-15 bg-white border-b border-gray-200 flex items-center px-4 shrink-0">
+        <h2 className="text-sm font-bold text-gray-800">전국 운영 대시보드</h2>
         <div className="flex-1" />
         
         {/* ═══ Breadcrumb + Back 버튼 ═══ */}
@@ -1311,8 +1295,8 @@ export function NationalDashboard() {
           {/* 총 처리건수 + 히트맵 */}
           <div className="bg-white border border-gray-200 rounded-lg p-2">
             <div className="flex items-center justify-between mb-0.5">
-              <div className="text-xs text-gray-500">{timeFilterLabel} 총 처리건수</div>
-              <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{timeFilterLabel}</div>
+              <div className="text-xs text-gray-500">{analyticsPeriodLabel} 총 처리건수</div>
+              <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{analyticsPeriodLabel}</div>
             </div>
             <div className="text-xl font-bold text-blue-600 mb-1">
               {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
@@ -1401,7 +1385,7 @@ export function NationalDashboard() {
                   >
                     <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-gray-100">
                       <span className="font-semibold text-gray-800">{heatmapHover.name}</span>
-                      <span className="text-[9px] bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded font-medium">주간</span>
+                      <span className="text-[9px] bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded font-medium">{analyticsPeriodLabel}</span>
                     </div>
                     <div className="flex items-center justify-between gap-3 py-0.5">
                       <span className="text-gray-500">{selectedMapCard.label}</span>
@@ -1499,6 +1483,11 @@ export function NationalDashboard() {
                   </button>
                 )}
                 <span className="text-sm font-semibold text-gray-800">지도</span>
+                {/* 지도 범위 뱃지 - 연간 누적 고정 */}
+                <span className="h-7 inline-flex items-center gap-1 px-2.5 bg-emerald-50 text-emerald-700 text-[10px] rounded-lg font-medium border border-emerald-200">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  지도 범위: 연간 누적 · 기준연도 2026
+                </span>
                 {/* 현재 선택된 KPI 표시 */}
                 <span className="h-8 inline-flex items-center px-3 bg-blue-500 text-white text-xs rounded-lg font-semibold">
                   {MAP_KPI_CARDS.find(c => c.id === selectedMapKpiId)?.label || '케이스 처리율'}
@@ -1543,6 +1532,29 @@ export function NationalDashboard() {
             : 'w-full shrink-0'
         }`}style={{width: "49%"}} >
           
+          {/* ═══ 분석 기간 선택 (좌측 요약 + 우측 분석에만 적용) ═══ */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-xs font-semibold text-gray-700">분석 기간</span>
+              <span className="text-[9px] text-gray-400 mt-0.5">좌측 요약 및 우측 분석 차트에 적용</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {(['week', 'month', 'quarter'] as const).map(period => (
+                <button
+                  key={period}
+                  onClick={() => setAnalyticsPeriod(period)}
+                  className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
+                    analyticsPeriod === period
+                      ? 'bg-blue-500 text-white shadow-sm'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {period === 'week' ? '주간' : period === 'month' ? '월간' : '분기'}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* ═══ SLA × 데이터 충족률 리스크 매트릭스 (ScatterChart) ═══ */}
           <div className="bg-white border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
@@ -1641,7 +1653,7 @@ export function NationalDashboard() {
           <KPIUnifiedChart
             bulletKPIs={bulletKPIs}
             kpiDataMap={kpiDataMap}
-            timeFilter={timeFilter}
+            analyticsPeriod={analyticsPeriod}
           />
 
           {/* 나머지 KPI 위젯들 (도넛 차트 제외, center-load 제외) */}
@@ -1748,8 +1760,8 @@ export function NationalDashboard() {
               </div>
               <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1">
                 <div className="flex items-center justify-between mb-1">
-                  <div className="text-xs text-gray-500">{timeFilterLabel} 총 처리건수</div>
-                  <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{timeFilterLabel}</div>
+                  <div className="text-xs text-gray-500">{analyticsPeriodLabel} 총 처리건수</div>
+                  <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{analyticsPeriodLabel}</div>
                 </div>
                 <div className="text-2xl font-bold text-blue-600 mb-2">
                   {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
@@ -1775,7 +1787,7 @@ export function NationalDashboard() {
                       kpiDef={kpi} 
                       data={kpiDataMap[kpi.id] as TimeSeriesKPIData | null}
                       colorIndex={idx}
-                      timeFilter={timeFilter}
+                      analyticsPeriod={analyticsPeriod}
                     />
                   ))}
                 </div>

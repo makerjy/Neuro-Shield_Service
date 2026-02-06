@@ -1262,11 +1262,11 @@ export function NationalDashboard() {
           - Tablet (768-1279px): 2단 (상단 Map, 하단 2열)
           - Mobile (<768px): 1열 스택
       ═══════════════════════════════════════════════════════════ */}
-      <div className={`flex-1 overflow-hidden p-2 gap-2 min-h-0 ${
+      <div className={`flex-1 p-2 gap-2 min-h-0 ${
         layoutMode === 'desktop' 
-          ? 'flex flex-row items-stretch' 
+          ? 'flex flex-row items-stretch overflow-hidden' 
           : layoutMode === 'tablet'
-          ? 'flex flex-col'
+          ? 'flex flex-col overflow-y-auto'
           : 'flex flex-col overflow-y-auto'
       }`}>
         

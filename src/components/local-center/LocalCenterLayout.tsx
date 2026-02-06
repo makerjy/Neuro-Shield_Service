@@ -103,7 +103,7 @@ export function LocalCenterLayout({
             <>
               <div>
                 <h1 className="font-bold text-lg text-blue-600">Neuro-Shield</h1>
-                <p className="text-xs text-gray-500">기초센터</p>
+                <p className="text-xs text-gray-500">치매안심센터</p>
               </div>
               <Button
                 variant="ghost"

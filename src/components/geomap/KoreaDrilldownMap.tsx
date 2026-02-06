@@ -179,7 +179,10 @@ export function KoreaDrilldownMap({
                   stroke={isHovered ? '#0b1020' : '#111827'}
                   strokeWidth={isHovered ? 2.2 : 0.9}
                   fillOpacity={hoveredCode && !isHovered ? 0.65 : 0.95}
-                  style={isHovered ? { filter: 'drop-shadow(0 3px 6px rgba(15, 23, 42, 0.35))' } : undefined}
+                  style={{
+                    cursor: level === 'emd' ? 'default' : 'pointer',
+                    ...(isHovered ? { filter: 'drop-shadow(0 3px 6px rgba(15, 23, 42, 0.35))' } : {}),
+                  }}
                   onMouseMove={(event) => {
                     setTooltip({
                       x: event.clientX + 12,
@@ -195,7 +198,6 @@ export function KoreaDrilldownMap({
                     setHoveredCode(null);
                   }}
                   onClick={() => handleClick(feature)}
-                  style={{ cursor: level === 'emd' ? 'default' : 'pointer' }}
                 />
               );
             })}
@@ -217,24 +219,50 @@ export function KoreaDrilldownMap({
         </svg>
       )}
 
-      {tooltip && (
-        <div
-          className="fixed z-[9999] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-2xl"
-          style={{ left: tooltip.x, top: tooltip.y }}
-        >
-          <div className="text-sm font-semibold mb-1">{tooltip.name}</div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-[11px] text-slate-500">{indicatorLabel}</span>
-            <span className="text-base font-bold">
-              {valueFormatter ? valueFormatter(tooltip.value) : tooltip.value}
-              {!valueFormatter && unit ? <span className="text-xs ml-1">({unit})</span> : null}
-            </span>
+      {tooltip && (() => {
+        const allValues = stats.map(s => s.value).sort((a, b) => b - a);
+        const totalSum = allValues.reduce((s, v) => s + v, 0);
+        const avg = allValues.length > 0 ? totalSum / allValues.length : 0;
+        const rank = allValues.findIndex(v => v <= tooltip.value) + 1;
+        const share = totalSum > 0 ? ((tooltip.value / totalSum) * 100).toFixed(1) : '0';
+        const avgDiff = avg > 0 ? ((tooltip.value / avg - 1) * 100).toFixed(0) : '0';
+        const aboveAvg = tooltip.value > avg;
+        return (
+          <div
+            className="fixed z-[9999] rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-900 shadow-2xl min-w-[170px]"
+            style={{ left: tooltip.x, top: tooltip.y }}
+          >
+            <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-slate-100">
+              <span className="text-sm font-semibold">{tooltip.name}</span>
+              <span className="text-[9px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded font-medium">연간</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-0.5">
+              <span className="text-slate-500">{indicatorLabel}</span>
+              <span className="font-bold text-blue-600">
+                {valueFormatter ? valueFormatter(tooltip.value) : tooltip.value}
+                {!valueFormatter && unit ? <span className="text-[10px] ml-0.5 font-normal">({unit})</span> : null}
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-0.5">
+              <span className="text-slate-500">전국 순위</span>
+              <span className="font-bold text-gray-700">{rank} / {allValues.length}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-0.5">
+              <span className="text-slate-500">전국 비중</span>
+              <span className="font-bold text-gray-700">{share}%</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-0.5">
+              <span className="text-slate-500">평균 대비</span>
+              <span className={`font-bold ${aboveAvg ? 'text-red-500' : 'text-green-500'}`}>
+                {aboveAvg ? '+' : ''}{avgDiff}%
+              </span>
+            </div>
+            {typeof year === 'number' && (
+              <div className="mt-1 pt-1 border-t border-slate-100 text-[10px] text-slate-400">기준연도: {year}년</div>
+            )}
           </div>
-          {typeof year === 'number' && (
-            <div className="mt-1 text-[11px] text-slate-500">기준연도: {year}년</div>
-          )}
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

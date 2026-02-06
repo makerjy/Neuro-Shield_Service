@@ -640,28 +640,28 @@ export function GeoMapPanel({
                   - 범례 표시/숨김 토글
                   - 접기/펼치기 기능
               ═══════════════════════════════════════════════════════ */}
-              <div className="mt-2 relative">
-                <div className="flex items-start justify-between gap-2">
+              <div className="mt-3 relative rounded-xl border border-gray-200 bg-white/95 px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
                   {/* 왼쪽: 범례 영역 (조건부 표시) */}
                   {showLegend && (
                     <div className="flex-1">
                       {/* 범례 헤더 (접기/펼치기) */}
                       <button
                         onClick={() => setLegendCollapsed(!legendCollapsed)}
-                        className="flex items-center gap-1 text-[11px] text-gray-600 hover:text-gray-900 mb-1"
+                        className="flex items-center gap-1.5 text-xs text-gray-700 hover:text-gray-900 mb-1.5 font-semibold"
                       >
-                        {legendCollapsed ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
-                        <span className="font-medium">{indicator.label} 단계 (구간형)</span>
+                        {legendCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+                        <span>{indicator.label} 단계 (구간형)</span>
                       </button>
                       
                       {/* 범례 상세 (접힘 상태에 따라 표시) */}
                       {!legendCollapsed && (
-                        <div className="space-y-1 pl-4 border-l-2 border-gray-200">
+                        <div className="space-y-1.5 pl-4 border-l-2 border-gray-200">
                           {legendBins.length > 0 ? (
                             legendBins.map((bin, idx) => (
-                              <div key={idx} className="flex items-center gap-2 text-[10px]">
+                              <div key={idx} className="flex items-center gap-2 text-xs">
                                 <div 
-                                  className="w-4 h-2.5 rounded-sm border border-gray-300" 
+                                  className="w-5 h-3.5 rounded-sm border border-gray-300" 
                                   style={{ backgroundColor: bin.color }}
                                 />
                                 <span className="text-gray-700">
@@ -683,9 +683,9 @@ export function GeoMapPanel({
                               const maxVal = idx === 6 ? max : min + ((idx + 1) * stepSize);
                               
                               return (
-                                <div key={idx} className="flex items-center gap-2 text-[10px]">
+                                <div key={idx} className="flex items-center gap-2 text-xs">
                                   <div 
-                                    className="w-4 h-2.5 rounded-sm border border-gray-300" 
+                                    className="w-5 h-3.5 rounded-sm border border-gray-300" 
                                     style={{ backgroundColor: color }}
                                   />
                                   <span className="text-gray-700">
@@ -697,9 +697,9 @@ export function GeoMapPanel({
                           )}
                           {/* 통계 요약 */}
                           {scaleStats.total > 0 && (
-                            <div className="mt-1 pt-1 border-t border-gray-200 text-[9px] text-gray-500">
+                            <div className="mt-1.5 pt-1.5 border-t border-gray-200 text-[11px] text-gray-500">
                               <span>전국 합계: <strong>{scaleStats.total.toLocaleString()}</strong></span>
-                              <span className="ml-2">평균: <strong>{scaleStats.avg.toLocaleString()}</strong></span>
+                              <span className="ml-3">평균: <strong>{scaleStats.avg.toLocaleString()}</strong></span>
                             </div>
                           )}
                         </div>
@@ -707,15 +707,15 @@ export function GeoMapPanel({
                       
                       {/* 접힌 상태: 컬러 바 요약만 표시 */}
                       {legendCollapsed && (
-                        <div className="flex items-center gap-0.5 pl-4">
+                        <div className="flex items-center gap-1 pl-4">
                           {currentColors.slice(0, 7).map((color, idx) => (
                             <div 
                               key={idx}
-                              className="w-4 h-2 rounded-sm"
+                              className="w-5 h-3 rounded-sm"
                               style={{ backgroundColor: color }}
                             />
                           ))}
-                          <span className="ml-2 text-[9px] text-gray-500">
+                          <span className="ml-3 text-xs text-gray-600">
                             {formatChoroplethNumber(scaleStats.min)} ~ {formatChoroplethNumber(scaleStats.max)}
                           </span>
                         </div>
@@ -727,11 +727,11 @@ export function GeoMapPanel({
                   <div className="relative">
                     <button
                       onClick={() => setShowSettingsDropdown(!showSettingsDropdown)}
-                      className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-600 bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+                      className="flex items-center gap-1.5 h-9 px-3 text-xs text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium shadow-sm"
                     >
-                      <Settings2 className="h-3 w-3" />
+                      <Settings2 className="h-4 w-4" />
                       <span>범례 설정</span>
-                      <ChevronDown className={`h-3 w-3 transition-transform ${showSettingsDropdown ? 'rotate-180' : ''}`} />
+                      <ChevronDown className={`h-4 w-4 transition-transform ${showSettingsDropdown ? 'rotate-180' : ''}`} />
                     </button>
                     
                     {/* 설정 드롭다운 패널 */}
@@ -742,28 +742,28 @@ export function GeoMapPanel({
                           className="fixed inset-0 z-40" 
                           onClick={() => setShowSettingsDropdown(false)} 
                         />
-                        <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-50 p-2">
+                        <div className="absolute right-0 bottom-full mb-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3">
                           {/* 색상 팔레트 선택 */}
-                          <div className="mb-2">
-                            <label className="text-[10px] font-medium text-gray-700 mb-1 block">
-                              <Palette className="h-3 w-3 inline mr-1" />
+                          <div className="mb-3">
+                            <label className="text-xs font-semibold text-gray-700 mb-1.5 block">
+                              <Palette className="h-3.5 w-3.5 inline mr-1" />
                               색상 팔레트
                             </label>
                             <select
                               value={colorScheme}
                               onChange={(e) => setColorScheme(e.target.value as MapColorScheme)}
-                              className="w-full px-2 py-1 text-[11px] border border-gray-300 rounded bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              className="w-full px-2.5 py-1.5 text-xs border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                             >
                               {Object.entries(COLOR_SCHEME_LABELS).map(([key, label]) => (
                                 <option key={key} value={key}>{label}</option>
                               ))}
                             </select>
                             {/* 색상 미리보기 */}
-                            <div className="flex gap-0.5 mt-1">
+                            <div className="flex gap-1 mt-1.5">
                               {getColorPalette(colorScheme).slice(0, 7).map((color, idx) => (
                                 <div 
                                   key={idx}
-                                  className="flex-1 h-2 rounded-sm"
+                                  className="flex-1 h-3 rounded-sm"
                                   style={{ backgroundColor: color }}
                                 />
                               ))}
@@ -774,15 +774,15 @@ export function GeoMapPanel({
                           <div className="border-t border-gray-200 pt-2">
                             <button
                               onClick={() => setShowLegend(!showLegend)}
-                              className="flex items-center gap-2 w-full px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100 rounded transition-colors"
+                              className="flex items-center gap-2 w-full px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-100 rounded-lg transition-colors font-medium"
                             >
-                              {showLegend ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                              {showLegend ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
                               <span>{showLegend ? '범례 숨기기' : '범례 표시'}</span>
                             </button>
                           </div>
                           
                           {/* 힌트 텍스트 */}
-                          <div className="border-t border-gray-200 pt-2 mt-2 text-[9px] text-gray-400">
+                          <div className="border-t border-gray-200 pt-2 mt-2 text-[11px] text-gray-400">
                             {hintText ?? '지도 클릭 시 하위 행정구역으로 이동'}
                           </div>
                         </div>

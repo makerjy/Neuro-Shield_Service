@@ -331,17 +331,17 @@ function KPIWidget({ kpi, data, statsScopeKey, activeDonutIndex, setActiveDonutI
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
             <XAxis 
               dataKey="label" 
-              tick={{ fontSize: 11, fill: '#4b5563' }} 
+              tick={{ fontSize: 12, fill: '#4b5563' }} 
               interval={0} 
               tickLine={false}
               axisLine={{ stroke: '#d1d5db' }}
             />
             <YAxis 
-              tick={{ fontSize: 10, fill: '#6b7280' }} 
+              tick={{ fontSize: 11, fill: '#6b7280' }} 
               tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v}
               axisLine={false}
               tickLine={false}
-              width={35}
+              width={38}
             />
             <Tooltip 
               formatter={(v: number) => [v.toLocaleString() + '건', '건수']}
@@ -362,7 +362,7 @@ function KPIWidget({ kpi, data, statsScopeKey, activeDonutIndex, setActiveDonutI
                   y={y - 5} 
                   fill="#374151" 
                   textAnchor="middle" 
-                  fontSize={9}
+                  fontSize={11}
                   fontWeight={500}
                 >
                   {value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toLocaleString()}
@@ -505,25 +505,25 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, timeFilter }: {
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
             <XAxis 
               dataKey="date" 
-              tick={{ fontSize: 10, fill: '#374151', fontWeight: 500 }} 
+              tick={{ fontSize: 12, fill: '#374151', fontWeight: 500 }} 
               tickLine={false}
               axisLine={{ stroke: '#d1d5db' }}
               interval={xAxisInterval}
             />
             <YAxis 
-              tick={{ fontSize: 9, fill: '#6b7280' }} 
+              tick={{ fontSize: 11, fill: '#6b7280' }} 
               tickLine={false}
               axisLine={false}
               domain={['auto', 'auto']}
-              width={28}
+              width={30}
             />
             <Tooltip 
-              contentStyle={{ fontSize: '11px', padding: '6px 10px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}
+              contentStyle={{ fontSize: '12px', padding: '6px 10px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}
               formatter={(v: number) => [`${v}${unit}`, kpiDef.name]}
               labelFormatter={(label) => `${label}일`}
             />
             {/* 목표선 */}
-            <ReferenceLine y={target} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1.5} label={{ value: '목표', fontSize: 8, fill: '#ef4444', position: 'right' }} />
+            <ReferenceLine y={target} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1.5} label={{ value: '목표', fontSize: 10, fill: '#ef4444', position: 'right' }} />
             {/* 기준선 */}
             <ReferenceLine y={baseline} stroke="#9ca3af" strokeDasharray="3 3" strokeWidth={1} />
             {/* 영역 */}
@@ -725,13 +725,13 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, timeFilter }: KPIUnifiedChart
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
             <XAxis
               dataKey="date"
-              tick={{ fontSize: 10, fill: '#6b7280' }}
+              tick={{ fontSize: 12, fill: '#6b7280' }}
               tickLine={false}
               axisLine={{ stroke: '#e5e7eb' }}
               interval={0}
             />
             <YAxis
-              tick={{ fontSize: 9, fill: '#9ca3af' }}
+              tick={{ fontSize: 11, fill: '#9ca3af' }}
               tickLine={false}
               axisLine={false}
               domain={yDomain}
@@ -785,7 +785,7 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, timeFilter }: KPIUnifiedChart
                 strokeDasharray="6 3"
                 strokeWidth={1}
                 strokeOpacity={0.5}
-                label={{ value: `목표 ${daysDef.target}${daysDef.unit}`, fontSize: 9, fill: daysDef.color, position: 'right' }}
+                label={{ value: `목표 ${daysDef.target}${daysDef.unit}`, fontSize: 11, fill: daysDef.color, position: 'right' }}
               />
             )}
             {/* 라인 */}
@@ -808,11 +808,11 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, timeFilter }: KPIUnifiedChart
       {/* ── 하단 범례 (percent 모드에서 목표선 설명) ── */}
       {viewMode === 'percent' && (
         <div className="flex items-center justify-center gap-4 mt-2 pt-1.5 border-t border-gray-100">
-          <div className="flex items-center gap-1 text-[8px] text-gray-400">
+          <div className="flex items-center gap-1 text-[10px] text-gray-400">
             <span className="w-4" style={{ borderTop: '2px dashed #9ca3af' }} />
             <span>목표선</span>
           </div>
-          <div className="text-[8px] text-gray-400">최대 4개 동시 표시 · 칩 클릭으로 전환</div>
+          <div className="text-[10px] text-gray-400">최대 4개 동시 표시 · 칩 클릭으로 전환</div>
         </div>
       )}
     </div>
@@ -834,6 +834,9 @@ export function NationalDashboard() {
   // ResizeObserver 훅으로 컨테이너 크기 추적 (반응형)
   const [containerRef, containerSize] = useResizeObserver<HTMLDivElement>();
   
+  // ═══ 히트맵 호버 상태 ═══
+  const [heatmapHover, setHeatmapHover] = useState<{ name: string; size: number; x: number; y: number } | null>(null);
+
   // 드릴다운 상태 (Zustand)
   const { drillLevel, drillPath, selectedRegion, drillDown, drillUp, drillTo, resetDrill } = useDrillState();
   
@@ -1315,20 +1318,49 @@ export function NationalDashboard() {
               {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
             </div>
             <div className="text-[10px] text-gray-500 mb-1">{selectedMapCard.label} (행정구역별)</div>
-            <div style={{ width: '100%', aspectRatio: '1 / 1', maxHeight: 220 }}>
+            <div style={{ width: '100%', aspectRatio: '1 / 1', maxHeight: 220, position: 'relative' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <Treemap
                   data={mapHeatmapData}
                   dataKey="size"
                   stroke="#fff"
                   isAnimationActive={false}
-                  content={({ x, y, width, height, name, fill, textColor }: any) => {
+                  content={({ x, y, width, height, name, fill, textColor, size }: any) => {
                     if (!width || !height || width < 2 || height < 2) return null;
                     const shortName = (name || '').replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim() || (name || '').slice(0, 3);
                     const tc = textColor || '#fff';
+                    const totalAll = mapHeatmapData.reduce((s: number, d: any) => s + d.size, 0);
+                    const pct = totalAll > 0 ? ((size / totalAll) * 100).toFixed(1) : '0';
                     return (
-                      <g>
-                        <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1.5} rx={2} />
+                      <g
+                        onMouseEnter={(e) => {
+                          const rect = (e.currentTarget.closest('.recharts-responsive-container') as HTMLElement)?.getBoundingClientRect();
+                          if (rect) {
+                            setHeatmapHover({
+                              name: name || '',
+                              size: size || 0,
+                              x: e.clientX - rect.left,
+                              y: e.clientY - rect.top,
+                            });
+                          }
+                        }}
+                        onMouseMove={(e) => {
+                          const rect = (e.currentTarget.closest('.recharts-responsive-container') as HTMLElement)?.getBoundingClientRect();
+                          if (rect) {
+                            setHeatmapHover(prev => prev ? ({
+                              ...prev,
+                              x: e.clientX - rect.left,
+                              y: e.clientY - rect.top,
+                            }) : null);
+                          }
+                        }}
+                        onMouseLeave={() => setHeatmapHover(null)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1.5} rx={2}
+                          style={{ transition: 'opacity 0.15s' }}
+                          opacity={heatmapHover && heatmapHover.name !== name ? 0.45 : 1}
+                        />
                         {width > 24 && height > 16 && (
                           <text
                             x={x + width / 2}
@@ -1341,6 +1373,7 @@ export function NationalDashboard() {
                             stroke={tc === '#ffffff' ? 'rgba(0,0,0,0.3)' : 'none'}
                             strokeWidth={tc === '#ffffff' ? 0.3 : 0}
                             paintOrder="stroke"
+                            style={{ pointerEvents: 'none' }}
                           >
                             {shortName}
                           </text>
@@ -1350,6 +1383,47 @@ export function NationalDashboard() {
                   }}
                 />
               </ResponsiveContainer>
+              {/* 히트맵 주간 통계 툴팁 */}
+              {heatmapHover && (() => {
+                const sorted = [...mapHeatmapData].sort((a, b) => b.size - a.size);
+                const rank = sorted.findIndex(d => d.name === heatmapHover.name) + 1;
+                const avg = totalCases / mapHeatmapData.length;
+                const share = totalCases > 0 ? ((heatmapHover.size / totalCases) * 100).toFixed(1) : '0';
+                const avgDiff = avg > 0 ? ((heatmapHover.size / avg - 1) * 100).toFixed(0) : '0';
+                const aboveAvg = heatmapHover.size > avg;
+                return (
+                  <div
+                    className="absolute z-50 pointer-events-none bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[170px]"
+                    style={{
+                      left: Math.min(heatmapHover.x + 12, 120),
+                      top: Math.max(heatmapHover.y - 60, 0),
+                    }}
+                  >
+                    <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-gray-100">
+                      <span className="font-semibold text-gray-800">{heatmapHover.name}</span>
+                      <span className="text-[9px] bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded font-medium">주간</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 py-0.5">
+                      <span className="text-gray-500">{selectedMapCard.label}</span>
+                      <span className="font-bold text-blue-600">{heatmapHover.size.toLocaleString()}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 py-0.5">
+                      <span className="text-gray-500">전국 순위</span>
+                      <span className="font-bold text-gray-700">{rank} / {mapHeatmapData.length}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 py-0.5">
+                      <span className="text-gray-500">전국 비중</span>
+                      <span className="font-bold text-gray-700">{share}%</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3 py-0.5">
+                      <span className="text-gray-500">평균 대비</span>
+                      <span className={`font-bold ${aboveAvg ? 'text-red-500' : 'text-green-500'}`}>
+                        {aboveAvg ? '+' : ''}{avgDiff}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
@@ -1360,13 +1434,13 @@ export function NationalDashboard() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={ageStatusData} margin={{ top: 8, right: 4, left: -16, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                  <XAxis dataKey="age" tick={{ fontSize: 10, fill: '#4b5563' }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 9, fill: '#6b7280' }} tickLine={false} axisLine={false} width={30} />
+                  <XAxis dataKey="age" tick={{ fontSize: 12, fill: '#4b5563' }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={false} width={32} />
                   <Tooltip content={({ active, payload, label }) => {
                     if (!active || !payload?.length) return null;
                     const total = payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
                     return (
-                      <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-[11px]">
+                      <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-xs">
                         <div className="font-semibold text-gray-800 mb-1">{label}세</div>
                         {payload.map((p, i) => (
                           <div key={i} className="flex items-center gap-1">
@@ -1378,7 +1452,7 @@ export function NationalDashboard() {
                       </div>
                     );
                   }} />
-                  <Legend formatter={(v: string) => AGE_STATUS_LABELS[v] || v} wrapperStyle={{ fontSize: '9px' }} />
+                  <Legend formatter={(v: string) => AGE_STATUS_LABELS[v] || v} wrapperStyle={{ fontSize: '11px' }} />
                   {AGE_STATUS_KEYS.map(key => (
                     <Bar key={key} dataKey={key} stackId="ageStatus" fill={AGE_STATUS_COLORS[key]} radius={key === 'slaViolation' ? [3, 3, 0, 0] : undefined} />
                   ))}
@@ -1412,31 +1486,31 @@ export function NationalDashboard() {
             : 'w-full shrink-0'
         }`}style={{width: "35%"}}>
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col min-h-[400px]">
-            <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
-              <div className="flex items-center gap-2">
+            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-white rounded-t-lg">
+              <div className="flex items-center gap-3">
                 {/* 뒤로가기 버튼 */}
                 {drillLevel !== 'nation' && (
                   <button
                     onClick={drillUp}
-                    className="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+                    className="flex items-center gap-1.5 h-9 px-3 text-sm text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors font-medium"
                   >
-                    <ChevronLeft className="h-3 w-3" />
+                    <ChevronLeft className="h-4 w-4" />
                     <span>뒤로</span>
                   </button>
                 )}
-                <span className="text-xs font-medium text-gray-700">지도</span>
+                <span className="text-sm font-semibold text-gray-800">지도</span>
                 {/* 현재 선택된 KPI 표시 */}
-                <span className="px-2 py-0.5 bg-blue-500 text-white text-[10px] rounded font-medium">
+                <span className="h-8 inline-flex items-center px-3 bg-blue-500 text-white text-xs rounded-lg font-semibold">
                   {MAP_KPI_CARDS.find(c => c.id === selectedMapKpiId)?.label || '케이스 처리율'}
                 </span>
-                <span className="px-2 py-0.5 bg-red-500 text-white text-[10px] rounded">
+                <span className="h-8 inline-flex items-center px-3 bg-red-500 text-white text-xs rounded-lg font-semibold">
                   {getDrillLevelLabel(drillLevel)}
                 </span>
                 {selectedRegion && (
-                  <span className="text-xs text-gray-500">- {selectedRegion.name}</span>
+                  <span className="text-sm text-gray-600 font-medium">- {selectedRegion.name}</span>
                 )}
               </div>
-              <button className="p-1 hover:bg-gray-200 rounded"><Download className="h-3.5 w-3.5 text-gray-500" /></button>
+              <button className="h-9 w-9 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"><Download className="h-4 w-4 text-gray-500" /></button>
             </div>
             <div className="flex-1 p-2">
               <GeoMapPanel
@@ -1472,8 +1546,8 @@ export function NationalDashboard() {
           {/* ═══ SLA × 데이터 충족률 리스크 매트릭스 (ScatterChart) ═══ */}
           <div className="bg-white border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-semibold text-gray-700">SLA × 데이터 충족률 리스크 매트릭스</span>
-              <div className="flex items-center gap-2 text-[8px] text-gray-500">
+              <span className="text-xs font-semibold text-gray-700">SLA × 데이터 충족률 리스크 매트릭스</span>
+              <div className="flex items-center gap-2 text-[10px] text-gray-500">
                 <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-green-500" />양호</span>
                 <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-amber-400" />주의</span>
                 <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-red-500" />위험</span>
@@ -1485,9 +1559,9 @@ export function NationalDashboard() {
                   <ScatterChart margin={{ top: 10, right: 15, left: -5, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis type="number" dataKey="dataRate" name="데이터 충족률" unit="%"
-                      domain={[70, 100]} tick={{ fontSize: 10 }} label={{ value: '데이터 충족률(%)', position: 'insideBottom', offset: -2, fontSize: 9, fill: '#6b7280' }} />
+                      domain={[70, 100]} tick={{ fontSize: 12 }} label={{ value: '데이터 충족률(%)', position: 'insideBottom', offset: -2, fontSize: 11, fill: '#6b7280' }} />
                     <YAxis type="number" dataKey="slaRate" name="SLA 준수율" unit="%"
-                      domain={[70, 100]} tick={{ fontSize: 10 }} label={{ value: 'SLA(%)', angle: -90, position: 'insideLeft', offset: 15, fontSize: 9, fill: '#6b7280' }} />
+                      domain={[70, 100]} tick={{ fontSize: 12 }} label={{ value: 'SLA(%)', angle: -90, position: 'insideLeft', offset: 15, fontSize: 11, fill: '#6b7280' }} />
                     <ZAxis type="number" dataKey="totalCases" range={[40, 300]} name="케이스 수" />
                     <ReferenceLine x={DATA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
                     <ReferenceLine y={SLA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
@@ -1526,15 +1600,15 @@ export function NationalDashboard() {
           {/* ═══ 처리 단계 분포 스택형 바 ═══ */}
           <div className="bg-white border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-semibold text-gray-700">처리 단계 분포 (지역별)</span>
+              <span className="text-xs font-semibold text-gray-700">처리 단계 분포 (지역별)</span>
             </div>
             {stageByRegionData.length > 0 ? (
               <div style={{ height: '220px' }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={stageByRegionData} margin={{ top: 5, right: 10, left: -10, bottom: 25 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                    <XAxis dataKey="regionName" tick={{ fontSize: 9, fill: '#4b5563' }} interval={0} angle={-35} textAnchor="end" />
-                    <YAxis tick={{ fontSize: 9, fill: '#6b7280' }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} />
+                    <XAxis dataKey="regionName" tick={{ fontSize: 11, fill: '#4b5563' }} interval={0} angle={-35} textAnchor="end" />
+                    <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} />
                     <Tooltip content={({ active, payload, label }) => {
                       if (!active || !payload?.length) return null;
                       const total = payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
@@ -1551,7 +1625,7 @@ export function NationalDashboard() {
                         </div>
                       );
                     }} />
-                    <Legend formatter={(value: string) => STAGE_LABELS[value] || value} wrapperStyle={{ fontSize: '9px' }} />
+                    <Legend formatter={(value: string) => STAGE_LABELS[value] || value} wrapperStyle={{ fontSize: '11px' }} />
                     {STAGE_KEYS.map(key => (
                       <Bar key={key} dataKey={key} stackId="stage" fill={STAGE_COLORS_MAP[key]} />
                     ))}

@@ -711,7 +711,7 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, timeFilter }: KPIUnifiedChart
       )}
 
       {/* ── 차트 ── */}
-      <div style={{ height: '220px' }}>
+      <div style={{ height: '280px' }}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={unifiedData} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
             <defs>
@@ -875,6 +875,7 @@ export function NationalDashboard() {
     ['donut', 'bar', 'table'].includes(k.visualization.chartType) && 
     k.id !== 'total-cases' &&
     k.id !== 'center-load' && // 케이스 이동 현황 제거
+    k.id !== 'case-distribution' && // 연령 분포 → Left 패널로 이동
     k.id !== 'kpi-summary-table' // KPI 요약 테이블은 별도 토글로 처리
   ), [drillLevel]);
   const bottomKPIs = useMemo(() => getKPIsByPanel('bottom'), []);
@@ -1014,40 +1015,6 @@ export function NationalDashboard() {
   }, [statsScopeKey, selectedMapKpiId]);
 
   /* ─────────────────────────────────────────────────────────────
-     시계열 추이 데이터 - 시간 필터 연동
-  ───────────────────────────────────────────────────────────── */
-  const timeSeriesData = useMemo(() => {
-    const filterKey = `${statsScopeKey}-${timeFilter}`;
-    
-    // 시간 필터에 따른 X축 라벨 및 데이터 포인트
-    if (timeFilter === 'week') {
-      // 주간: 최근 7일
-      const days = ['월', '화', '수', '목', '금', '토', '일'];
-      return days.map((day, idx) => ({
-        month: day,
-        처리량: Math.round(seededValue(`${filterKey}-ts-${idx}`, 1500, 2500)),
-        증감률: Number(seededValue(`${filterKey}-ts-rate-${idx}`, -8, 12).toFixed(1)),
-      }));
-    } else if (timeFilter === 'month') {
-      // 월간: 4주
-      const weeks = ['1주차', '2주차', '3주차', '4주차'];
-      return weeks.map((week, idx) => ({
-        month: week,
-        처리량: Math.round(seededValue(`${filterKey}-ts-${idx}`, 8000, 15000)),
-        증감률: Number(seededValue(`${filterKey}-ts-rate-${idx}`, -5, 10).toFixed(1)),
-      }));
-    } else {
-      // 분기: 3개월
-      const months = ['1월', '2월', '3월'];
-      return months.map((m, idx) => ({
-        month: m,
-        처리량: Math.round(seededValue(`${filterKey}-ts-${idx}`, 35000, 55000)),
-        증감률: Number(seededValue(`${filterKey}-ts-rate-${idx}`, -3, 8).toFixed(1)),
-      }));
-    }
-  }, [statsScopeKey, timeFilter]);
-
-  /* ─────────────────────────────────────────────────────────────
      SLA × 데이터 충족률 2×2 리스크 매트릭스 데이터
   ───────────────────────────────────────────────────────────── */
   const SLA_THRESHOLD = 95;
@@ -1096,6 +1063,32 @@ export function NationalDashboard() {
         needRecontact: Math.round(seededValue(`${seed}-nrc`, 20, 150)),
         slaBreach: Math.round(seededValue(`${seed}-sla`, 5, 80)),
         completed: Math.round(seededValue(`${seed}-cmp`, 200, 800)),
+      };
+    });
+  }, [statsScopeKey, timeFilter]);
+
+  /* ─────────────────────────────────────────────────────────────
+     연령 × 상태 분포 (5그룹 × 4상태) - Left Panel용
+  ───────────────────────────────────────────────────────────── */
+  const AGE_STATUS_KEYS = ['normal', 'caution', 'highRisk', 'slaViolation'] as const;
+  const AGE_STATUS_LABELS: Record<string, string> = {
+    normal: '정상', caution: '주의', highRisk: '고위험', slaViolation: 'SLA 위반',
+  };
+  const AGE_STATUS_COLORS: Record<string, string> = {
+    normal: '#22c55e', caution: '#f59e0b', highRisk: '#ef4444', slaViolation: '#7c3aed',
+  };
+
+  const ageStatusData = useMemo(() => {
+    const groups = ['20-39', '40-59', '60-69', '70-79', '80+'];
+    const filterKey = `${statsScopeKey}-${timeFilter}-agestat`;
+    return groups.map(g => {
+      const s = `${filterKey}-${g}`;
+      return {
+        age: g,
+        normal:       Math.round(seededValue(`${s}-n`, 120, 450)),
+        caution:      Math.round(seededValue(`${s}-c`, 40, 180)),
+        highRisk:     Math.round(seededValue(`${s}-h`, 15, 90)),
+        slaViolation: Math.round(seededValue(`${s}-s`, 5, 40)),
       };
     });
   }, [statsScopeKey, timeFilter]);
@@ -1284,7 +1277,7 @@ export function NationalDashboard() {
       ═══════════════════════════════════════════════════════════ */}
       <div className={`flex-1 overflow-hidden p-2 gap-2 min-h-0 ${
         layoutMode === 'desktop' 
-          ? 'flex flex-row' 
+          ? 'flex flex-row items-stretch' 
           : layoutMode === 'tablet'
           ? 'flex flex-col'
           : 'flex flex-col overflow-y-auto'
@@ -1294,9 +1287,9 @@ export function NationalDashboard() {
             LEFT COLUMN - 요약 통계
             Desktop: 15% 너비
         ═══════════════════════════════════════════════════════ */}
-        <div className={`flex flex-col gap-2 ${
+        <div className={`flex flex-col gap-2 overflow-y-auto ${
           layoutMode === 'desktop' 
-            ? 'w-[20%] min-w-0 shrink-0' 
+            ? 'w-[20%] min-w-0 shrink-0 h-full' 
             : layoutMode === 'tablet'
             ? 'hidden'
             : 'w-full shrink-0'
@@ -1313,15 +1306,15 @@ export function NationalDashboard() {
           </div>
           
           {/* 총 처리건수 + 히트맵 */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 flex-1 min-h-[220px]">
-            <div className="flex items-center justify-between mb-1">
+          <div className="bg-white border border-gray-200 rounded-lg p-2">
+            <div className="flex items-center justify-between mb-0.5">
               <div className="text-xs text-gray-500">{timeFilterLabel} 총 처리건수</div>
               <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{timeFilterLabel}</div>
             </div>
-            <div className="text-2xl font-bold text-blue-600 mb-2">
+            <div className="text-xl font-bold text-blue-600 mb-1">
               {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
             </div>
-            <div className="text-[10px] text-gray-500 mb-2">{selectedMapCard.label} (행정구역별)</div>
+            <div className="text-[10px] text-gray-500 mb-1">{selectedMapCard.label} (행정구역별)</div>
             <div style={{ width: '100%', aspectRatio: '1 / 1', maxHeight: 220 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <Treemap
@@ -1356,6 +1349,40 @@ export function NationalDashboard() {
                     );
                   }}
                 />
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* 연령 × 상태 분포 (스택형 바) — 히트맵 바로 아래 */}
+          <div className="bg-white border border-gray-200 rounded-lg p-2">
+            <div className="text-[10px] font-semibold text-gray-700 mb-0.5">연령 × 상태 분포</div>
+            <div style={{ height: '150px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={ageStatusData} margin={{ top: 8, right: 4, left: -16, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                  <XAxis dataKey="age" tick={{ fontSize: 10, fill: '#4b5563' }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 9, fill: '#6b7280' }} tickLine={false} axisLine={false} width={30} />
+                  <Tooltip content={({ active, payload, label }) => {
+                    if (!active || !payload?.length) return null;
+                    const total = payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
+                    return (
+                      <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-[11px]">
+                        <div className="font-semibold text-gray-800 mb-1">{label}세</div>
+                        {payload.map((p, i) => (
+                          <div key={i} className="flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
+                            <span>{AGE_STATUS_LABELS[p.dataKey as string]}: {Number(p.value).toLocaleString()}건</span>
+                          </div>
+                        ))}
+                        <div className="mt-1 pt-1 border-t border-gray-100 font-medium">합계: {total.toLocaleString()}건</div>
+                      </div>
+                    );
+                  }} />
+                  <Legend formatter={(v: string) => AGE_STATUS_LABELS[v] || v} wrapperStyle={{ fontSize: '9px' }} />
+                  {AGE_STATUS_KEYS.map(key => (
+                    <Bar key={key} dataKey={key} stackId="ageStatus" fill={AGE_STATUS_COLORS[key]} radius={key === 'slaViolation' ? [3, 3, 0, 0] : undefined} />
+                  ))}
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
@@ -1436,7 +1463,7 @@ export function NationalDashboard() {
         ═══════════════════════════════════════════════════════ */}
         <div className={`flex flex-col gap-2 overflow-y-auto ${
           layoutMode === 'desktop' 
-            ? 'min-w-0 shrink-0' 
+            ? 'min-w-0 shrink-0 h-full' 
             : layoutMode === 'tablet'
             ? 'hidden'
             : 'w-full shrink-0'
@@ -1684,49 +1711,7 @@ export function NationalDashboard() {
         )}
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════
-          BOTTOM - 시계열 차트 (전체 너비)
-      ═══════════════════════════════════════════════════════════ */}
-      <div className="shrink-0 px-3 pb-3">
-        <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-semibold text-gray-700">전주 대비 증감률</span>
-            <div className="flex items-center gap-1">
-              <button className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
-              <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
-            </div>
-          </div>
-          <div style={{ height: '180px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={timeSeriesData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#374151' }} />
-                <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} tickFormatter={(v) => `${v}%`} domain={['auto', 'auto']} />
-                <ReferenceLine y={0} stroke="#9ca3af" strokeWidth={1.5} />
-                <Tooltip content={({ active, payload, label }) => {
-                  if (!active || !payload?.[0]) return null;
-                  const rate = payload[0].value as number;
-                  const item = payload[0].payload;
-                  return (
-                    <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-xs">
-                      <div className="font-semibold text-gray-800 mb-1">{label}</div>
-                      <div style={{ color: rate >= 0 ? '#16a34a' : '#ef4444' }}>
-                        증감률: {rate >= 0 ? '+' : ''}{rate}%
-                      </div>
-                      <div className="text-gray-500">처리량: {item.처리량?.toLocaleString()}건</div>
-                    </div>
-                  );
-                }} />
-                <Bar dataKey="증감률" radius={[4, 4, 0, 0]}>
-                  {timeSeriesData.map((entry, idx) => (
-                    <Cell key={idx} fill={entry.증감률 >= 0 ? '#16a34a' : '#ef4444'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
+
     </div>
   );
 }

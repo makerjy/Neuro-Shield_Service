@@ -538,22 +538,30 @@ export function fetchKPIData(
       
       const dailyData: { date: string; value: number }[] = [];
       
-      // KPI별 기준값 설정 함수
+      // KPI별 기준값 설정 함수 — 사인 파동 + 넓은 변동폭으로 시각적 변화 강조
       const getBaseValue = (kpiId: string, seedSuffix: string): number => {
+        // seedSuffix에서 인덱스 추출 (d0~d6, m0~m11, q0~q3)
+        const idxMatch = seedSuffix.match(/\d+/);
+        const idx = idxMatch ? Number(idxMatch[0]) : 0;
+        // 사인 파동 (KPI별 위상 다르게)
+        const phase = seededRandom(`${seedKey}-phase`, 0, 6.28);
+        const wave = Math.sin(idx * 0.9 + phase);        // −1 ~ +1
+        const noise = seededRandom(`${seedKey}-${kpiId}-${seedSuffix}`, -1, 1); // 노이즈
+
         if (kpiId === 'kpi-sla-rate') {
-          return 94 + seededRandom(`${seedKey}-sla-${seedSuffix}`, -2, 2);
+          return 92 + wave * 4 + noise * 2;   // 86 ~ 98
         } else if (kpiId === 'kpi-data-rate') {
-          return 95 + seededRandom(`${seedKey}-data-${seedSuffix}`, -3, 2);
+          return 91 + wave * 5 + noise * 2;   // 84 ~ 98
         } else if (kpiId === 'kpi-completion-rate') {
-          return 95 + seededRandom(`${seedKey}-comp-${seedSuffix}`, -2, 2);
+          return 90 + wave * 4.5 + noise * 2; // 83.5 ~ 96.5
         } else if (kpiId === 'kpi-response-rate') {
-          return 87 + seededRandom(`${seedKey}-resp-${seedSuffix}`, -3, 3);
+          return 85 + wave * 5 + noise * 3;   // 77 ~ 93
         } else if (kpiId === 'kpi-quality-score') {
-          return 92 + seededRandom(`${seedKey}-qual-${seedSuffix}`, -2, 2);
+          return 88 + wave * 4 + noise * 2;   // 82 ~ 94
         } else if (kpiId === 'kpi-avg-processing-time') {
-          return 2.3 + seededRandom(`${seedKey}-time-${seedSuffix}`, -0.5, 0.5);
+          return 2.8 + wave * 0.8 + noise * 0.3; // 1.7 ~ 3.9
         } else {
-          return baseline + seededRandom(`${seedKey}-${seedSuffix}`, -5, 5);
+          return baseline + wave * 5 + noise * 3;
         }
       };
       

@@ -16,6 +16,7 @@ type MapLegendAndControlsProps = {
   onReset: () => void;
   minLabel?: string;
   maxLabel?: string;
+  colorGradient?: string;
 };
 
 export function MapLegendAndControls({
@@ -27,8 +28,11 @@ export function MapLegendAndControls({
   onAlphaChange,
   onReset,
   minLabel = '낮음',
-  maxLabel = '높음'
+  maxLabel = '높음',
+  colorGradient
 }: MapLegendAndControlsProps) {
+  const defaultGrad = 'linear-gradient(90deg, #e5effe, #93c5fd, #3b82f6, #1e3a8a)';
+  const gradientBg = colorGradient || defaultGrad;
   return (
     <div className="w-64 rounded-md border border-gray-200 bg-white p-3 text-xs text-gray-700 shadow-sm">
       <div className="text-xs font-semibold text-gray-800">지도 설정</div>
@@ -86,7 +90,7 @@ export function MapLegendAndControls({
       <div className="mt-3">
         <div className="text-[11px] text-gray-500">범례</div>
         <div className="mt-2">
-          <div className="h-2 w-full rounded-full" style={{ background: 'linear-gradient(90deg, #e5effe, #93c5fd, #3b82f6, #1e3a8a)' }} />
+          <div className="h-2 w-full rounded-full" style={{ background: gradientBg }} />
           <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
             <span>{minLabel}</span>
             <span>{maxLabel}</span>

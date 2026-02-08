@@ -15,6 +15,8 @@ type LeftKpiPanelProps = {
   kpi: NationalKpi | RegionalKpi | null;
   loading?: boolean;
   partial?: boolean;
+  selectedKpi?: string;
+  onSelectKpi?: (key: string) => void;
 };
 
 type CardItem = {
@@ -31,7 +33,7 @@ const statusClass = (status?: 'normal' | 'warn' | 'risk') => {
   return 'border-gray-200 text-gray-900';
 };
 
-export function LeftKpiPanel({ variant = 'national', kpi, loading, partial }: LeftKpiPanelProps) {
+export function LeftKpiPanel({ variant = 'national', kpi, loading, partial, selectedKpi, onSelectKpi }: LeftKpiPanelProps) {
   const [expanded, setExpanded] = useState(false);
 
   if (loading) {
@@ -157,7 +159,18 @@ export function LeftKpiPanel({ variant = 'national', kpi, loading, partial }: Le
   return (
     <div className="space-y-3">
       {cards.map((card) => (
-        <div key={card.key} className={`rounded-md border bg-white p-4 ${statusClass(card.status)}`}>
+        <div
+          key={card.key}
+          className={`rounded-md border bg-white p-4 cursor-pointer transition-shadow hover:shadow-md ${
+            selectedKpi === card.key
+              ? 'ring-2 ring-blue-500 border-blue-400'
+              : statusClass(card.status)
+          }`}
+          onClick={() => onSelectKpi?.(card.key)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === 'Enter' && onSelectKpi?.(card.key)}
+        >
           <div className="text-xs text-gray-500">{card.title}</div>
           <div className="mt-2 text-2xl font-bold">{card.value}</div>
           <div className={`mt-1 text-xs ${partial ? 'text-gray-400' : 'text-gray-500'}`}>{card.sub}</div>

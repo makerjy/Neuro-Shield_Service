@@ -11,14 +11,37 @@ import { GEO_INDICATORS } from '../components/geomap/geoIndicators';
 
 const metricOptions = GEO_INDICATORS.map((item) => ({ id: item.id, label: item.label }));
 
+/* 사건 단계 색상 / 라벨 (RightAnalyticsPanel과 공유) */
+const STAGE_LEGEND = [
+  { key: 'incoming', label: '신규', color: '#2563eb' },
+  { key: 'inProgress', label: '처리중', color: '#0ea5e9' },
+  { key: 'needRecontact', label: '재접촉 필요', color: '#f59e0b' },
+  { key: 'slaBreach', label: 'SLA 위반', color: '#ef4444' },
+  { key: 'completed', label: '완료', color: '#16a34a' }
+];
+
+/* KPI 선택에 따른 지도 색상 그라데이션 */
+const KPI_COLOR_GRADIENTS: Record<string, string> = {
+  throughputNow: 'linear-gradient(90deg, #e5effe, #93c5fd, #3b82f6, #1e3a8a)',
+  slaViolationRateNow: 'linear-gradient(90deg, #fef2f2, #fca5a5, #ef4444, #991b1b)',
+  dataShortageRateNow: 'linear-gradient(90deg, #fefce8, #fde68a, #f59e0b, #92400e)',
+  activeIncidentsNow: 'linear-gradient(90deg, #f0fdf4, #86efac, #22c55e, #14532d)'
+};
+
 export function NationalOpsDashboard() {
-  const [period, setPeriod] = useState<'week' | 'month' | 'quarter'>('week');
+  const [period, setPeriod] = useState<'week' | 'month' | 'quarter' | 'year'>('week');
   const [metricId, setMetricId] = useState(metricOptions[0]?.id ?? 'total_cases');
   const [selectedSido, setSelectedSido] = useState('all');
   const [selectedSigungu, setSelectedSigungu] = useState('');
   const [mapMode, setMapMode] = useState<'fill' | 'dot' | 'bubble'>('fill');
   const [mapLevels, setMapLevels] = useState(7);
   const [mapAlpha, setMapAlpha] = useState(0.95);
+  const [selectedKpi, setSelectedKpi] = useState<string>('throughputNow');
+
+  const kpiColorGradient = useMemo(
+    () => KPI_COLOR_GRADIENTS[selectedKpi] ?? KPI_COLOR_GRADIENTS.throughputNow,
+    [selectedKpi]
+  );
 
   const [data, setData] = useState<any | null>(null);
   const [status, setStatus] = useState<'loadingInitial' | 'loadingRegion' | 'ready' | 'empty' | 'partial' | 'error'>('loadingInitial');
@@ -143,7 +166,7 @@ export function NationalOpsDashboard() {
         onRefresh={() => loadDashboard('refresh')}
       />
 
-      <main className="mx-auto max-w-[1400px] px-6 py-6">
+      <main className="mx-auto max-w-[1400px] px-6 py-6 pb-12">
         {status === 'error' && (
           <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
             데이터 요청에 문제가 있습니다. 다시 시도해 주세요.
@@ -160,19 +183,22 @@ export function NationalOpsDashboard() {
           </div>
         )}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,2.6fr)_minmax(0,1.4fr)]">
-          <LeftKpiPanel kpi={data?.kpi ?? null} loading={showLoading} partial={partial} />
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,2.4fr)_minmax(0,1.3fr)]">
+          <LeftKpiPanel kpi={data?.kpi ?? null} loading={showLoading} partial={partial} selectedKpi={selectedKpi} onSelectKpi={setSelectedKpi} />
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             <GeoMapPanel
               title="전국 GeoMap"
               indicatorId={metricId}
               year={2026}
               mapMode={mapMode}
               mapAlpha={mapAlpha}
-              mapHeight={520}
+              mapHeight={420}
               highlightCode={highlightCode}
               onRegionSelect={handleMapSelect}
+              period={period}
+              onPeriodChange={setPeriod}
+              onModeChange={setMapMode}
             >
               <MapLegendAndControls
                 mode={mapMode}
@@ -188,10 +214,22 @@ export function NationalOpsDashboard() {
                 }}
                 minLabel="낮음"
                 maxLabel="높음"
+                colorGradient={kpiColorGradient}
               />
             </GeoMapPanel>
-            <div className="rounded-md border border-gray-200 bg-white px-4 py-3 text-xs text-gray-500">
-              선택 권역: <span className="font-semibold text-gray-800">{regionLabel}</span> · 선택 지표: <span className="font-semibold text-gray-800">{metricLabel}</span>
+
+            {/* 사건 단계 범례 (항상 표시) */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-gray-200 bg-white px-4 py-2.5">
+              <span className="text-[11px] font-semibold text-gray-600">사건 단계</span>
+              {STAGE_LEGEND.map((s) => (
+                <span key={s.key} className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                  <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: s.color }} />
+                  {s.label}
+                </span>
+              ))}
+              <span className="ml-auto text-[11px] text-gray-400">
+                {regionLabel} · {metricLabel}
+              </span>
             </div>
           </div>
 

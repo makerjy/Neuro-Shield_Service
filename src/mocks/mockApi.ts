@@ -47,6 +47,12 @@ export type WeeklyTrendItem = {
   changeRate: number;
 };
 
+export type AgeRiskItem = {
+  ageGroup: string;
+  slaViolation: number;
+  recontactNeed: number;
+};
+
 export type Charts = {
   pieSla: { name: string; value: number }[];
   pieData: { name: string; value: number }[];
@@ -55,6 +61,7 @@ export type Charts = {
   weeklyTrend: WeeklyTrendItem[];
   riskMatrix: RiskMatrixPoint[];
   stageByRegion: StageByRegion[];
+  ageRisk: AgeRiskItem[];
 };
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -170,6 +177,13 @@ const makeCharts = (region: RegionKey, kpi: KPI): Charts => {
     return { regionName: r.label, incoming, inProgress, needRecontact, slaBreach, completed };
   });
 
+  const ageGroups = ['10대', '20대', '30대', '40대', '50대', '60대', '70대+'];
+  const ageRisk: AgeRiskItem[] = ageGroups.map((ag) => ({
+    ageGroup: ag,
+    slaViolation: Number(clamp(1 + rnd() * 12, 0.5, 15).toFixed(1)),
+    recontactNeed: Number(clamp(2 + rnd() * 18, 1, 22).toFixed(1))
+  }));
+
   return {
     pieSla: [
       { name: '정상', value: Number(slaNormal.toFixed(2)) },
@@ -183,7 +197,8 @@ const makeCharts = (region: RegionKey, kpi: KPI): Charts => {
     barLoadByCenter,
     weeklyTrend,
     riskMatrix,
-    stageByRegion
+    stageByRegion,
+    ageRisk
   };
 };
 

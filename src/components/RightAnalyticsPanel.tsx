@@ -18,7 +18,7 @@ import {
 } from 'recharts';
 import { ChartCard } from './ChartCard';
 import { AlertsCard } from './AlertsCard';
-import { Charts as NationalCharts, RiskMatrixPoint, StageByRegion } from '../mocks/mockApi';
+import { Charts as NationalCharts, RiskMatrixPoint, StageByRegion, AgeRiskItem } from '../mocks/mockApi';
 import { AlertItem, Charts as RegionalCharts } from '../mocks/mockRegionalApi';
 import { CHART_COLORS } from '../styles/tokens';
 
@@ -244,36 +244,37 @@ export function RightAnalyticsPanel({ variant = 'national', charts, alerts, load
         )}
       </ChartCard>
 
-      {/* 2) 처리 단계 분포 스택형 바 */}
+      {/* 2) 연령대별 미처리/지연 리스크(%) */}
       <ChartCard
-        title="처리 단계 분포 (지역별)"
-        tableData={stageTableData}
+        title="연령대별 미처리/지연 리스크(%)"
+        tableData={(nationalCharts.ageRisk ?? []).map((item) => ({
+          label: item.ageGroup,
+          value: `SLA ${item.slaViolation}% · 재접촉 ${item.recontactNeed}%`
+        }))}
         onTypeChange={() => undefined}
         onDownload={() => undefined}
       >
-        {nationalCharts.stageByRegion.length === 0 ? (
+        {!nationalCharts.ageRisk || nationalCharts.ageRisk.length === 0 ? (
           <div className="flex h-40 items-center justify-center text-xs text-gray-400">
-            데이터 부족 — 처리 단계 데이터 로딩 중
+            데이터 부족 — 연령대별 리스크 데이터 로딩 중
           </div>
         ) : (
           <div className="h-52">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={nationalCharts.stageByRegion} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+              <BarChart data={nationalCharts.ageRisk} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="regionName" tick={{ fontSize: 9 }} interval={0} angle={-30} textAnchor="end" height={40} />
-                <YAxis tick={{ fontSize: 10 }} />
+                <XAxis dataKey="ageGroup" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}%`} />
                 <Tooltip
                   content={({ payload, label }) => {
                     if (!payload?.length) return null;
-                    const total = payload.reduce((sum, p) => sum + (Number(p.value) || 0), 0);
                     return (
                       <div className="rounded border border-gray-200 bg-white px-3 py-2 text-xs shadow-sm">
                         <div className="mb-1 font-semibold text-gray-900">{label}</div>
                         {payload.map((p) => (
                           <div key={p.dataKey as string} className="flex items-center gap-1.5 text-gray-600">
                             <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: p.color }} />
-                            {STAGE_LABELS[p.dataKey as string] ?? p.dataKey}: {Number(p.value).toLocaleString()}건
-                            ({total > 0 ? ((Number(p.value) / total) * 100).toFixed(1) : 0}%)
+                            {p.dataKey === 'slaViolation' ? 'SLA 위반률' : '재접촉 필요율'}: {Number(p.value).toFixed(1)}%
                           </div>
                         ))}
                       </div>
@@ -281,13 +282,16 @@ export function RightAnalyticsPanel({ variant = 'national', charts, alerts, load
                   }}
                 />
                 <Legend
-                  formatter={(value: string) => <span className="text-[10px] text-gray-600">{STAGE_LABELS[value] ?? value}</span>}
+                  formatter={(value: string) => (
+                    <span className="text-[10px] text-gray-600">
+                      {value === 'slaViolation' ? 'SLA 위반률' : '재접촉 필요율'}
+                    </span>
+                  )}
                   iconSize={8}
                   wrapperStyle={{ fontSize: 10, paddingTop: 4 }}
                 />
-                {Object.entries(STAGE_COLORS).map(([key, color]) => (
-                  <Bar key={key} dataKey={key} stackId="stage" fill={color} radius={key === 'completed' ? [3, 3, 0, 0] : undefined} />
-                ))}
+                <Bar dataKey="slaViolation" fill={CHART_COLORS.accent} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="recontactNeed" fill="#f59e0b" radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

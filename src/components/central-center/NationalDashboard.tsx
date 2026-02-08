@@ -446,7 +446,7 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: {
   kpiDef: KPIDefinition; 
   data: TimeSeriesKPIData | null; 
   colorIndex: number;
-  analyticsPeriod: 'week' | 'month' | 'quarter';
+  analyticsPeriod: 'week' | 'month' | 'quarter' | 'year';
 }) {
   if (!data) {
     return (
@@ -462,8 +462,8 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: {
   
   // 시간 필터에 따른 X축 라벨 간격 및 포맷 조정
   // 주간: 7일 모두 표시, 월간: 3개월마다 표시, 분기: 모두 표시
-  const xAxisInterval = analyticsPeriod === 'week' ? 0 : analyticsPeriod === 'month' ? 2 : 0;
-  const timeRangeLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : '분기';
+  const xAxisInterval = analyticsPeriod === 'week' ? 0 : analyticsPeriod === 'month' ? 2 : analyticsPeriod === 'year' ? 3 : 0;
+  const timeRangeLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : analyticsPeriod === 'year' ? '연간' : '분기';
   
   // 차트별 배경색 그라데이션 (구분용)
   const bgColors = [
@@ -566,7 +566,7 @@ type UnifiedKpiKey = typeof UNIFIED_KPI_DEFS[number]['key'];
 interface KPIUnifiedChartProps {
   bulletKPIs: KPIDefinition[];
   kpiDataMap: Record<string, any>;
-  analyticsPeriod: 'week' | 'month' | 'quarter';
+  analyticsPeriod: 'week' | 'month' | 'quarter' | 'year';
 }
 
 function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnifiedChartProps) {
@@ -618,7 +618,7 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
     ? ['dataMin - 0.5', 'dataMax + 0.5']
     : [70, 100];
 
-  const timeRangeLabel = analyticsPeriod === 'week' ? '최근 7일' : analyticsPeriod === 'month' ? '최근 12개월' : '분기별';
+  const timeRangeLabel = analyticsPeriod === 'week' ? '최근 7일' : analyticsPeriod === 'month' ? '최근 12개월' : analyticsPeriod === 'year' ? '연간 누적' : '분기별';
 
   // 현재값 조회
   const getCurrentValue = (key: UnifiedKpiKey): string | null => {
@@ -826,10 +826,13 @@ export function NationalDashboard() {
   const [selectedKPI, setSelectedKPI] = useState<string | null>(null);
   const [activeDonutIndex, setActiveDonutIndex] = useState<number | null>(null);
   const [showKpiSummaryTable, setShowKpiSummaryTable] = useState(false); // KPI 요약 테이블 토글
-  const [analyticsPeriod, setAnalyticsPeriod] = useState<'week' | 'month' | 'quarter'>('week'); // 분석 기간 (좌측 요약 + 우측 분석에만 적용)
+  const [analyticsPeriod, setAnalyticsPeriod] = useState<'week' | 'month' | 'quarter' | 'year'>('week'); // 분석 기간 (좌측 요약 + 우측 분석에만 적용)
   
   // ═══ 지오맵 KPI 선택 상태 (상단 카드 클릭 → 지도 히트맵 KPI 변경) ═══
   const [selectedMapKpiId, setSelectedMapKpiId] = useState<string>('total_cases');
+  
+  // ═══ 지도 뷰 모드: 지오맵 / 히트맵 토글 ═══
+  const [mapViewMode, setMapViewMode] = useState<'geomap' | 'heatmap'>('geomap');
   
   // ResizeObserver 훅으로 컨테이너 크기 추적 (반응형)
   const [containerRef, containerSize] = useResizeObserver<HTMLDivElement>();
@@ -902,7 +905,7 @@ export function NationalDashboard() {
   ───────────────────────────────────────────────────────────── */
   const treemapData = useMemo(() => {
     // 분석 기간에 따른 배율 (주간 < 월간 < 분기)
-    const multiplier = analyticsPeriod === 'week' ? 1 : analyticsPeriod === 'month' ? 4.2 : 13;
+    const multiplier = analyticsPeriod === 'week' ? 1 : analyticsPeriod === 'month' ? 4.2 : analyticsPeriod === 'year' ? 52 : 13;
     const filterKey = `${statsScopeKey}-${analyticsPeriod}`; // 기간별 다른 시드
     
     // 지역별 데이터 생성
@@ -948,7 +951,7 @@ export function NationalDashboard() {
   const totalCases = useMemo(() => treemapData.reduce((sum, item) => sum + item.size, 0), [treemapData]);
   
   // 분석 기간 레이블
-  const analyticsPeriodLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : '분기';
+  const analyticsPeriodLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : analyticsPeriod === 'year' ? '연간(누적)' : '분기';
 
   /* ─────────────────────────────────────────────────────────────
      행정구역 히트맵 (선택 KPI 기준, 푸른 테마)
@@ -994,16 +997,34 @@ export function NationalDashboard() {
 
     const getBlueHeatmapColor = (value: number) => {
       const ratio = (value - minValue) / (maxValue - minValue || 1);
-      if (ratio < 0.15) return '#eff6ff'; // blue-50
-      if (ratio < 0.3) return '#bfdbfe'; // blue-200
-      if (ratio < 0.5) return '#60a5fa'; // blue-400
-      if (ratio < 0.7) return '#2563eb'; // blue-600
-      if (ratio < 0.85) return '#1d4ed8'; // blue-700
-      return '#1e3a8a'; // blue-900
+      // KPI 색상에 맞는 컬러 팔레트 매핑
+      const kpiColor = selectedMapCard.color;
+      const palettes: Record<string, string[]> = {
+        blue:   ['#eff6ff', '#bfdbfe', '#60a5fa', '#2563eb', '#1d4ed8', '#1e3a8a'],
+        green:  ['#f0fdf4', '#bbf7d0', '#4ade80', '#16a34a', '#15803d', '#14532d'],
+        red:    ['#fef2f2', '#fecaca', '#f87171', '#dc2626', '#b91c1c', '#7f1d1d'],
+        orange: ['#fffbeb', '#fed7aa', '#fb923c', '#ea580c', '#c2410c', '#7c2d12'],
+        purple: ['#faf5ff', '#e9d5ff', '#c084fc', '#9333ea', '#7e22ce', '#581c87'],
+      };
+      const pal = palettes[kpiColor] || palettes.blue;
+      if (ratio < 0.15) return pal[0];
+      if (ratio < 0.3) return pal[1];
+      if (ratio < 0.5) return pal[2];
+      if (ratio < 0.7) return pal[3];
+      if (ratio < 0.85) return pal[4];
+      return pal[5];
     };
 
     const isLightColor = (hex: string) => {
-      return ['#eff6ff', '#bfdbfe'].includes(hex);
+      const pal = {
+        blue: ['#eff6ff', '#bfdbfe'],
+        green: ['#f0fdf4', '#bbf7d0'],
+        red: ['#fef2f2', '#fecaca'],
+        orange: ['#fffbeb', '#fed7aa'],
+        purple: ['#faf5ff', '#e9d5ff'],
+      };
+      const lightColors = pal[selectedMapCard.color as keyof typeof pal] || pal.blue;
+      return lightColors.includes(hex);
     };
 
     return rawData.map((item) => {
@@ -1101,7 +1122,7 @@ export function NationalDashboard() {
   ───────────────────────────────────────────────────────────── */
   const CustomTreemapContent = (props: any) => {
     const { x, y, width, height, name, fill } = props;
-    if (width < 25 || height < 18) return null;
+    if (!name || width < 25 || height < 18) return null;
     
     // 짧은 이름으로 변환 (예: 강원특별자치도 -> 강원특별자치도 또는 짧게)
     const shortName = name.length > 5 ? name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim() || name.slice(0, 4) : name;
@@ -1158,7 +1179,7 @@ export function NationalDashboard() {
   }, [drillDown]);
 
   return (
-    <div ref={containerRef} className="absolute inset-0 flex flex-col bg-gray-50 overflow-hidden">
+    <div ref={containerRef} className="flex flex-col bg-gray-50 h-full overflow-auto">
       {/* ═══════════════════════════════════════════════════════════
           상단 KPI 선택 카드 (버튼) - 지도 히트맵 KPI 변경
       ═══════════════════════════════════════════════════════════ */}
@@ -1167,6 +1188,15 @@ export function NationalDashboard() {
           {MAP_KPI_CARDS.map((card) => {
             const isActive = selectedMapKpiId === card.id;
             const value = card.getValue(statsScopeKey);
+            // KPI 색상 스타일
+            const kpiColorStyles: Record<string, { border: string; bg: string; ring: string; text: string; value: string }> = {
+              blue:   { border: 'border-blue-500',   bg: 'bg-blue-50',   ring: 'ring-blue-200',   text: 'text-blue-700',   value: 'text-blue-600' },
+              green:  { border: 'border-green-500',  bg: 'bg-green-50',  ring: 'ring-green-200',  text: 'text-green-700',  value: 'text-green-600' },
+              red:    { border: 'border-red-500',    bg: 'bg-red-50',    ring: 'ring-red-200',    text: 'text-red-700',    value: 'text-red-600' },
+              orange: { border: 'border-amber-500',  bg: 'bg-amber-50',  ring: 'ring-amber-200',  text: 'text-amber-700',  value: 'text-amber-600' },
+              purple: { border: 'border-purple-500', bg: 'bg-purple-50', ring: 'ring-purple-200', text: 'text-purple-700', value: 'text-purple-600' },
+            };
+            const cs = kpiColorStyles[card.color] || kpiColorStyles.blue;
             return (
               <button
                 key={card.id}
@@ -1174,7 +1204,7 @@ export function NationalDashboard() {
                 aria-pressed={isActive}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all min-w-[140px] text-left ${
                   isActive
-                    ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200 shadow-sm'
+                    ? `${cs.border} ${cs.bg} ring-2 ${cs.ring} shadow-sm`
                     : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
                 }`}
               >
@@ -1186,16 +1216,16 @@ export function NationalDashboard() {
                   {card.id === 'dropout' && <ChevronRight className="h-4 w-4" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className={`text-[10px] font-medium truncate ${isActive ? 'text-blue-700' : 'text-gray-500'}`}>
+                  <div className={`text-[10px] font-medium truncate ${isActive ? cs.text : 'text-gray-500'}`}>
                     {card.label}
                   </div>
-                  <div className={`text-sm font-bold ${isActive ? 'text-blue-600' : 'text-gray-800'}`}>
+                  <div className={`text-sm font-bold ${isActive ? cs.value : 'text-gray-800'}`}>
                     {value.toLocaleString()}
                     <span className="text-[10px] font-normal ml-0.5">{card.unit}</span>
                   </div>
                 </div>
                 {isActive && (
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0`} style={{ backgroundColor: COLORS[card.color as keyof typeof COLORS] || COLORS.blue }} />
                 )}
               </button>
             );
@@ -1257,30 +1287,28 @@ export function NationalDashboard() {
       </header>
 
       {/* ═══════════════════════════════════════════════════════════
-          MAIN CONTENT - 반응형 레이아웃
-          - Desktop (>=1280px): 1:3:2 (Left / CenterMap / Right)
-          - Tablet (768-1279px): 2단 (상단 Map, 하단 2열)
-          - Mobile (<768px): 1열 스택
+          MAIN CONTENT - CSS Grid 3열 레이아웃
+          - Desktop (>=1024px): 1.3fr / 2.5fr / 2.2fr
+          - Tablet: 2단, Mobile: 1열 스택
       ═══════════════════════════════════════════════════════════ */}
       <div className={`flex-1 p-2 gap-2 min-h-0 ${
         layoutMode === 'desktop' 
-          ? 'flex flex-row items-stretch overflow-hidden' 
+          ? 'grid overflow-hidden' 
           : layoutMode === 'tablet'
           ? 'flex flex-col overflow-y-auto'
           : 'flex flex-col overflow-y-auto'
-      }`}>
+      }`} style={layoutMode === 'desktop' ? { gridTemplateColumns: '1.3fr 2.5fr 2.2fr' } : undefined}>
         
         {/* ═══════════════════════════════════════════════════════
-            LEFT COLUMN - 요약 통계
-            Desktop: 15% 너비
+            LEFT COLUMN - KPI 요약 + 리스크 Top + 연령대별 차트
         ═══════════════════════════════════════════════════════ */}
         <div className={`flex flex-col gap-2 overflow-y-auto ${
           layoutMode === 'desktop' 
-            ? 'w-[20%] min-w-0 shrink-0 h-full' 
+            ? 'min-w-0 h-full' 
             : layoutMode === 'tablet'
             ? 'hidden'
             : 'w-full shrink-0'
-        }`}style={{width: "15%"}}>
+        }`}>
           
           {/* 현재 드릴 레벨 표시 */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-center">
@@ -1292,230 +1320,299 @@ export function NationalDashboard() {
             )}
           </div>
           
-          {/* 총 처리건수 + 히트맵 */}
-          <div className="bg-white border border-gray-200 rounded-lg p-2">
-            <div className="flex items-center justify-between mb-0.5">
-              <div className="text-xs text-gray-500">{analyticsPeriodLabel} 총 처리건수</div>
-              <div className="text-[9px] text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">{analyticsPeriodLabel}</div>
+          {/* ── 선택 KPI 요약 카드 ── */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-gray-700">선택 KPI 요약</span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded font-medium" 
+                style={{ backgroundColor: `${COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue}15`, color: COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue }}>
+                {selectedMapCard.label}
+              </span>
             </div>
-            <div className="text-xl font-bold text-blue-600 mb-1">
-              {totalCases.toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
-            </div>
-            <div className="text-[10px] text-gray-500 mb-1">{selectedMapCard.label} (행정구역별)</div>
-            <div style={{ width: '100%', aspectRatio: '1 / 1', maxHeight: 220, position: 'relative' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <Treemap
-                  data={mapHeatmapData}
-                  dataKey="size"
-                  stroke="#fff"
-                  isAnimationActive={false}
-                  content={({ x, y, width, height, name, fill, textColor, size }: any) => {
-                    if (!width || !height || width < 2 || height < 2) return null;
-                    const shortName = (name || '').replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim() || (name || '').slice(0, 3);
-                    const tc = textColor || '#fff';
-                    const totalAll = mapHeatmapData.reduce((s: number, d: any) => s + d.size, 0);
-                    const pct = totalAll > 0 ? ((size / totalAll) * 100).toFixed(1) : '0';
-                    return (
-                      <g
-                        onMouseEnter={(e) => {
-                          const rect = (e.currentTarget.closest('.recharts-responsive-container') as HTMLElement)?.getBoundingClientRect();
-                          if (rect) {
-                            setHeatmapHover({
-                              name: name || '',
-                              size: size || 0,
-                              x: e.clientX - rect.left,
-                              y: e.clientY - rect.top,
-                            });
-                          }
-                        }}
-                        onMouseMove={(e) => {
-                          const rect = (e.currentTarget.closest('.recharts-responsive-container') as HTMLElement)?.getBoundingClientRect();
-                          if (rect) {
-                            setHeatmapHover(prev => prev ? ({
-                              ...prev,
-                              x: e.clientX - rect.left,
-                              y: e.clientY - rect.top,
-                            }) : null);
-                          }
-                        }}
-                        onMouseLeave={() => setHeatmapHover(null)}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1.5} rx={2}
-                          style={{ transition: 'opacity 0.15s' }}
-                          opacity={heatmapHover && heatmapHover.name !== name ? 0.45 : 1}
-                        />
-                        {width > 24 && height > 16 && (
-                          <text
-                            x={x + width / 2}
-                            y={y + height / 2}
-                            textAnchor="middle"
-                            dominantBaseline="central"
-                            fill={tc}
-                            fontSize={Math.min(width / 5, height / 2.5, 11)}
-                            fontWeight="700"
-                            stroke={tc === '#ffffff' ? 'rgba(0,0,0,0.3)' : 'none'}
-                            strokeWidth={tc === '#ffffff' ? 0.3 : 0}
-                            paintOrder="stroke"
-                            style={{ pointerEvents: 'none' }}
-                          >
-                            {shortName}
-                          </text>
-                        )}
-                      </g>
-                    );
-                  }}
-                />
-              </ResponsiveContainer>
-              {/* 히트맵 주간 통계 툴팁 */}
-              {heatmapHover && (() => {
-                const sorted = [...mapHeatmapData].sort((a, b) => b.size - a.size);
-                const rank = sorted.findIndex(d => d.name === heatmapHover.name) + 1;
-                const avg = totalCases / mapHeatmapData.length;
-                const share = totalCases > 0 ? ((heatmapHover.size / totalCases) * 100).toFixed(1) : '0';
-                const avgDiff = avg > 0 ? ((heatmapHover.size / avg - 1) * 100).toFixed(0) : '0';
-                const aboveAvg = heatmapHover.size > avg;
-                return (
-                  <div
-                    className="absolute z-50 pointer-events-none bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[170px]"
-                    style={{
-                      left: Math.min(heatmapHover.x + 12, 120),
-                      top: Math.max(heatmapHover.y - 60, 0),
-                    }}
-                  >
-                    <div className="flex items-center justify-between mb-1.5 pb-1.5 border-b border-gray-100">
-                      <span className="font-semibold text-gray-800">{heatmapHover.name}</span>
-                      <span className="text-[9px] bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded font-medium">{analyticsPeriodLabel}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3 py-0.5">
-                      <span className="text-gray-500">{selectedMapCard.label}</span>
-                      <span className="font-bold text-blue-600">{heatmapHover.size.toLocaleString()}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3 py-0.5">
-                      <span className="text-gray-500">전국 순위</span>
-                      <span className="font-bold text-gray-700">{rank} / {mapHeatmapData.length}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3 py-0.5">
-                      <span className="text-gray-500">전국 비중</span>
-                      <span className="font-bold text-gray-700">{share}%</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-3 py-0.5">
-                      <span className="text-gray-500">평균 대비</span>
-                      <span className={`font-bold ${aboveAvg ? 'text-red-500' : 'text-green-500'}`}>
-                        {aboveAvg ? '+' : ''}{avgDiff}%
-                      </span>
-                    </div>
+            {(() => {
+              const kpiVal = selectedMapCard.getValue(statsScopeKey);
+              const avg = mapHeatmapData.length > 0 ? mapHeatmapData.reduce((s, d) => s + d.size, 0) / mapHeatmapData.length : 0;
+              const sorted = [...mapHeatmapData].sort((a, b) => b.size - a.size);
+              const best = sorted[0];
+              const worst = sorted[sorted.length - 1];
+              const kpiC = COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue;
+              return (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-gray-500">전국 평균</span>
+                    <span className="text-sm font-bold" style={{ color: kpiC }}>{Math.round(avg).toLocaleString()}{selectedMapCard.unit}</span>
                   </div>
-                );
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-gray-500">현재값</span>
+                    <span className="text-sm font-bold text-gray-800">{kpiVal.toLocaleString()}{selectedMapCard.unit}</span>
+                  </div>
+                  {best && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-gray-500">최고 ({best.name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()})</span>
+                      <span className="text-xs font-semibold text-green-600">{best.size.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {worst && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-gray-500">최저 ({worst.name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()})</span>
+                      <span className="text-xs font-semibold text-red-600">{worst.size.toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* ── 리스크 Top 5 ── */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="text-xs font-semibold text-gray-700 mb-2">리스크 Top 5 지역</div>
+            <div className="space-y-1">
+              {(() => {
+                const riskTop = [...riskMatrixData]
+                  .map(r => ({
+                    ...r,
+                    riskScore: (100 - r.slaRate) + (100 - r.dataRate),
+                  }))
+                  .sort((a, b) => b.riskScore - a.riskScore)
+                  .slice(0, 5);
+                return riskTop.map((r, idx) => (
+                  <button
+                    key={r.regionId}
+                    onClick={() => drillDown({ code: r.regionId, name: r.regionName, level: 'sido' })}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors text-left"
+                  >
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
+                      idx === 0 ? 'bg-red-500' : idx === 1 ? 'bg-orange-500' : 'bg-amber-400'
+                    }`}>{idx + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium text-gray-800 truncate">{r.regionName}</div>
+                      <div className="text-[10px] text-gray-500">SLA {r.slaRate}% · 데이터 {r.dataRate}%</div>
+                    </div>
+                    <span className={`text-[10px] font-bold ${r.riskScore > 15 ? 'text-red-600' : r.riskScore > 8 ? 'text-amber-600' : 'text-green-600'}`}>
+                      {r.riskScore.toFixed(1)}
+                    </span>
+                  </button>
+                ));
               })()}
             </div>
           </div>
 
-          {/* 연령 × 상태 분포 (스택형 바) — 히트맵 바로 아래 */}
+          {/* 연령대별 미처리/지연 리스크(%) */}
           <div className="bg-white border border-gray-200 rounded-lg p-2">
-            <div className="text-[10px] font-semibold text-gray-700 mb-0.5">연령 × 상태 분포</div>
+            <div className="text-[10px] font-semibold text-gray-700 mb-0.5">연령대별 미처리/지연 리스크(%)</div>
             <div style={{ height: '150px' }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={ageStatusData} margin={{ top: 8, right: 4, left: -16, bottom: 4 }}>
+                <BarChart data={ageStatusData.map(d => {
+                  const total = d.normal + d.caution + d.highRisk + d.slaViolation;
+                  return {
+                    age: d.age,
+                    slaViolation: total > 0 ? Number(((d.slaViolation / total) * 100).toFixed(1)) : 0,
+                    recontactNeed: total > 0 ? Number((((d.highRisk + d.caution) / total) * 100).toFixed(1)) : 0,
+                  };
+                })} margin={{ top: 8, right: 4, left: -16, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                   <XAxis dataKey="age" tick={{ fontSize: 12, fill: '#4b5563' }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={false} width={32} />
+                  <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={false} width={32} tickFormatter={(v) => `${v}%`} />
                   <Tooltip content={({ active, payload, label }) => {
                     if (!active || !payload?.length) return null;
-                    const total = payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
                     return (
                       <div className="bg-white border border-gray-200 rounded-lg p-2 shadow-lg text-xs">
                         <div className="font-semibold text-gray-800 mb-1">{label}세</div>
                         {payload.map((p, i) => (
                           <div key={i} className="flex items-center gap-1">
                             <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
-                            <span>{AGE_STATUS_LABELS[p.dataKey as string]}: {Number(p.value).toLocaleString()}건</span>
+                            <span>{p.dataKey === 'slaViolation' ? 'SLA 위반률' : '재접촉 필요율'}: {Number(p.value).toFixed(1)}%</span>
                           </div>
                         ))}
-                        <div className="mt-1 pt-1 border-t border-gray-100 font-medium">합계: {total.toLocaleString()}건</div>
                       </div>
                     );
                   }} />
-                  <Legend formatter={(v: string) => AGE_STATUS_LABELS[v] || v} wrapperStyle={{ fontSize: '11px' }} />
-                  {AGE_STATUS_KEYS.map(key => (
-                    <Bar key={key} dataKey={key} stackId="ageStatus" fill={AGE_STATUS_COLORS[key]} radius={key === 'slaViolation' ? [3, 3, 0, 0] : undefined} />
-                  ))}
+                  <Legend formatter={(v: string) => v === 'slaViolation' ? 'SLA 위반률' : '재접촉 필요율'} wrapperStyle={{ fontSize: '11px' }} />
+                  <Bar dataKey="slaViolation" fill="#ef4444" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="recontactNeed" fill="#f59e0b" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* 활성 알림 */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="text-xs text-gray-500 mb-1">전국 활성 알림 수 <HelpCircle className="inline h-3 w-3 text-gray-400" /></div>
-            <div className="text-2xl font-bold text-blue-600">
-              {Math.round(seededValue(`${statsScopeKey}-foreign`, 180000, 220000)).toLocaleString()} <span className="text-sm font-normal text-gray-500">건</span>
-            </div>
-            <div className="flex items-center gap-1 mt-1 text-xs">
-              <span className="text-gray-500">전월대비</span>
-              <span className="text-red-500 flex items-center">
-                {seededValue(`${statsScopeKey}-foreign-change`, 3, 8).toFixed(2)}% <TrendingUp className="h-3 w-3 ml-0.5" />
-              </span>
             </div>
           </div>
         </div>
 
         {/* ═══════════════════════════════════════════════════════
-            CENTER COLUMN - GeoMap
-            Desktop: 50% 너비 (하드코딩)
+            CENTER COLUMN - GeoMap/Heatmap + 처리단계 범례
         ═══════════════════════════════════════════════════════ */}
         <div className={`${
           layoutMode === 'desktop' 
-            ? 'w-[60%] min-w-0 shrink-0' 
+            ? 'min-w-0' 
             : 'w-full shrink-0'
-        }`}style={{width: "35%"}}>
+        }`}>
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col min-h-[400px]">
-            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between bg-white rounded-t-lg">
-              <div className="flex items-center gap-3">
-                {/* 뒤로가기 버튼 */}
-                {drillLevel !== 'nation' && (
-                  <button
-                    onClick={drillUp}
-                    className="flex items-center gap-1.5 h-9 px-3 text-sm text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors font-medium"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    <span>뒤로</span>
-                  </button>
-                )}
-                <span className="text-sm font-semibold text-gray-800">지도</span>
-                {/* 지도 범위 뱃지 - 연간 누적 고정 */}
-                <span className="h-7 inline-flex items-center gap-1 px-2.5 bg-emerald-50 text-emerald-700 text-[10px] rounded-lg font-medium border border-emerald-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  지도 범위: 연간 누적 · 기준연도 2026
-                </span>
-                {/* 현재 선택된 KPI 표시 */}
-                <span className="h-8 inline-flex items-center px-3 bg-blue-500 text-white text-xs rounded-lg font-semibold">
-                  {MAP_KPI_CARDS.find(c => c.id === selectedMapKpiId)?.label || '케이스 처리율'}
-                </span>
-                <span className="h-8 inline-flex items-center px-3 bg-red-500 text-white text-xs rounded-lg font-semibold">
-                  {getDrillLevelLabel(drillLevel)}
-                </span>
-                {selectedRegion && (
-                  <span className="text-sm text-gray-600 font-medium">- {selectedRegion.name}</span>
-                )}
+            {/* ── 중앙 패널 헤더: 뒤로/제목 + 지도/히트맵 토글 + 기간 토글 ── */}
+            <div className="px-4 py-2.5 border-b border-gray-200 bg-white rounded-t-lg">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  {drillLevel !== 'nation' && (
+                    <button
+                      onClick={drillUp}
+                      className="flex items-center gap-1 h-7 px-2 text-xs text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors font-medium"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      <span>뒤로</span>
+                    </button>
+                  )}
+                  <span className="text-sm font-semibold text-gray-800">
+                    {mapViewMode === 'geomap' ? '지도' : '히트맵'}
+                  </span>
+                  <span className="h-6 inline-flex items-center gap-1 px-2 bg-emerald-50 text-emerald-700 text-[10px] rounded font-medium border border-emerald-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    {analyticsPeriodLabel} · 기준연도 2026
+                  </span>
+                  <span className="h-6 inline-flex items-center px-2 text-white text-[10px] rounded font-semibold"
+                    style={{ backgroundColor: COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue }}>
+                    {selectedMapCard.label}
+                  </span>
+                  <span className="h-6 inline-flex items-center px-2 bg-red-500 text-white text-[10px] rounded font-semibold">
+                    {getDrillLevelLabel(drillLevel)}
+                  </span>
+                  {selectedRegion && (
+                    <span className="text-xs text-gray-600 font-medium">- {selectedRegion.name}</span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* 지도 / 히트맵 토글 */}
+                  <div className="flex rounded-md border border-gray-200 overflow-hidden">
+                    <button
+                      onClick={() => setMapViewMode('geomap')}
+                      className={`px-2 py-0.5 text-[10px] font-medium transition ${
+                        mapViewMode === 'geomap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
+                      }`}
+                    >지오맵</button>
+                    <button
+                      onClick={() => setMapViewMode('heatmap')}
+                      className={`px-2 py-0.5 text-[10px] font-medium transition border-l border-gray-200 ${
+                        mapViewMode === 'heatmap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
+                      }`}
+                    >히트맵</button>
+                  </div>
+                  {/* 기간 토글 */}
+                  <div className="flex items-center gap-0.5">
+                    {(['week', 'month', 'quarter', 'year'] as const).map(p => (
+                      <button
+                        key={p}
+                        onClick={() => setAnalyticsPeriod(p)}
+                        className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
+                          analyticsPeriod === p
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        {p === 'week' ? '주간' : p === 'month' ? '월간' : p === 'quarter' ? '분기' : '연간'}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="h-7 w-7 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"><Download className="h-3.5 w-3.5 text-gray-500" /></button>
+                </div>
               </div>
-              <button className="h-9 w-9 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"><Download className="h-4 w-4 text-gray-500" /></button>
             </div>
-            <div className="flex-1 p-2">
-              <GeoMapPanel
-                key={`national-${selectedMapKpiId}-${drillLevel}-${selectedRegion?.code || 'all'}`}
-                title=""
-                indicatorId={selectedMapKpiId}
-                year={2026}
-                scope={{ mode: 'national' }}
-                variant="portal"
-                mapHeight={1000}
-                hideBreadcrumb
-                externalLevel={drillLevel === 'nation' ? 'ctprvn' : drillLevel === 'sido' ? 'sig' : 'emd'}
-                externalSelectedCode={selectedRegion?.code}
-                onRegionSelect={handleRegionSelect}
-                onGoBack={drillUp}
-              />
+
+            {/* ── 지도/히트맵 본체 ── */}
+            <div className="flex-1 p-2 min-h-0">
+              {mapViewMode === 'geomap' ? (
+                <GeoMapPanel
+                  key={`national-${selectedMapKpiId}-${drillLevel}-${selectedRegion?.code || 'all'}`}
+                  title=""
+                  indicatorId={selectedMapKpiId}
+                  year={2026}
+                  scope={{ mode: 'national' }}
+                  variant="portal"
+                  mapHeight={480}
+                  hideBreadcrumb
+                  externalLevel={drillLevel === 'nation' ? 'ctprvn' : drillLevel === 'sido' ? 'sig' : 'emd'}
+                  externalSelectedCode={selectedRegion?.code}
+                  onRegionSelect={handleRegionSelect}
+                  onGoBack={drillUp}
+                />
+              ) : (
+                /* 히트맵 뷰: Treemap */
+                <div className="relative w-full" style={{ height: 'clamp(360px, 48vh, 520px)' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <Treemap
+                      data={mapHeatmapData}
+                      dataKey="size"
+                      stroke="#fff"
+                      isAnimationActive={false}
+                      content={({ x, y, width, height, name, fill, textColor, size }: any) => {
+                        if (!width || !height || width < 2 || height < 2) return null;
+                        const shortName = (name || '').replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim() || (name || '').slice(0, 3);
+                        const tc = textColor || '#fff';
+                        return (
+                          <g
+                            onMouseEnter={(e) => {
+                              const rect = (e.currentTarget.closest('.recharts-responsive-container') as HTMLElement)?.getBoundingClientRect();
+                              if (rect) setHeatmapHover({ name: name || '', size: size || 0, x: e.clientX - rect.left, y: e.clientY - rect.top });
+                            }}
+                            onMouseMove={(e) => {
+                              const rect = (e.currentTarget.closest('.recharts-responsive-container') as HTMLElement)?.getBoundingClientRect();
+                              if (rect) setHeatmapHover(prev => prev ? ({ ...prev, x: e.clientX - rect.left, y: e.clientY - rect.top }) : null);
+                            }}
+                            onMouseLeave={() => setHeatmapHover(null)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1.5} rx={2}
+                              style={{ transition: 'opacity 0.15s' }}
+                              opacity={heatmapHover && heatmapHover.name !== name ? 0.45 : 1} />
+                            {width > 30 && height > 22 && (
+                              <text x={x + width / 2} y={y + height / 2 - 6} textAnchor="middle" dominantBaseline="central" fill={tc}
+                                fontSize={Math.min(width / 5, height / 2.5, 12)} fontWeight="700"
+                                stroke={tc === '#ffffff' ? 'rgba(0,0,0,0.3)' : 'none'} strokeWidth={tc === '#ffffff' ? 0.3 : 0}
+                                paintOrder="stroke" style={{ pointerEvents: 'none' }}>
+                                {shortName}
+                              </text>
+                            )}
+                            {width > 40 && height > 35 && (
+                              <text x={x + width / 2} y={y + height / 2 + 8} textAnchor="middle" dominantBaseline="central" fill={tc}
+                                fontSize={Math.min(width / 6, 10)} fontWeight="500" style={{ pointerEvents: 'none', opacity: 0.8 }}>
+                                {(size || 0).toLocaleString()}
+                              </text>
+                            )}
+                          </g>
+                        );
+                      }}
+                    />
+                  </ResponsiveContainer>
+                  {/* 히트맵 툴팁 */}
+                  {heatmapHover && (() => {
+                    const sorted = [...mapHeatmapData].sort((a, b) => b.size - a.size);
+                    const rank = sorted.findIndex(d => d.name === heatmapHover.name) + 1;
+                    const total = mapHeatmapData.reduce((s, d) => s + d.size, 0);
+                    const share = total > 0 ? ((heatmapHover.size / total) * 100).toFixed(1) : '0';
+                    return (
+                      <div className="absolute z-50 pointer-events-none bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[170px]"
+                        style={{ left: Math.min(heatmapHover.x + 12, 200), top: Math.max(heatmapHover.y - 60, 0) }}>
+                        <div className="flex items-center justify-between mb-1 pb-1 border-b border-gray-100">
+                          <span className="font-semibold text-gray-800">{heatmapHover.name}</span>
+                          <span className="text-[9px] bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded font-medium">{analyticsPeriodLabel}</span>
+                        </div>
+                        <div className="flex justify-between py-0.5"><span className="text-gray-500">{selectedMapCard.label}</span><span className="font-bold text-blue-600">{heatmapHover.size.toLocaleString()}</span></div>
+                        <div className="flex justify-between py-0.5"><span className="text-gray-500">순위</span><span className="font-bold text-gray-700">{rank}/{mapHeatmapData.length}</span></div>
+                        <div className="flex justify-between py-0.5"><span className="text-gray-500">비중</span><span className="font-bold text-gray-700">{share}%</span></div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* ── 처리 단계 범례 (항상 표시) ── */}
+            <div className="px-3 py-2 border-t border-gray-100 bg-gray-50/50 shrink-0">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-[10px] font-medium text-gray-500 mr-1">처리 단계:</span>
+                {STAGE_KEYS.map(key => (
+                  <span key={key} className="flex items-center gap-1 text-[10px] text-gray-600">
+                    <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: STAGE_COLORS_MAP[key] }} />
+                    {STAGE_LABELS[key]}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1526,11 +1623,11 @@ export function NationalDashboard() {
         ═══════════════════════════════════════════════════════ */}
         <div className={`flex flex-col gap-2 overflow-y-auto ${
           layoutMode === 'desktop' 
-            ? 'min-w-0 shrink-0 h-full' 
+            ? 'min-w-0 h-full' 
             : layoutMode === 'tablet'
             ? 'hidden'
             : 'w-full shrink-0'
-        }`}style={{width: "49%"}} >
+        }`}>
           
           {/* ═══ 분석 기간 선택 (좌측 요약 + 우측 분석에만 적용) ═══ */}
           <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between">
@@ -1539,7 +1636,7 @@ export function NationalDashboard() {
               <span className="text-[9px] text-gray-400 mt-0.5">좌측 요약 및 우측 분석 차트에 적용</span>
             </div>
             <div className="flex items-center gap-1">
-              {(['week', 'month', 'quarter'] as const).map(period => (
+              {(['week', 'month', 'quarter', 'year'] as const).map(period => (
                 <button
                   key={period}
                   onClick={() => setAnalyticsPeriod(period)}
@@ -1549,7 +1646,7 @@ export function NationalDashboard() {
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
-                  {period === 'week' ? '주간' : period === 'month' ? '월간' : '분기'}
+                  {period === 'week' ? '주간' : period === 'month' ? '월간' : period === 'quarter' ? '분기' : '연간(누적)'}
                 </button>
               ))}
             </div>

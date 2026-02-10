@@ -1,385 +1,576 @@
-import React, { useState } from 'react';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Button } from '../ui/button';
-import { Input } from '../ui/input';
-import { Search, AlertTriangle, CheckCircle, Download, Filter, Eye } from 'lucide-react';
+import {
+  Download, Shield, AlertTriangle, CheckCircle, Clock,
+  Activity, Eye, User, MapPin, FileText,
+  ExternalLink, ChevronDown, ChevronUp, Filter, Search,
+  XCircle, Rocket, AlertCircle,
+} from 'lucide-react';
+import type { TabContext } from '../../lib/useTabContext';
+import {
+  MOCK_UNIFIED_AUDIT,
+  type UnifiedAuditEvent,
+  type UnifiedEventType,
+  type EventSeverity,
+  type EventStatus,
+} from '../../mocks/mockCentralOps';
 
-const violations = [
-  {
-    date: '2026-01-24',
-    center: '강남구 센터',
-    type: '권한 없는 PII 접근 시도',
-    count: 1,
-    status: 'reviewing',
-    severity: 'high',
-    user: '김상담',
-    details: 'L2 권한으로 타 센터 케이스 개인정보 열람 시도'
-  },
-  {
-    date: '2026-01-18',
-    center: '서초구 센터',
-    type: '타 센터 케이스 접근',
-    count: 1,
-    status: 'resolved',
-    severity: 'medium',
-    user: '이센터',
-    details: '관할 구역 외 케이스 접근, 시스템 권한 재교육 완료'
-  },
-  {
-    date: '2026-01-15',
-    center: '송파구 센터',
-    type: 'SLA 기준 위반',
-    count: 3,
-    status: 'resolved',
-    severity: 'low',
-    user: '박직원',
-    details: '업무 과부하로 인한 지연, 인력 재배치로 해결'
-  },
-];
-
-const centerOverrideRate = [
-  { center: '강남구 센터', rate: 8, status: 'good' },
-  { center: '서초구 센터', rate: 12, status: 'good' },
-  { center: '송파구 센터', rate: 22, status: 'warning' },
-  { center: '관악구 센터', rate: 10, status: 'good' },
-  { center: '구로구 센터', rate: 15, status: 'warning' },
-  { center: '영등포구 센터', rate: 9, status: 'good' },
-];
-
-const complianceChecklist = [
-  { item: '위험 점수, 확률 미노출', status: 'pass', description: '시민 화면에서 수치 표현 없음 확인' },
-  { item: '진단 관련 용어 미사용', status: 'pass', description: "'진단', '질환', '발병' 등 금지 용어 없음" },
-  { item: '목적 제한 명시', status: 'pass', description: '복지 목적 외 사용 금지 안내 포함' },
-  { item: '선택적 참여 강조', status: 'pass', description: '시민에게 선택권 강조 문구 적용' },
-];
-
-const auditLogs = [
-  { 
-    timestamp: '2026-01-24 14:32:15', 
-    user: '김상담 (강남구)', 
-    action: 'PII 접근 시도', 
-    resource: 'CASE-2024-1234',
-    result: '차단됨',
-    ip: '192.168.1.45',
-    severity: 'high'
-  },
-  { 
-    timestamp: '2026-01-24 13:15:22', 
-    user: '이센터 (중앙)', 
-    action: 'KPI 정의 수정', 
-    resource: 'KPI-001',
-    result: '성공',
-    ip: '10.0.1.23',
-    severity: 'low'
-  },
-  { 
-    timestamp: '2026-01-24 11:48:30', 
-    user: '박관리 (서울시)', 
-    action: '권한 변경', 
-    resource: 'USER-2024-5678',
-    result: '성공',
-    ip: '172.16.0.89',
-    severity: 'medium'
-  },
-  { 
-    timestamp: '2026-01-24 10:22:18', 
-    user: '최담당 (부산시)', 
-    action: '케이스 조회', 
-    resource: 'CASE-2024-5432',
-    result: '성공',
-    ip: '203.241.100.12',
-    severity: 'low'
-  },
-  { 
-    timestamp: '2026-01-23 16:45:09', 
-    user: '정직원 (대구시)', 
-    action: '모델 변경 요청', 
-    resource: 'CR-2026-003',
-    result: '성공',
-    ip: '211.234.78.45',
-    severity: 'medium'
-  },
-];
-
-function getStatusBadge(status: string) {
-  switch (status) {
-    case 'reviewing':
-      return <span className="inline-flex items-center px-2 py-1 rounded text-xs bg-orange-50 text-orange-700 border border-orange-200">검토 중</span>;
-    case 'resolved':
-      return <span className="inline-flex items-center px-2 py-1 rounded text-xs bg-green-50 text-green-700 border border-green-200">해결됨</span>;
-    default:
-      return <span className="inline-flex items-center px-2 py-1 rounded text-xs bg-gray-50 text-gray-700 border border-gray-200">{status}</span>;
-  }
+/* ─── Props ─── */
+interface ComplianceAuditProps {
+  context?: TabContext;
+  onNavigate?: (page: string, ctx?: Partial<TabContext>) => void;
 }
 
-function getSeverityBadge(severity: string) {
-  switch (severity) {
-    case 'high':
-      return <span className="inline-flex items-center px-2 py-1 rounded text-xs bg-red-50 text-red-700">높음</span>;
-    case 'medium':
-      return <span className="inline-flex items-center px-2 py-1 rounded text-xs bg-orange-50 text-orange-700">중간</span>;
-    case 'low':
-      return <span className="inline-flex items-center px-2 py-1 rounded text-xs bg-gray-50 text-gray-700">낮음</span>;
-    default:
-      return null;
-  }
+/* ─── 준수 체크리스트 (Snapshot용) ─── */
+const complianceSnapshot = [
+  { item: '위험 점수·확률 미노출', ok: true },
+  { item: '진단 관련 용어 미사용', ok: true },
+  { item: '목적 제한 명시', ok: true },
+  { item: '선택적 참여 강조', ok: true },
+];
+
+/* ─── 이벤트 타입 메타 ─── */
+const EVENT_TYPE_META: Record<UnifiedEventType, { icon: React.ReactNode; label: string; color: string; dotColor: string }> = {
+  violation:     { icon: <XCircle className="h-4 w-4" />,     label: '규정 위반',   color: 'text-red-600',    dotColor: 'bg-red-500' },
+  policy_change: { icon: <Activity className="h-4 w-4" />,    label: '정책 변경',   color: 'text-blue-600',   dotColor: 'bg-blue-500' },
+  model_deploy:  { icon: <Rocket className="h-4 w-4" />,      label: '모델 배포',   color: 'text-purple-600', dotColor: 'bg-purple-500' },
+  resolution:    { icon: <CheckCircle className="h-4 w-4" />, label: '조치 완료',   color: 'text-green-600',  dotColor: 'bg-green-500' },
+};
+
+const SEVERITY_META: Record<EventSeverity, { cls: string; label: string }> = {
+  high:   { cls: 'bg-red-50 text-red-700 border-red-200', label: '높음' },
+  medium: { cls: 'bg-amber-50 text-amber-700 border-amber-200', label: '중간' },
+  low:    { cls: 'bg-gray-100 text-gray-600 border-gray-200', label: '낮음' },
+};
+
+const STATUS_META: Record<EventStatus, { cls: string; label: string; icon: React.ReactNode }> = {
+  reviewing: { cls: 'bg-orange-50 text-orange-700 border-orange-200', label: '검토 중', icon: <Clock className="h-3 w-3" /> },
+  resolved:  { cls: 'bg-green-50 text-green-700 border-green-200',   label: '해결됨', icon: <CheckCircle className="h-3 w-3" /> },
+  pending:   { cls: 'bg-purple-50 text-purple-700 border-purple-200', label: '대기',   icon: <Clock className="h-3 w-3" /> },
+};
+
+/* ─── KPI 요약 계산 ─── */
+function computeKpiSummary(events: UnifiedAuditEvent[]) {
+  const allEvents = MOCK_UNIFIED_AUDIT;
+  const totalViolations = allEvents.filter(e => e.type === 'violation').length;
+  const unresolved = allEvents.filter(e => e.type === 'violation' && e.status !== 'resolved').length;
+  const highSeverity = allEvents.filter(e => e.severity === 'high').length;
+  const recent30 = events.length;
+  return { totalViolations, unresolved, highSeverity, recent30 };
 }
 
-export function ComplianceAudit() {
+/* ═══ 메인 컴포넌트 ═══ */
+export function ComplianceAudit({ context, onNavigate }: ComplianceAuditProps) {
+  /* 필터 상태 */
+  const [typeFilter, setTypeFilter] = useState<UnifiedEventType | 'all'>('all');
+  const [severityFilter, setSeverityFilter] = useState<EventSeverity | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<EventStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDate, setSelectedDate] = useState('');
 
-  const filteredLogs = auditLogs.filter(log => {
-    const matchesSearch = 
-      log.user.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.action.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.resource.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    return matchesSearch;
-  });
+  /* 선택 상태 */
+  const [selectedId, setSelectedId] = useState<string | null>(context?.auditId || null);
+  const [showCompliance, setShowCompliance] = useState(false);
+  const detailRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (selectedId && detailRef.current) {
+      detailRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [selectedId]);
+
+  /* 필터링 */
+  const filteredEvents = useMemo(() => {
+    let result = [...MOCK_UNIFIED_AUDIT];
+    if (typeFilter !== 'all') result = result.filter(e => e.type === typeFilter);
+    if (severityFilter !== 'all') result = result.filter(e => e.severity === severityFilter);
+    if (statusFilter !== 'all') result = result.filter(e => e.status === statusFilter);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(e =>
+        e.title.toLowerCase().includes(q) ||
+        e.actor.toLowerCase().includes(q) ||
+        e.target.toLowerCase().includes(q) ||
+        (e.center?.toLowerCase().includes(q))
+      );
+    }
+    return result.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [typeFilter, severityFilter, statusFilter, searchQuery]);
+
+  const selected = useMemo(() => MOCK_UNIFIED_AUDIT.find(e => e.id === selectedId) || null, [selectedId]);
+  const kpiSummary = useMemo(() => computeKpiSummary(filteredEvents), [filteredEvents]);
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
+    <div className="space-y-4 p-1">
+      {/* ═══ Header ═══ */}
       <div className="flex justify-between items-start">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">규정 준수 및 감사</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            시스템 접근 이력 및 규정 위반 모니터링
+          <p className="text-xs text-gray-500 mt-0.5">
+            문제 발생 → 변경 이력 → 개입 근거를 하나의 흐름에서 추적합니다.
           </p>
         </div>
-        <Button>
-          <Download className="h-4 w-4 mr-2" />
-          감사 보고서 내보내기
+        <Button size="sm" onClick={() => alert('감사 보고서 내보내기 (mock)')}>
+          <Download className="h-4 w-4 mr-2" />감사 보고서 내보내기
         </Button>
       </div>
 
-      {/* Violations */}
-      <Card>
-        <CardHeader>
-          <CardTitle>규정 위반 내역</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">날짜</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">센터</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">위반 유형</th>
-                  <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">건수</th>
-                  <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">심각도</th>
-                  <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">조치 상태</th>
-                  <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">작업</th>
-                </tr>
-              </thead>
-              <tbody>
-                {violations.map((violation, idx) => (
-                  <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-sm text-gray-600">{violation.date}</td>
-                    <td className="py-3 px-4 text-sm font-medium text-gray-900">{violation.center}</td>
-                    <td className="py-3 px-4 text-sm text-gray-900">{violation.type}</td>
-                    <td className="py-3 px-4 text-sm text-center text-gray-900">{violation.count}</td>
-                    <td className="py-3 px-4 text-center">
-                      {getSeverityBadge(violation.severity)}
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      {getStatusBadge(violation.status)}
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <button className="text-blue-600 hover:text-blue-800 text-sm flex items-center gap-1 mx-auto">
-                        <Eye className="h-4 w-4" />
-                        상세
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      {/* ═══ [A] 감사 상태 요약 (Status Bar) ═══ */}
+      <div className={`rounded-xl border-2 p-4 ${
+        kpiSummary.unresolved > 0 ? 'border-red-300 bg-gradient-to-r from-red-50 via-white to-white' : 'border-green-300 bg-gradient-to-r from-green-50 via-white to-white'
+      }`}>
+        {/* 요약 문장 앵커 */}
+        <p className="text-sm font-bold text-gray-900 mb-3">
+          현재 감사 상태:{' '}
+          {kpiSummary.unresolved > 0 ? (
+            <>
+              고위험 이벤트 <span className="text-red-600">{kpiSummary.highSeverity}건</span> 중{' '}
+              <span className="text-red-600 underline underline-offset-2 decoration-2">{kpiSummary.unresolved}건 미해결</span>
+            </>
+          ) : (
+            <span className="text-green-700">모든 위반 사항 해결 완료</span>
+          )}
+        </p>
+        {/* KPI 수치 행 */}
+        <div className="grid grid-cols-4 gap-3">
+          <KpiCell icon={<AlertTriangle className="h-4 w-4 text-red-500" />}
+            label="전체 규정 위반" value={kpiSummary.totalViolations}
+            highlight={kpiSummary.totalViolations > 0} />
+          <KpiCell icon={<Clock className="h-4 w-4 text-orange-500" />}
+            label="미해결 위반" value={kpiSummary.unresolved}
+            highlight={kpiSummary.unresolved > 0} />
+          <KpiCell icon={<AlertCircle className="h-4 w-4 text-rose-600" />}
+            label="고위험 이벤트" value={kpiSummary.highSeverity}
+            highlight={kpiSummary.highSeverity > 0} />
+          <KpiCell icon={<Activity className="h-4 w-4 text-blue-500" />}
+            label="최근 30일 이벤트" value={kpiSummary.recent30}
+            highlight={false} />
+        </div>
+      </div>
 
-          {violations.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              위반 내역이 없습니다.
+      {/* ═══ 필터 바 ═══ */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Filter className="h-4 w-4 text-gray-400 shrink-0" />
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as UnifiedEventType | 'all')}
+          className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500">
+          <option value="all">모든 유형</option>
+          <option value="violation">🔴 규정 위반</option>
+          <option value="policy_change">🔵 정책 변경</option>
+          <option value="model_deploy">🟣 모델 배포</option>
+          <option value="resolution">🟢 조치 완료</option>
+        </select>
+        <select value={severityFilter} onChange={e => setSeverityFilter(e.target.value as EventSeverity | 'all')}
+          className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500">
+          <option value="all">모든 심각도</option>
+          <option value="high">높음</option>
+          <option value="medium">중간</option>
+          <option value="low">낮음</option>
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as EventStatus | 'all')}
+          className="text-xs border border-gray-300 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-blue-500">
+          <option value="all">모든 상태</option>
+          <option value="reviewing">검토 중</option>
+          <option value="resolved">해결됨</option>
+          <option value="pending">대기</option>
+        </select>
+        <div className="relative flex-1 min-w-[180px] max-w-[280px]">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+          <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+            placeholder="제목, 담당자, 대상 검색…"
+            className="w-full text-xs border border-gray-300 rounded-lg pl-8 pr-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+        </div>
+        <span className="text-[11px] text-gray-400 ml-auto">{filteredEvents.length}건</span>
+      </div>
+
+      {/* ═══ [B] 메인 영역: 타임라인(좌 4) + 상세(우 6) ═══ */}
+      <div className="grid gap-4" style={{ gridTemplateColumns: '2fr 3fr' }}>
+
+        {/* ── 좌측: 감사 이벤트 타임라인 (Vertical Rail) ── */}
+        <div className="relative max-h-[calc(100vh-380px)] overflow-y-auto pr-1">
+          {/* 고정 세로 기준선 */}
+          <div className="absolute left-[15px] top-0 bottom-0 w-0.5 bg-gray-200 z-0" />
+
+          {filteredEvents.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+              <FileText className="h-8 w-8 mb-2" />
+              <p className="text-sm">필터 조건에 맞는 이벤트가 없습니다.</p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+            {filteredEvents.map((ev) => {
+              const meta = EVENT_TYPE_META[ev.type];
+              const sevMeta = SEVERITY_META[ev.severity];
+              const stMeta = STATUS_META[ev.status];
+              const isSelected = selectedId === ev.id;
+              const isHighRisk = ev.severity === 'high' && ev.type === 'violation';
+              const isResolution = ev.type === 'resolution';
+              return (
+                <button key={ev.id} onClick={() => setSelectedId(ev.id)}
+                  className={`w-full text-left relative pl-10 pr-3 rounded-lg border transition-all z-10 ${
+                    isSelected
+                      ? 'border-blue-400 bg-blue-50 shadow-md ring-1 ring-blue-200'
+                      : isHighRisk
+                        ? 'border-red-200 bg-red-50/40 hover:bg-red-50/80 hover:border-red-300'
+                        : isResolution
+                          ? 'border-transparent hover:border-gray-200 hover:bg-gray-50/60'
+                          : 'border-transparent hover:border-gray-200 hover:bg-gray-50/80'
+                  } ${isHighRisk ? 'py-4' : isResolution ? 'py-2' : 'py-3'}`}>
+
+                  {/* 아이콘 on rail */}
+                  <div className={`absolute left-[7px] rounded-full border-2 border-white shadow-sm flex items-center justify-center ${
+                    isHighRisk ? 'top-4 w-[18px] h-[18px] ring-2 ring-red-300' : 'top-3 w-4 h-4'
+                  } ${meta.dotColor}`}>
+                    {isHighRisk && <span className="block w-1.5 h-1.5 rounded-full bg-white" />}
+                  </div>
+
+                  {/* 1행: 이벤트 성격 + 상태배지(우측) */}
+                  <div className="flex items-center justify-between gap-1.5 mb-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                        isHighRisk ? meta.color + ' bg-red-100 border-red-300' : meta.color
+                      }`}>
+                        {meta.icon}<span className="ml-0.5">{meta.label}</span>
+                      </span>
+                      {ev.severity !== 'low' && (
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] border font-medium ${sevMeta.cls}`}>{sevMeta.label}</span>
+                      )}
+                    </div>
+                    <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] border shrink-0 ${stMeta.cls}`}>
+                      {stMeta.icon}<span>{stMeta.label}</span>
+                    </span>
+                  </div>
+
+                  {/* 2행: 핵심 문장 */}
+                  <div className={`leading-snug mb-0.5 ${
+                    isHighRisk ? 'text-sm font-bold text-red-900' : isResolution ? 'text-xs font-medium text-gray-600' : 'text-sm font-semibold text-gray-900'
+                  }`}>{ev.title}</div>
+
+                  {/* 3행: 부가 정보 (낮은 우선순위) */}
+                  <div className={`flex items-center gap-2 text-[11px] ${
+                    isResolution ? 'text-gray-400' : 'text-gray-500'
+                  }`}>
+                    <span>{ev.actor}</span>
+                    {ev.center && <><span>·</span><span>{ev.center}</span></>}
+                    <span className="ml-auto text-[10px] text-gray-400 font-mono">
+                      {new Date(ev.timestamp).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
 
-      {/* Center Override Rate */}
-      <Card>
-        <CardHeader>
-          <CardTitle>센터별 수동 변경률</CardTitle>
-          <p className="text-sm text-gray-500">
-            시스템 권장 대비 수동 변경 비율. 높은 비율은 규칙 재검토를 시사할 수 있습니다.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {centerOverrideRate.map((center, idx) => (
-              <div key={idx} className="flex items-center gap-4">
-                <div className="w-32 text-sm text-gray-900">{center.center}</div>
-                <div className="flex-1 bg-gray-100 rounded-full h-6 overflow-hidden">
-                  <div
-                    className={`h-full flex items-center justify-end pr-2 text-xs font-medium text-white ${
-                      center.rate <= 15 ? 'bg-green-500' : 'bg-orange-500'
-                    }`}
-                    style={{ width: `${Math.min(center.rate * 4, 100)}%` }}
-                  >
-                    {center.rate > 5 && `${center.rate}%`}
-                  </div>
-                </div>
-                <div className="w-16 text-right text-sm font-medium text-gray-900">
-                  {center.rate}%
-                </div>
-                <div className="w-16 text-right">
-                  {center.status === 'good' ? (
-                    <span className="text-xs text-green-600">양호</span>
-                  ) : (
-                    <span className="text-xs text-orange-600">검토</span>
-                  )}
-                </div>
+        {/* ── 우측: 감사 브리핑 패널 ── */}
+        <div ref={detailRef}>
+          {!selected ? (
+            <div className="flex flex-col items-center justify-center h-80 text-gray-400 border border-dashed border-gray-200 rounded-xl">
+              <Eye className="h-10 w-10 mb-3 text-gray-300" />
+              <p className="text-sm font-medium">좌측 타임라인에서 이벤트를 선택하세요</p>
+              <p className="text-xs mt-1">위반·변경·배포·조치 이벤트의 상세 정보를 확인합니다.</p>
+            </div>
+          ) : (
+            <div className="space-y-3 max-h-[calc(100vh-380px)] overflow-y-auto pr-1">
+
+              {/* ★ 판단 요약 문장 (시각적 앵커) */}
+              <div className={`rounded-xl p-3.5 border-2 ${
+                selected.type === 'violation' && selected.status !== 'resolved'
+                  ? 'bg-red-50 border-red-300'
+                  : selected.type === 'violation'
+                    ? 'bg-amber-50 border-amber-300'
+                    : 'bg-slate-50 border-slate-200'
+              }`}>
+                <p className={`text-sm font-bold leading-relaxed ${
+                  selected.type === 'violation' && selected.status !== 'resolved'
+                    ? 'text-red-900'
+                    : 'text-gray-900'
+                }`}>
+                  판단 요약:{' '}
+                  <span className="font-normal">
+                    {selected.type === 'violation'
+                      ? `${selected.violationType || '규정 위반'}으로 인한 ${selected.target} 관련 이슈.`
+                      : selected.type === 'resolution'
+                        ? `${selected.target} 관련 조치 완료.`
+                        : `${selected.target} 관련 ${EVENT_TYPE_META[selected.type].label} 이벤트.`}
+                    {' '}
+                    {selected.status === 'resolved'
+                      ? '조치 완료 — 확산 없음.'
+                      : selected.status === 'reviewing'
+                        ? '현재 검토 중 — 개입 필요.'
+                        : '대기 상태.'}
+                  </span>
+                </p>
               </div>
-            ))}
-          </div>
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <p className="text-sm text-gray-600">
-              <strong>목표:</strong> 15% 이하. 송파구 센터, 구로구 센터는 규칙 적합성 검토 권장.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
 
-      {/* Citizen-facing Compliance Checklist */}
-      <Card>
-        <CardHeader>
-          <CardTitle>시민 대상 표현 준수 체크리스트</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {complianceChecklist.map((item, idx) => (
-              <div key={idx} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
-                <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <div className="font-medium text-sm text-gray-900">{item.item}</div>
-                  <div className="text-xs text-gray-600 mt-1">{item.description}</div>
-                </div>
-                <span className="text-xs px-2 py-1 rounded bg-green-50 text-green-700 border border-green-200">
-                  준수
+              {/* 이벤트 헤더 (축소) */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold border ${
+                  selected.type === 'violation' ? 'bg-red-100 text-red-700 border-red-300' : EVENT_TYPE_META[selected.type].color
+                }`}>
+                  {EVENT_TYPE_META[selected.type].icon}
+                  {EVENT_TYPE_META[selected.type].label}
+                </span>
+                <span className={`px-2 py-1 rounded text-[10px] border ${SEVERITY_META[selected.severity].cls}`}>
+                  {SEVERITY_META[selected.severity].label}
+                </span>
+                <span className={`inline-flex items-center gap-0.5 px-2 py-1 rounded text-[10px] border ${STATUS_META[selected.status].cls}`}>
+                  {STATUS_META[selected.status].icon}
+                  <span>{STATUS_META[selected.status].label}</span>
+                </span>
+                <span className="ml-auto text-[11px] text-gray-400">
+                  {new Date(selected.timestamp).toLocaleString('ko-KR')}
                 </span>
               </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Audit Log */}
-      <Card>
-        <CardHeader>
-          <div className="flex justify-between items-start">
-            <div>
-              <CardTitle>시스템 감사 로그</CardTitle>
-              <p className="text-sm text-gray-500 mt-1">모든 주요 시스템 활동 기록</p>
-            </div>
-            <div className="flex gap-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                <Input
-                  type="text"
-                  placeholder="사용자, 작업, 리소스 검색..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 w-64"
-                />
+              <div className="px-0.5">
+                <h3 className="text-base font-bold text-gray-900">{selected.title}</h3>
+                <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
+                  <span>{selected.actor} ({selected.actorRole})</span>
+                  {selected.center && <><span>·</span><span>{selected.center}</span></>}
+                </div>
               </div>
-              <Button variant="outline" size="sm">
-                <Filter className="h-4 w-4 mr-2" />
-                필터
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">시간</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">사용자</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">작업</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">리소스</th>
-                  <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">결과</th>
-                  <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">IP 주소</th>
-                  <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">심각도</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLogs.map((log, idx) => (
-                  <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="py-3 px-4 text-xs font-mono text-gray-600">{log.timestamp}</td>
-                    <td className="py-3 px-4 text-sm text-gray-900">{log.user}</td>
-                    <td className="py-3 px-4 text-sm text-gray-900">{log.action}</td>
-                    <td className="py-3 px-4 text-sm font-mono text-gray-600">{log.resource}</td>
-                    <td className="py-3 px-4 text-center">
-                      <span className={`inline-flex items-center px-2 py-1 rounded text-xs ${
-                        log.result === '성공' 
-                          ? 'bg-green-50 text-green-700' 
-                          : 'bg-red-50 text-red-700'
-                      }`}>
-                        {log.result}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-xs font-mono text-gray-600">{log.ip}</td>
-                    <td className="py-3 px-4 text-center">
-                      {getSeverityBadge(log.severity)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
 
-          <div className="mt-4 pt-4 border-t border-gray-200 flex justify-between items-center">
-            <div className="text-sm text-gray-500">
-              총 {filteredLogs.length}개 항목 표시
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm">이전</Button>
-              <Button variant="outline" size="sm">다음</Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+              {/* ── 브리핑 카드: 문제 요약 ── */}
+              <BriefCard
+                icon={<AlertTriangle className="h-4 w-4 text-red-500" />}
+                keyword="문제 요약"
+                accentBorder={selected.type === 'violation'}
+              >
+                {selected.violationType && (
+                  <div className="flex gap-2 text-xs">
+                    <span className="text-gray-400 w-16 shrink-0">유형</span>
+                    <span className="font-semibold text-gray-900">{selected.violationType}</span>
+                  </div>
+                )}
+                {selected.violatedRegulation && (
+                  <div className="flex gap-2 text-xs">
+                    <span className="text-gray-400 w-16 shrink-0">규정</span>
+                    <span className="font-semibold text-red-700">{selected.violatedRegulation}</span>
+                  </div>
+                )}
+                {!selected.violationType && !selected.violatedRegulation && (
+                  <div className="flex gap-2 text-xs">
+                    <span className="text-gray-400 w-16 shrink-0">대상</span>
+                    <span className="font-semibold text-gray-900">{selected.target}</span>
+                  </div>
+                )}
+              </BriefCard>
 
-      {/* Security Policies */}
-      <Card>
-        <CardHeader>
-          <CardTitle>보안 정책 문서</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            {[
-              { name: '개인정보 처리 방침', date: '2026-01-01', version: 'v3.0' },
-              { name: '데이터 접근 권한 정책', date: '2025-12-15', version: 'v2.1' },
-              { name: '감사 로그 보관 정책', date: '2025-11-20', version: 'v1.5' },
-              { name: 'AI 모델 거버넌스 규정', date: '2025-10-10', version: 'v2.0' },
-            ].map((doc, idx) => (
-              <div key={idx} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
-                <div>
-                  <div className="text-sm font-medium text-gray-900">{doc.name}</div>
-                  <div className="text-xs text-gray-500">
-                    최종 수정: {doc.date} • {doc.version}
+              {/* ── 브리핑 카드: 발생 원인 ── */}
+              <BriefCard
+                icon={<Search className="h-4 w-4 text-blue-500" />}
+                keyword="발생 원인"
+              >
+                <p className="text-xs text-gray-800 leading-relaxed">{selected.cause}</p>
+                {selected.relatedChangeId && (
+                  <button onClick={() => onNavigate?.('model-governance', { changeId: selected.relatedChangeId })}
+                    className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 hover:underline mt-1">
+                    <ExternalLink className="h-3 w-3" />관련 정책 변경 보기
+                  </button>
+                )}
+              </BriefCard>
+
+              {/* ── 브리핑 카드: 개입 주체 ── */}
+              <BriefCard
+                icon={<User className="h-4 w-4 text-indigo-500" />}
+                keyword="개입 주체"
+              >
+                <div className="grid grid-cols-3 gap-2">
+                  {selected.requestor && <RoleChip label="요청자" value={selected.requestor} color="blue" />}
+                  {selected.approver && <RoleChip label="승인자" value={selected.approver} color="green" />}
+                  {selected.executor && <RoleChip label="실행자" value={selected.executor} color="gray" />}
+                </div>
+              </BriefCard>
+
+              {/* ── 브리핑 카드: 판단 근거 ── */}
+              <BriefCard
+                icon={<Shield className="h-4 w-4 text-emerald-600" />}
+                keyword="판단 근거"
+              >
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5 mb-2">
+                  <p className="text-xs text-emerald-900 leading-relaxed font-medium">{selected.rationale}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {selected.policyRef && (
+                    <div className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
+                      <FileText className="h-3.5 w-3.5 text-gray-400 mt-0.5 shrink-0" />
+                      <div>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide">정책 문서</div>
+                        <div className="text-xs font-medium text-gray-800">{selected.policyRef}</div>
+                      </div>
+                    </div>
+                  )}
+                  {selected.internalStandardId && (
+                    <div className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
+                      <Shield className="h-3.5 w-3.5 text-gray-400 mt-0.5 shrink-0" />
+                      <div>
+                        <div className="text-[10px] text-gray-400 uppercase tracking-wide">내부 기준</div>
+                        <div className="text-xs font-medium text-gray-800">{selected.internalStandardId}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {selected.approvalComment && (
+                  <div className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded-lg mt-2">
+                    <MapPin className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
+                    <div>
+                      <div className="text-[10px] text-amber-600 uppercase tracking-wide">처리 코멘트</div>
+                      <div className="text-xs text-amber-900">{selected.approvalComment}</div>
+                    </div>
+                  </div>
+                )}
+                {/* KPI 스냅샷 */}
+                <div className="grid grid-cols-3 gap-2 pt-2">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-2">
+                    <div className="text-[10px] text-blue-600 mb-0.5">당시 SLA</div>
+                    <div className="text-base font-bold text-blue-900">{selected.kpiSnapshot.slaRate}%</div>
+                  </div>
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-2">
+                    <div className="text-[10px] text-red-600 mb-0.5">리스크 Top 3</div>
+                    {selected.kpiSnapshot.riskTop3.map((r, i) => (
+                      <div key={i} className="text-[10px] font-medium text-red-800">{i + 1}. {r}</div>
+                    ))}
+                  </div>
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-2">
+                    <div className="text-[10px] text-gray-500 mb-0.5">컨텍스트 지역</div>
+                    <div className="text-xs font-bold text-gray-900">{selected.kpiSnapshot.regionContext}</div>
                   </div>
                 </div>
-                <Button variant="outline" size="sm">
-                  <Download className="h-4 w-4 mr-2" />
-                  다운로드
+              </BriefCard>
+
+              {/* [E] Compliance Snapshot — 위반 시 자동확장 */}
+              <ComplianceBar
+                items={complianceSnapshot}
+                forceExpand={selected.type === 'violation' && selected.status !== 'resolved'}
+                showCompliance={showCompliance}
+                setShowCompliance={setShowCompliance}
+              />
+
+              {/* 액션 버튼 */}
+              <div className="flex gap-2 justify-end pt-1">
+                {selected.relatedChangeId && (
+                  <Button variant="outline" size="sm"
+                    onClick={() => onNavigate?.('model-governance', { changeId: selected.relatedChangeId })}
+                    className="text-blue-600 text-xs">
+                    <ExternalLink className="h-3.5 w-3.5 mr-1" />정책 영향 분석 보기
+                  </Button>
+                )}
+                <Button variant="outline" size="sm"
+                  onClick={() => alert('JSON 감사 보고서 내보내기 (mock)')}
+                  className="text-gray-600 text-xs">
+                  <Download className="h-3.5 w-3.5 mr-1" />Export JSON
                 </Button>
               </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══ 서브 컴포넌트 ═══ */
+
+/** [A] KPI 셀 — 상태 바 내부 */
+function KpiCell({ icon, label, value, highlight }: {
+  icon: React.ReactNode; label: string; value: number; highlight: boolean;
+}) {
+  return (
+    <div className={`rounded-lg p-2.5 border transition-colors ${
+      highlight
+        ? 'border-red-200 bg-white shadow-sm'
+        : 'border-transparent bg-white/60'
+    }`}>
+      <div className="flex items-center gap-1.5 mb-0.5">
+        {icon}
+        <span className="text-[11px] text-gray-500">{label}</span>
+      </div>
+      <div className={`text-xl font-bold ${
+        highlight ? 'text-red-700' : 'text-gray-700'
+      }`}>{value}</div>
+    </div>
+  );
+}
+
+/** [D] 브리핑 카드 래퍼 */
+function BriefCard({ icon, keyword, children, accentBorder }: {
+  icon: React.ReactNode; keyword: string;
+  children: React.ReactNode; accentBorder?: boolean;
+}) {
+  return (
+    <div className={`rounded-lg border p-3 space-y-2 ${
+      accentBorder ? 'border-red-200 bg-red-50/30' : 'border-gray-200 bg-white'
+    }`}>
+      <div className="flex items-center gap-2 mb-1">
+        {icon}
+        <span className="text-xs font-bold text-gray-700 uppercase tracking-wide">{keyword}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** [E] 준수 상태 바 */
+function ComplianceBar({ items, forceExpand, showCompliance, setShowCompliance }: {
+  items: { item: string; ok: boolean }[];
+  forceExpand: boolean;
+  showCompliance: boolean;
+  setShowCompliance: (v: boolean) => void;
+}) {
+  const allOk = items.every((c) => c.ok);
+  const open = forceExpand || showCompliance;
+  const failCount = items.filter((c) => !c.ok).length;
+  return (
+    <div className={`rounded-lg border overflow-hidden ${
+      !allOk ? 'border-red-200' : 'border-gray-200'
+    }`}>
+      <button
+        onClick={() => setShowCompliance(!showCompliance)}
+        className={`w-full flex items-center justify-between px-4 py-2 transition-colors ${
+          !allOk ? 'bg-red-50 hover:bg-red-100' : 'bg-gray-50 hover:bg-gray-100'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          {allOk
+            ? <CheckCircle className="h-3.5 w-3.5 text-green-600" />
+            : <XCircle className="h-3.5 w-3.5 text-red-600" />}
+          <span className="text-xs font-semibold text-gray-700">준수 상태</span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+            allOk
+              ? 'text-green-700 bg-green-50 border-green-200'
+              : 'text-red-700 bg-red-50 border-red-200'
+          }`}>
+            {allOk ? `${items.length}/${items.length} 준수` : `${failCount}건 위반`}
+          </span>
+        </div>
+        {open ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+      </button>
+      {open && (
+        <div className="px-4 py-2 bg-white grid grid-cols-2 gap-x-4 gap-y-1">
+          {items.map((c, i) => (
+            <div key={i} className="flex items-center gap-2 py-1">
+              {c.ok
+                ? <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                : <div className="w-1.5 h-1.5 rounded-full bg-red-500" />}
+              <span className={`text-xs ${c.ok ? 'text-gray-600' : 'text-red-700 font-medium'}`}>{c.item}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 역할 칩 */
+function RoleChip({ label, value, color }: { label: string; value: string; color: 'blue' | 'green' | 'gray' }) {
+  const cls: Record<string, string> = {
+    blue: 'bg-blue-50 border-blue-200 text-blue-800',
+    green: 'bg-green-50 border-green-200 text-green-800',
+    gray: 'bg-gray-50 border-gray-200 text-gray-800',
+  };
+  return (
+    <div className={`rounded-lg border p-2 ${cls[color]}`}>
+      <div className="text-[10px] uppercase tracking-wide opacity-60 mb-0.5">{label}</div>
+      <div className="text-xs font-medium leading-tight">{value}</div>
     </div>
   );
 }

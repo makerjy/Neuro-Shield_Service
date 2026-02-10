@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { CentralCenterLayout } from './CentralCenterLayout';
 import { NationalDashboard } from './NationalDashboard';
 import { KPIDictionary } from './KPIDictionary';
@@ -6,6 +6,7 @@ import ModelApplyDashboard from './ModelApplyDashboard';
 import { ModelGovernance } from './ModelGovernance';
 import { QualityMonitoring } from './QualityMonitoring';
 import { ComplianceAudit } from './ComplianceAudit';
+import { DEFAULT_TAB_CONTEXT, mergeContext, type TabContext } from '../../lib/useTabContext';
 
 interface CentralCenterAppProps {
   userRole: 'central_admin' | 'policy_maker';
@@ -19,21 +20,31 @@ export function CentralCenterApp({
   onLogout 
 }: CentralCenterAppProps) {
   const [currentPage, setCurrentPage] = useState('national-dashboard');
+  const [tabContext, setTabContext] = useState<TabContext>(DEFAULT_TAB_CONTEXT);
+
+  /** 탭 간 딥-링크 네비게이션 */
+  const handleNavigate = useCallback(
+    (page: string, ctx?: Partial<TabContext>) => {
+      setTabContext((prev) => mergeContext(prev, ctx));
+      setCurrentPage(page);
+    },
+    [],
+  );
 
   const renderContent = () => {
     switch (currentPage) {
       case 'national-dashboard':
-        return <NationalDashboard />;
+        return <NationalDashboard onNavigate={handleNavigate} />;
       case 'kpi-dictionary':
         return <KPIDictionary />;
       case 'model-apply':
         return <ModelApplyDashboard />;
       case 'model-governance':
-        return <ModelGovernance />;
+        return <ModelGovernance context={tabContext} onNavigate={handleNavigate} />;
       case 'quality-monitoring':
-        return <QualityMonitoring />;
+        return <QualityMonitoring context={tabContext} onNavigate={handleNavigate} />;
       case 'compliance-audit':
-        return <ComplianceAudit />;
+        return <ComplianceAudit context={tabContext} onNavigate={handleNavigate} />;
       case 'settings':
         return (
           <div className="space-y-6">
@@ -44,7 +55,7 @@ export function CentralCenterApp({
           </div>
         );
       default:
-        return <NationalDashboard />;
+        return <NationalDashboard onNavigate={handleNavigate} />;
     }
   };
 

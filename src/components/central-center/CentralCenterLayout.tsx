@@ -30,11 +30,11 @@ interface CentralCenterLayoutProps {
 
 const navigationItems = [
   { id: 'national-dashboard', label: '전국운영대시보드', icon: Home, roles: ['central_admin', 'policy_maker'] },
-  { id: 'kpi-dictionary', label: 'KPI 사전', icon: BarChart3, roles: ['central_admin', 'policy_maker'] },
   { id: 'model-apply', label: '모델 적용 센터', icon: Brain, roles: ['central_admin', 'policy_maker'] },
   { id: 'model-governance', label: '모델/규칙 변경 관리', icon: Shield, roles: ['central_admin'] },
   { id: 'quality-monitoring', label: '데이터&모델 품질', icon: Database, roles: ['central_admin', 'policy_maker'] },
   { id: 'compliance-audit', label: '규정 준수 및 감사', icon: ClipboardCheck, roles: ['central_admin'] },
+  { id: 'kpi-dictionary', label: 'KPI 사전', icon: BarChart3, roles: ['central_admin', 'policy_maker'] },
   { id: 'settings', label: '설정', icon: Settings, roles: ['central_admin', 'policy_maker'] },
 ];
 
@@ -144,10 +144,26 @@ export function CentralCenterLayout({
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-h-0">
         {/* Header */}
-        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
-          <h1 className="text-base font-bold text-gray-900">
-            {navigationItems.find(n => n.id === currentPage)?.label || '대시보드'}
-          </h1>
+        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+          <div className="flex items-center gap-3">
+            {/* 현재 페이지 타이틀 */}
+            {(() => {
+              const current = navigationItems.find(n => n.id === currentPage);
+              const Icon = current?.icon || Home;
+              const label = current?.label || '전국운영대시보드';
+              return (
+                <div className="flex items-center gap-2.5">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 shadow-sm">
+                    <Icon className="h-4 w-4 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-[15px] font-bold text-slate-800 leading-tight">{label}</h2>
+                    <p className="text-[10px] text-slate-400 leading-tight">Neuro-Shield 중앙관리 시스템</p>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
 
           <div className="flex items-center gap-4">
             {/* Notifications */}
@@ -222,7 +238,7 @@ export function CentralCenterLayout({
         </header>
 
         {/* Main Content */}
-        <main className="flex-1 w-full min-h-0 relative flex flex-col">
+        <main className="flex-1 w-full overflow-auto relative">
           {children}
         </main>
       </div>

@@ -28,6 +28,9 @@ import { COLOR_PALETTES } from '../../lib/choroplethScale';
 import { useDrillState, getDrillLevelLabel } from '../../lib/useDrillState';
 import { getKPIsByPanel, getKPIsForLevel, fetchKPIData, getChartEnabledKPIs } from '../../lib/kpiDictionary';
 import { KPIDefinition, DrillLevel, DonutDataItem, BarDataItem } from '../../lib/kpi.types';
+import { Activity, Shield, Database, ExternalLink as ExternalLinkIcon } from 'lucide-react';
+import type { TabContext } from '../../lib/useTabContext';
+import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS } from '../../mocks/mockCentralOps';
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    ResizeObserver 인라인 훅 (새 파일 생성 금지에 따른 인라인 구현)
@@ -825,7 +828,11 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
 /* ═══════════════════════════════════════════════════════════════════════════════
    메인 컴포넌트
 ═══════════════════════════════════════════════════════════════════════════════ */
-export function NationalDashboard() {
+interface NationalDashboardProps {
+  onNavigate?: (page: string, ctx?: Partial<TabContext>) => void;
+}
+
+export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   // SSOT: 단일 상태로 통합
   const [selectedKpiId, setSelectedKpiId] = useState<string>('total_cases');
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly' | 'quarterly' | 'yearly_cum'>('weekly');
@@ -1643,6 +1650,54 @@ export function NationalDashboard() {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* ── 운영 요약 (탭 엔트리 포인트) ── */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
+            <span className="text-xs font-semibold text-gray-700">운영 요약</span>
+            {/* 정책 변경 */}
+            <button
+              onClick={() => onNavigate?.('model-governance', {})}
+              className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-blue-50 transition-colors text-left"
+            >
+              <Activity className="h-4 w-4 text-blue-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-medium text-gray-900">최근 정책 변경</div>
+                <div className="text-[10px] text-gray-500 truncate">
+                  {MOCK_POLICY_CHANGES.filter(c => c.deployStatus === 'deployed').length}건 배포 · {MOCK_POLICY_CHANGES.filter(c => c.deployStatus === 'pending').length}건 대기
+                </div>
+              </div>
+              <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
+            </button>
+            {/* 감사 */}
+            <button
+              onClick={() => onNavigate?.('compliance-audit', {})}
+              className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-orange-50 transition-colors text-left"
+            >
+              <Shield className="h-4 w-4 text-orange-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-medium text-gray-900">규정 준수 현황</div>
+                <div className="text-[10px] text-gray-500">위반 0건 · 체크리스트 4/4 준수</div>
+              </div>
+              <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
+            </button>
+            {/* 품질 */}
+            <button
+              onClick={() => onNavigate?.('quality-monitoring', {})}
+              className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-purple-50 transition-colors text-left"
+            >
+              <Database className="h-4 w-4 text-purple-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-medium text-gray-900">데이터 & 모델 품질</div>
+                <div className="text-[10px] text-gray-500">
+                  경고 {MOCK_QUALITY_ALERTS.filter(a => a.severity !== 'info').length}건
+                  {MOCK_QUALITY_ALERTS.filter(a => a.severity === 'critical').length > 0 && (
+                    <span className="ml-1 text-red-600 font-medium">· 심각 {MOCK_QUALITY_ALERTS.filter(a => a.severity === 'critical').length}건</span>
+                  )}
+                </div>
+              </div>
+              <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
+            </button>
           </div>
         </div>
 

@@ -59,6 +59,8 @@ type GeoMapPanelProps = {
   externalSelectedCode?: string; // 외부에서 선택된 지역 코드
   onRegionSelect?: (payload: { level: Level; code: string; name: string }) => void;
   onGoBack?: () => void; // 상위 레벨로 돌아가기 콜백
+  externalColorScheme?: MapColorScheme; // 외부 KPI 기반 색상 스킴
+  hideLegendPanel?: boolean; // 하단 범례 패널 숨김
 };
 
 function getFeatureCode(feature: any): string {
@@ -121,7 +123,9 @@ export function GeoMapPanel({
   externalLevel,
   externalSelectedCode,
   onRegionSelect,
-  onGoBack
+  onGoBack,
+  externalColorScheme,
+  hideLegendPanel = false
 }: GeoMapPanelProps) {
   const indicator = getGeoIndicator(indicatorId);
   const scopeKey = JSON.stringify(scope);
@@ -161,6 +165,9 @@ export function GeoMapPanel({
   const [showLegend, setShowLegend] = useState(true);
   const [legendCollapsed, setLegendCollapsed] = useState(true);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
+
+  // 외부 색상 스킴이 있으면 우선 사용 (KPI 연동)
+  const effectiveColorScheme = externalColorScheme ?? colorScheme;
 
   useEffect(() => {
     let mounted = true;
@@ -507,13 +514,13 @@ export function GeoMapPanel({
   const choroplethScale = useMemo(() => {
     const values = metricPoints.map(m => m.value);
     if (values.length === 0) return null;
-    return new ChoroplethScale(values, 'quantile', 7, colorScheme);
-  }, [metricPoints, colorScheme]);
+    return new ChoroplethScale(values, 'quantile', 7, effectiveColorScheme);
+  }, [metricPoints, effectiveColorScheme]);
 
   // 색상 팔레트 변경 시 KoreaDrilldownMap에 전달할 색상 배열
   const currentColors = useMemo(() => {
-    return getColorPalette(colorScheme);
-  }, [colorScheme]);
+    return getColorPalette(effectiveColorScheme);
+  }, [effectiveColorScheme]);
 
   const legendBins = useMemo(() => {
     return choroplethScale?.getLegendBins() ?? [];
@@ -634,6 +641,7 @@ export function GeoMapPanel({
                 )}
               </div>
 
+              {!hideLegendPanel && (<>
               {/* ═══════════════════════════════════════════════════════
                   SGIS Style Legend Control - 드롭다운 패널
                   - 색상 팔레트 선택
@@ -791,6 +799,7 @@ export function GeoMapPanel({
                   </div>
                 </div>
               </div>
+              </>)}
             </div>
           );
 

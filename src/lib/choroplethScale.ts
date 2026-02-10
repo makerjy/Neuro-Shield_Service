@@ -146,3 +146,41 @@ export function formatPercent(value: number, decimals: number = 1): string {
 export function formatRange(min: number, max: number): string {
   return `${formatNumber(min)} ~ ${formatNumber(max)}`;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   KPI 기반 색상 팔레트 매핑 유틸리티
+───────────────────────────────────────────────────────────── */
+export const KPI_PALETTE_MAP: Record<string, keyof typeof COLOR_PALETTES> = {
+  throughputNow: 'blue',
+  slaViolationRateNow: 'red',
+  dataShortageRateNow: 'heat',
+  activeIncidentsNow: 'green',
+};
+
+/** KPI 키에 해당하는 팔레트 이름 반환 */
+export function getKpiPalette(kpiKey: string): keyof typeof COLOR_PALETTES {
+  return KPI_PALETTE_MAP[kpiKey] ?? 'blue';
+}
+
+/** KPI 키에 해당하는 색상 배열 반환 */
+export function getKpiPaletteColors(kpiKey: string): string[] {
+  return COLOR_PALETTES[getKpiPalette(kpiKey)];
+}
+
+/** KPI 키에 해당하는 CSS 그라데이션 문자열 반환 */
+export function getKpiGradient(kpiKey: string): string {
+  const colors = getKpiPaletteColors(kpiKey);
+  return `linear-gradient(90deg, ${colors.join(', ')})`;
+}
+
+/** KPI 키에 해당하는 한글 라벨 */
+export const KPI_LABELS: Record<string, string> = {
+  throughputNow: '전국 운영 처리건수',
+  slaViolationRateNow: 'SLA 위반률',
+  dataShortageRateNow: '데이터 부족률',
+  activeIncidentsNow: '활성 이슈',
+};
+
+export function getKpiLabel(kpiKey: string): string {
+  return KPI_LABELS[kpiKey] ?? kpiKey;
+}

@@ -2,12 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HeaderBar } from '../components/HeaderBar';
 import { LeftKpiPanel } from '../components/LeftKpiPanel';
 import { GeoMapPanel } from '../components/GeoMapPanel';
-import { MapLegendAndControls } from '../components/MapLegendAndControls';
 import { RightAnalyticsPanel } from '../components/RightAnalyticsPanel';
 import { BottomTrendPanel } from '../components/BottomTrendPanel';
 import { fetchDashboard, RegionKey } from '../mocks/mockApi';
 import { SIDO_OPTIONS, SIGUNGU_OPTIONS } from '../mocks/mockGeo';
 import { GEO_INDICATORS } from '../components/geomap/geoIndicators';
+import { getKpiLabel } from '../lib/choroplethScale';
+import type { KpiHeaderOption } from '../components/HeaderBar';
 
 const metricOptions = GEO_INDICATORS.map((item) => ({ id: item.id, label: item.label }));
 
@@ -20,13 +21,7 @@ const STAGE_LEGEND = [
   { key: 'completed', label: '완료', color: '#16a34a' }
 ];
 
-/* KPI 선택에 따른 지도 색상 그라데이션 */
-const KPI_COLOR_GRADIENTS: Record<string, string> = {
-  throughputNow: 'linear-gradient(90deg, #e5effe, #93c5fd, #3b82f6, #1e3a8a)',
-  slaViolationRateNow: 'linear-gradient(90deg, #fef2f2, #fca5a5, #ef4444, #991b1b)',
-  dataShortageRateNow: 'linear-gradient(90deg, #fefce8, #fde68a, #f59e0b, #92400e)',
-  activeIncidentsNow: 'linear-gradient(90deg, #f0fdf4, #86efac, #22c55e, #14532d)'
-};
+/* KPI 색상 매핑은 lib/choroplethScale.ts의 KPI_PALETTE_MAP 유틸리티로 통합 */
 
 export function NationalOpsDashboard() {
   const [period, setPeriod] = useState<'week' | 'month' | 'quarter' | 'year'>('week');
@@ -37,11 +32,6 @@ export function NationalOpsDashboard() {
   const [mapLevels, setMapLevels] = useState(7);
   const [mapAlpha, setMapAlpha] = useState(0.95);
   const [selectedKpi, setSelectedKpi] = useState<string>('throughputNow');
-
-  const kpiColorGradient = useMemo(
-    () => KPI_COLOR_GRADIENTS[selectedKpi] ?? KPI_COLOR_GRADIENTS.throughputNow,
-    [selectedKpi]
-  );
 
   const [data, setData] = useState<any | null>(null);
   const [status, setStatus] = useState<'loadingInitial' | 'loadingRegion' | 'ready' | 'empty' | 'partial' | 'error'>('loadingInitial');
@@ -141,6 +131,52 @@ export function NationalOpsDashboard() {
   const highlightCode = selectedSigungu || (selectedSido !== 'all' ? selectedSido : undefined);
   const metricLabel = metricOptions.find((item) => item.id === metricId)?.label ?? '지표';
 
+  /* ── 드릴업 핸들러 (브라우저 history back 대신 상위 행정구역으로 이동) ── */
+  const canDrillUp = selectedSido !== 'all';
+  const drillUp = useCallback(() => {
+    if (selectedSigungu) {
+      setSelectedSigungu('');
+      return;
+    }
+    if (selectedSido !== 'all') {
+      setSelectedSido('all');
+    }
+  }, [selectedSido, selectedSigungu]);
+
+  /* ── 지역명 역조회 맵 ── */
+  const regionLookup = useMemo(() => {
+    const map = new Map<string, string>();
+    SIDO_OPTIONS.forEach(s => map.set(s.code, s.label));
+    Object.values(SIGUNGU_OPTIONS).forEach(options => {
+      (options as Array<{ code: string; label: string }>).forEach(s => map.set(s.code, s.label));
+    });
+    return map;
+  }, []);
+
+  /* ── 리스크 Top-5: 현재 드릴 레벨의 하위 구역 기준 ── */
+  const top5Regions = useMemo(() => {
+    if (!data?.map) return [];
+    return [...data.map]
+      .sort((a: any, b: any) => b.loadScore - a.loadScore)
+      .slice(0, 5)
+      .map((item: any) => ({
+        ...item,
+        name: regionLookup.get(item.regionId) ?? item.regionId,
+      }));
+  }, [data?.map, regionLookup]);
+
+  /* ── 헤더 KPI 요약 옵션 ── */
+  const kpiHeaderOptions: KpiHeaderOption[] = useMemo(() => {
+    if (!data?.kpi) return [];
+    const kpi = data.kpi;
+    return [
+      { key: 'throughputNow', label: '처리건수', value: `${Math.round(kpi.throughputNow).toLocaleString()}건`, status: 'normal' as const },
+      { key: 'slaViolationRateNow', label: 'SLA 위반률', value: `${kpi.slaViolationRateNow.toFixed(2)}%`, status: (kpi.slaViolationRateNow >= 3 ? 'risk' : 'normal') as 'normal' | 'risk' },
+      { key: 'dataShortageRateNow', label: '데이터 부족률', value: `${kpi.dataShortageRateNow.toFixed(2)}%`, status: (kpi.dataShortageRateNow >= 5 ? 'warn' : 'normal') as 'normal' | 'warn' },
+      { key: 'activeIncidentsNow', label: '활성 이슈', value: `${kpi.activeIncidentsNow}건`, status: 'normal' as const },
+    ];
+  }, [data?.kpi]);
+
   const showLoading = status === 'loadingInitial' || status === 'loadingRegion';
   const partial = status === 'partial';
 
@@ -164,6 +200,12 @@ export function NationalOpsDashboard() {
         lastUpdated={lastUpdated}
         isRefreshing={isRefreshing}
         onRefresh={() => loadDashboard('refresh')}
+        kpiOptions={kpiHeaderOptions}
+        selectedKpi={selectedKpi}
+        onSelectKpi={setSelectedKpi}
+        regionLabel={regionLabel}
+        canDrillUp={canDrillUp}
+        onDrillUp={drillUp}
       />
 
       <main className="mx-auto max-w-[1400px] px-6 py-6 pb-12">
@@ -198,25 +240,55 @@ export function NationalOpsDashboard() {
               onRegionSelect={handleMapSelect}
               period={period}
               onPeriodChange={setPeriod}
-              onModeChange={setMapMode}
-            >
-              <MapLegendAndControls
-                mode={mapMode}
-                levels={mapLevels}
-                alpha={mapAlpha}
-                onModeChange={setMapMode}
-                onLevelsChange={setMapLevels}
-                onAlphaChange={setMapAlpha}
-                onReset={() => {
-                  setMapMode('fill');
-                  setMapLevels(7);
-                  setMapAlpha(0.95);
-                }}
-                minLabel="낮음"
-                maxLabel="높음"
-                colorGradient={kpiColorGradient}
-              />
-            </GeoMapPanel>
+              selectedKpi={selectedKpi}
+              drillLabel={regionLabel !== '전국' ? regionLabel : undefined}
+              canDrillUp={canDrillUp}
+              onDrillUp={drillUp}
+            />
+
+            {/* ── 리스크 Top-5 (현재 드릴 레벨 하위 구역 기준) ── */}
+            {top5Regions.length > 0 && (
+              <div className="rounded-md border border-gray-200 bg-white px-4 py-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-gray-700">
+                    리스크 Top-5 ({regionLabel} 하위 구역)
+                  </span>
+                  <span className="text-[10px] text-gray-400">{getKpiLabel(selectedKpi)} 기준</span>
+                </div>
+                <div className="space-y-1">
+                  {top5Regions.map((item: any, idx: number) => (
+                    <button
+                      key={item.regionId}
+                      type="button"
+                      className="flex items-center justify-between w-full rounded px-2 py-1.5 text-xs hover:bg-gray-50 transition"
+                      onClick={() =>
+                        handleMapSelect({
+                          level: selectedSido === 'all' ? 'ctprvn' : 'sig',
+                          code: item.regionId,
+                          name: item.name,
+                        })
+                      }
+                    >
+                      <span className="text-gray-700">
+                        <span className="inline-block w-5 font-semibold text-gray-900">{idx + 1}</span>
+                        {item.name}
+                      </span>
+                      <span
+                        className={`font-medium ${
+                          item.riskGrade === 'critical'
+                            ? 'text-red-600'
+                            : item.riskGrade === 'warn'
+                              ? 'text-amber-600'
+                              : 'text-gray-600'
+                        }`}
+                      >
+                        {item.loadScore.toFixed(1)}점
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 사건 단계 범례 (항상 표시) */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-gray-200 bg-white px-4 py-2.5">

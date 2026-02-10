@@ -1,5 +1,5 @@
 import React from 'react';
-import { HelpCircle, Printer, RefreshCw, Share2 } from 'lucide-react';
+import { ArrowLeft, HelpCircle, Printer, RefreshCw, Share2 } from 'lucide-react';
 
 export type MetricOption = {
   id: string;
@@ -9,6 +9,13 @@ export type MetricOption = {
 export type RegionOption = {
   code: string;
   label: string;
+};
+
+export type KpiHeaderOption = {
+  key: string;
+  label: string;
+  value: string;
+  status: 'normal' | 'warn' | 'risk';
 };
 
 type HeaderBarProps = {
@@ -26,6 +33,14 @@ type HeaderBarProps = {
   lastUpdated: string;
   isRefreshing: boolean;
   onRefresh: () => void;
+  /* KPI 요약 버튼 */
+  kpiOptions?: KpiHeaderOption[];
+  selectedKpi?: string;
+  onSelectKpi?: (key: string) => void;
+  /* 드릴 상태 */
+  regionLabel?: string;
+  canDrillUp?: boolean;
+  onDrillUp?: () => void;
 };
 
 const periodLabels: Record<'week' | 'month' | 'quarter' | 'year', string> = {
@@ -49,13 +64,77 @@ export function HeaderBar({
   onSigunguChange,
   lastUpdated,
   isRefreshing,
-  onRefresh
+  onRefresh,
+  kpiOptions,
+  selectedKpi,
+  onSelectKpi,
+  regionLabel,
+  canDrillUp,
+  onDrillUp
 }: HeaderBarProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-gray-200 bg-white">
       <div className="mx-auto max-w-[1400px] px-6 py-3">
+        {/* ── 1줄: KPI 요약 버튼 그룹 (주요 인터랙션) ── */}
+        {kpiOptions && kpiOptions.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            {kpiOptions.map((opt) => {
+              const isActive = selectedKpi === opt.key;
+              const statusBorder =
+                opt.status === 'risk'
+                  ? 'border-red-400'
+                  : opt.status === 'warn'
+                    ? 'border-amber-400'
+                    : 'border-gray-200';
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => onSelectKpi?.(opt.key)}
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition-all ${
+                    isActive
+                      ? 'ring-2 ring-blue-500 border-blue-400 bg-blue-50 shadow-sm'
+                      : `${statusBorder} bg-white hover:bg-gray-50`
+                  }`}
+                >
+                  <span className="text-gray-500">{opt.label}</span>
+                  <span
+                    className={`font-bold ${
+                      opt.status === 'risk'
+                        ? 'text-red-600'
+                        : opt.status === 'warn'
+                          ? 'text-amber-600'
+                          : 'text-gray-900'
+                    }`}
+                  >
+                    {opt.value}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── 2줄: 타이틀 + 드릴업 + 필터 + 유틸 ── */}
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="text-lg font-bold text-gray-900">전국운영대시보드</div>
+          <div className="flex items-center gap-3">
+            {canDrillUp && onDrillUp && (
+              <button
+                type="button"
+                onClick={onDrillUp}
+                className="rounded-full border border-gray-200 p-1.5 text-gray-500 hover:bg-gray-100 transition"
+                title="상위 단계로 이동"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            )}
+            <div>
+              <div className="text-base font-bold text-gray-900">전국운영대시보드</div>
+              {regionLabel && regionLabel !== '전국' && (
+                <div className="text-[11px] text-gray-500 mt-0.5">현재: {regionLabel}</div>
+              )}
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             <select
               className="rounded border border-gray-200 bg-white px-2 py-1 text-xs"

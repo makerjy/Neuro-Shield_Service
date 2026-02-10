@@ -23,7 +23,8 @@ import {
   Scatter,
   ZAxis,
 } from 'recharts';
-import { GeoMapPanel } from '../geomap/GeoMapPanel';
+import { GeoMapPanel, type MapColorScheme } from '../geomap/GeoMapPanel';
+import { COLOR_PALETTES } from '../../lib/choroplethScale';
 import { useDrillState, getDrillLevelLabel } from '../../lib/useDrillState';
 import { getKPIsByPanel, getKPIsForLevel, fetchKPIData, getChartEnabledKPIs } from '../../lib/kpiDictionary';
 import { KPIDefinition, DrillLevel, DonutDataItem, BarDataItem } from '../../lib/kpi.types';
@@ -826,7 +827,11 @@ export function NationalDashboard() {
   // SSOT: 단일 상태로 통합
   const [selectedKpiId, setSelectedKpiId] = useState<string>('total_cases');
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly' | 'quarterly' | 'yearly_cum'>('weekly');
-  const [analyticsPeriod, setAnalyticsPeriod] = useState<'week' | 'month' | 'quarter' | 'year'>('week');
+  // analyticsPeriod를 periodType에서 자동 파생 (기간 통합: 센터 패널 기간 토글이 전체 분석 기간 제어)
+  const analyticsPeriod = useMemo<'week' | 'month' | 'quarter' | 'year'>(() => {
+    const map = { weekly: 'week', monthly: 'month', quarterly: 'quarter', yearly_cum: 'year' } as const;
+    return map[periodType];
+  }, [periodType]);
   const [visualizationMode, setVisualizationMode] = useState<'geomap' | 'heatmap'>('geomap');
   const [activeDonutIndex, setActiveDonutIndex] = useState<number | null>(null);
   const [showKpiSummaryTable, setShowKpiSummaryTable] = useState(false);
@@ -1163,59 +1168,7 @@ export function NationalDashboard() {
   return (
     <div ref={containerRef} className="flex flex-col bg-gray-50 h-full overflow-auto">
       {/* ═══════════════════════════════════════════════════════════
-          상단 KPI 선택 카드 (버튼) - 지도 히트맵 KPI 변경
-      ═══════════════════════════════════════════════════════════ */}
-      <div className="bg-white border-b border-gray-200 px-4 py-2 shrink-0">
-        <div className="flex items-center gap-2 overflow-x-auto">
-          {MAP_KPI_CARDS.map((card) => {
-            const isActive = selectedKpiId === card.id;
-            const value = card.getValue(statsScopeKey);
-            const kpiColorStyles: Record<string, { border: string; bg: string; ring: string; text: string; value: string }> = {
-              blue:   { border: 'border-blue-500',   bg: 'bg-blue-50',   ring: 'ring-blue-200',   text: 'text-blue-700',   value: 'text-blue-600' },
-              green:  { border: 'border-green-500',  bg: 'bg-green-50',  ring: 'ring-green-200',  text: 'text-green-700',  value: 'text-green-600' },
-              red:    { border: 'border-red-500',    bg: 'bg-red-50',    ring: 'ring-red-200',    text: 'text-red-700',    value: 'text-red-600' },
-              orange: { border: 'border-amber-500',  bg: 'bg-amber-50',  ring: 'ring-amber-200',  text: 'text-amber-700',  value: 'text-amber-600' },
-              purple: { border: 'border-purple-500', bg: 'bg-purple-50', ring: 'ring-purple-200', text: 'text-purple-700', value: 'text-purple-600' },
-            };
-            const cs = kpiColorStyles[card.color] || kpiColorStyles.blue;
-            return (
-              <button
-                key={card.id}
-                onClick={() => setSelectedKpiId(card.id)}
-                aria-pressed={isActive}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all min-w-[140px] text-left ${
-                  isActive
-                    ? `${cs.border} ${cs.bg} ring-2 ${cs.ring} shadow-sm`
-                    : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                <div className={`p-1.5 rounded-md ${card.iconBg}`}>
-                  {card.id === 'total_cases' && <TrendingUp className="h-4 w-4" />}
-                  {card.id === 'completion' && <BarChart3 className="h-4 w-4" />}
-                  {card.id === 'consultation_time' && <Download className="h-4 w-4" />}
-                  {card.id === 'followup_dropout' && <HelpCircle className="h-4 w-4" />}
-                  {card.id === 'dropout' && <ChevronRight className="h-4 w-4" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-[10px] font-medium truncate ${isActive ? cs.text : 'text-gray-500'}`}>
-                    {card.label}
-                  </div>
-                  <div className={`text-sm font-bold ${isActive ? cs.value : 'text-gray-800'}`}>
-                    {value.toLocaleString()}
-                    <span className="text-[10px] font-normal ml-0.5">{card.unit}</span>
-                  </div>
-                </div>
-                {isActive && (
-                  <div className={`w-1.5 h-1.5 rounded-full shrink-0`} style={{ backgroundColor: COLORS[card.color as keyof typeof COLORS] || COLORS.blue }} />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ═══════════════════════════════════════════════════════════
-          HEADER
+          HEADER (타이틀 상단 배치)
       ═══════════════════════════════════════════════════════════ */}
       <header className="h-15 bg-white border-b border-gray-200 flex items-center px-4 shrink-0">
         <h2 className="text-sm font-bold text-gray-800">전국 운영 대시보드</h2>
@@ -1266,6 +1219,58 @@ export function NationalDashboard() {
           <button className="p-1.5 hover:bg-gray-100 rounded"><Download className="h-4 w-4" /></button>
         </div>
       </header>
+
+      {/* ═══════════════════════════════════════════════════════════
+          KPI 선택 카드 (버튼) - 지도 히트맵 KPI 변경 (헤더 아래 배치)
+      ═══════════════════════════════════════════════════════════ */}
+      <div className="bg-white border-b border-gray-200 px-4 py-2 shrink-0">
+        <div className="flex items-center gap-2 overflow-x-auto">
+          {MAP_KPI_CARDS.map((card) => {
+            const isActive = selectedKpiId === card.id;
+            const value = card.getValue(statsScopeKey);
+            const kpiColorStyles: Record<string, { border: string; bg: string; ring: string; text: string; value: string }> = {
+              blue:   { border: 'border-blue-500',   bg: 'bg-blue-50',   ring: 'ring-blue-200',   text: 'text-blue-700',   value: 'text-blue-600' },
+              green:  { border: 'border-green-500',  bg: 'bg-green-50',  ring: 'ring-green-200',  text: 'text-green-700',  value: 'text-green-600' },
+              red:    { border: 'border-red-500',    bg: 'bg-red-50',    ring: 'ring-red-200',    text: 'text-red-700',    value: 'text-red-600' },
+              orange: { border: 'border-amber-500',  bg: 'bg-amber-50',  ring: 'ring-amber-200',  text: 'text-amber-700',  value: 'text-amber-600' },
+              purple: { border: 'border-purple-500', bg: 'bg-purple-50', ring: 'ring-purple-200', text: 'text-purple-700', value: 'text-purple-600' },
+            };
+            const cs = kpiColorStyles[card.color] || kpiColorStyles.blue;
+            return (
+              <button
+                key={card.id}
+                onClick={() => setSelectedKpiId(card.id)}
+                aria-pressed={isActive}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all min-w-[140px] text-left ${
+                  isActive
+                    ? `${cs.border} ${cs.bg} ring-2 ${cs.ring} shadow-sm`
+                    : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <div className={`p-1.5 rounded-md ${card.iconBg}`}>
+                  {card.id === 'total_cases' && <TrendingUp className="h-4 w-4" />}
+                  {card.id === 'completion' && <BarChart3 className="h-4 w-4" />}
+                  {card.id === 'consultation_time' && <Download className="h-4 w-4" />}
+                  {card.id === 'followup_dropout' && <HelpCircle className="h-4 w-4" />}
+                  {card.id === 'dropout' && <ChevronRight className="h-4 w-4" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-[10px] font-medium truncate ${isActive ? cs.text : 'text-gray-500'}`}>
+                    {card.label}
+                  </div>
+                  <div className={`text-sm font-bold ${isActive ? cs.value : 'text-gray-800'}`}>
+                    {value.toLocaleString()}
+                    <span className="text-[10px] font-normal ml-0.5">{card.unit}</span>
+                  </div>
+                </div>
+                {isActive && (
+                  <div className={`w-1.5 h-1.5 rounded-full shrink-0`} style={{ backgroundColor: COLORS[card.color as keyof typeof COLORS] || COLORS.blue }} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* ═══════════════════════════════════════════════════════════
           MAIN CONTENT - CSS Grid 3열 레이아웃
@@ -1427,7 +1432,7 @@ export function NationalDashboard() {
         }`}>
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col min-h-[400px]">
             {/* ── 중앙 패널 헤더: 뒤로/제목 + 지도/히트맵 토글 + 기간 토글 ── */}
-            <div className="px-4 py-2.5 border-b border-gray-200 bg-white rounded-t-lg">
+            <div className="px-4 py-3.5 border-b border-gray-200 bg-white rounded-t-lg">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
                   {drillLevel !== 'nation' && (
@@ -1511,7 +1516,8 @@ export function NationalDashboard() {
                   externalSelectedCode={selectedRegion?.code}
                   onRegionSelect={handleRegionSelect}
                   onGoBack={drillUp}
-                  // colorScale, legendBins 등 SSOT 기반 전달
+                  externalColorScheme={selectedMapCard.color as MapColorScheme}
+                  hideLegendPanel
                 />
               ) : (
                 <div className="relative w-full" style={{ height: 'clamp(320px, 44vh, 480px)' }}>
@@ -1547,16 +1553,19 @@ export function NationalDashboard() {
               )}
             </div>
 
-            {/* ── 처리 단계 범례 (항상 표시) ── */}
-            <div className="px-3 py-2 border-t border-gray-100 bg-gray-50/50 shrink-0">
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-[10px] font-medium text-gray-500 mr-1">처리 단계:</span>
-                {STAGE_KEYS.map(key => (
-                  <span key={key} className="flex items-center gap-1 text-[10px] text-gray-600">
-                    <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: STAGE_COLORS_MAP[key] }} />
-                    {STAGE_LABELS[key]}
-                  </span>
-                ))}
+            {/* ── KPI 색상 범례 (선택 KPI 기반 그라데이션) ── */}
+            <div className="px-3 py-2.5 border-t border-gray-100 bg-gray-50/50 shrink-0">
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] font-semibold text-gray-500 shrink-0">{selectedMapCard.label}</span>
+                <div className="flex-1 flex items-center gap-1.5">
+                  <span className="text-[9px] text-gray-400">낮음</span>
+                  <div className="flex-1 h-2.5 rounded-full overflow-hidden flex">
+                    {(COLOR_PALETTES[selectedMapCard.color as keyof typeof COLOR_PALETTES] || COLOR_PALETTES.blue).map((c: string, i: number) => (
+                      <div key={i} className="flex-1" style={{ backgroundColor: c }} />
+                    ))}
+                  </div>
+                  <span className="text-[9px] text-gray-400">높음</span>
+                </div>
               </div>
             </div>
           </div>
@@ -1574,29 +1583,6 @@ export function NationalDashboard() {
             : 'w-full shrink-0'
         }`}>
           
-          {/* ═══ 분석 기간 선택 (좌측 요약 + 우측 분석에만 적용) ═══ */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 flex items-center justify-between">
-            <div className="flex flex-col">
-              <span className="text-xs font-semibold text-gray-700">분석 기간</span>
-              <span className="text-[9px] text-gray-400 mt-0.5">좌측 요약 및 우측 분석 차트에 적용</span>
-            </div>
-            <div className="flex items-center gap-1">
-              {(['week', 'month', 'quarter', 'year'] as const).map(period => (
-                <button
-                  key={period}
-                  onClick={() => setAnalyticsPeriod(period)}
-                  className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
-                    analyticsPeriod === period
-                      ? 'bg-blue-500 text-white shadow-sm'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {period === 'week' ? '주간' : period === 'month' ? '월간' : period === 'quarter' ? '분기' : '연간(누적)'}
-                </button>
-              ))}
-            </div>
-          </div>
-
           {/* ═══ SLA × 데이터 충족률 리스크 매트릭스 (ScatterChart) ═══ */}
           <div className="bg-white border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">

@@ -464,7 +464,7 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: {
   // 시간 필터에 따른 X축 라벨 간격 및 포맷 조정
   // 주간: 7일 모두 표시, 월간: 3개월마다 표시, 분기: 모두 표시
   const xAxisInterval = analyticsPeriod === 'week' ? 0 : analyticsPeriod === 'month' ? 2 : analyticsPeriod === 'year' ? 3 : 0;
-  const timeRangeLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : analyticsPeriod === 'year' ? '연간' : '분기';
+  const timeRangeLabel = analyticsPeriod === 'week' ? '주간' : analyticsPeriod === 'month' ? '월간' : analyticsPeriod === 'year' ? '연간(누적)' : '분기';
   
   // 차트별 배경색 그라데이션 (구분용)
   const bgColors = [
@@ -746,18 +746,20 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
                   <div className="bg-white border border-gray-200 rounded-lg p-2.5 shadow-xl text-xs min-w-[140px]">
                     <div className="font-semibold text-gray-800 mb-1.5 pb-1 border-b border-gray-100">{label}</div>
                     {payload.map((p, i) => {
-                      const def = UNIFIED_KPI_DEFS.find(d => d.key === p.dataKey);
-                      if (!def) return null;
+                      const matched = UNIFIED_KPI_DEFS.find(d => d.key === p.dataKey);
+                      const pColor = matched?.color || p.color || '#6b7280';
+                      const pLabel = matched?.label || p.name || '';
+                      const pUnit = matched?.unit || '';
                       return (
-                        <div key={i} className="flex items-center justify-between gap-3 py-0.5">
-                          <div className="flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: def.color }} />
-                            <span className="text-gray-600">{def.label}</span>
-                          </div>
-                          <span className="font-semibold" style={{ color: def.color }}>
-                            {Number(p.value).toFixed(1)}{def.unit}
-                          </span>
+                      <div key={i} className="flex items-center justify-between gap-3 py-0.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: pColor }} />
+                          <span className="text-gray-600">{pLabel}</span>
                         </div>
+                        <span className="font-semibold" style={{ color: pColor }}>
+                          {Number(p.value).toFixed(1)}{pUnit}
+                        </span>
+                      </div>
                       );
                     })}
                   </div>
@@ -843,6 +845,11 @@ export function NationalDashboard() {
   const [containerRef, containerSize] = useResizeObserver<HTMLDivElement>();
   // 히트맵 호버 상태
   const [heatmapHover, setHeatmapHover] = useState<{ name: string; size: number; x: number; y: number } | null>(null);
+  // GeoMapPanel에서 전달받은 현재 지도에 표시된 하위 지역 목록
+  const [mapSubRegions, setMapSubRegions] = useState<{ id: string; name: string }[]>([]);
+  const handleSubRegionsChange = useCallback((regions: { code: string; name: string }[]) => {
+    setMapSubRegions(regions.map(r => ({ id: r.code, name: r.name })));
+  }, []);
 
   // 드릴다운 상태 (Zustand)
   const { drillLevel, drillPath, selectedRegion, drillDown, drillUp, drillTo, resetDrill } = useDrillState();
@@ -1031,8 +1038,111 @@ export function NationalDashboard() {
   const SLA_THRESHOLD = 95;
   const DATA_THRESHOLD = 93;
 
+  // 시도 → 시군구 매핑 (현재 선택 시도의 하위 행정구역)
+  const SIDO_SIGUNGU_MAP: Record<string, { id: string; name: string }[]> = {
+    '서울': [
+      {id:'11110',name:'종로구'},{id:'11140',name:'중구'},{id:'11170',name:'용산구'},{id:'11200',name:'성동구'},
+      {id:'11215',name:'광진구'},{id:'11230',name:'동대문구'},{id:'11260',name:'중랑구'},{id:'11290',name:'성북구'},
+      {id:'11305',name:'강북구'},{id:'11320',name:'도봉구'},{id:'11350',name:'노원구'},{id:'11380',name:'은평구'},
+      {id:'11410',name:'서대문구'},{id:'11440',name:'마포구'},{id:'11470',name:'양천구'},{id:'11500',name:'강서구'},
+      {id:'11530',name:'구로구'},{id:'11545',name:'금천구'},{id:'11560',name:'영등포구'},{id:'11590',name:'동작구'},
+      {id:'11620',name:'관악구'},{id:'11650',name:'서초구'},{id:'11680',name:'강남구'},{id:'11710',name:'송파구'},{id:'11740',name:'강동구'},
+    ],
+    '부산': [{id:'26110',name:'중구'},{id:'26140',name:'서구'},{id:'26170',name:'동구'},{id:'26200',name:'영도구'},{id:'26230',name:'부산진구'},{id:'26260',name:'동래구'},{id:'26290',name:'남구'},{id:'26320',name:'북구'},{id:'26350',name:'해운대구'},{id:'26380',name:'사하구'},{id:'26410',name:'금정구'},{id:'26440',name:'강서구'},{id:'26470',name:'연제구'},{id:'26500',name:'수영구'},{id:'26530',name:'사상구'},{id:'26710',name:'기장군'}],
+    '대구': [{id:'27110',name:'중구'},{id:'27140',name:'동구'},{id:'27170',name:'서구'},{id:'27200',name:'남구'},{id:'27230',name:'북구'},{id:'27260',name:'수성구'},{id:'27290',name:'달서구'},{id:'27710',name:'달성군'}],
+    '인천': [{id:'28110',name:'중구'},{id:'28140',name:'동구'},{id:'28177',name:'미추홀구'},{id:'28185',name:'연수구'},{id:'28200',name:'남동구'},{id:'28237',name:'부평구'},{id:'28245',name:'계양구'},{id:'28260',name:'서구'},{id:'28710',name:'강화군'},{id:'28720',name:'옹진군'}],
+    '광주': [{id:'29110',name:'동구'},{id:'29140',name:'서구'},{id:'29155',name:'남구'},{id:'29170',name:'북구'},{id:'29200',name:'광산구'}],
+    '대전': [{id:'30110',name:'동구'},{id:'30140',name:'중구'},{id:'30170',name:'서구'},{id:'30200',name:'유성구'},{id:'30230',name:'대덕구'}],
+    '울산': [{id:'31110',name:'중구'},{id:'31140',name:'남구'},{id:'31170',name:'동구'},{id:'31200',name:'북구'},{id:'31710',name:'울주군'}],
+    '세종': [{id:'36110',name:'세종시'}],
+    '경기': [
+      {id:'41111',name:'수원시'},{id:'41131',name:'성남시'},{id:'41150',name:'의정부시'},{id:'41171',name:'안양시'},
+      {id:'41190',name:'부천시'},{id:'41210',name:'광명시'},{id:'41220',name:'평택시'},{id:'41250',name:'동두천시'},
+      {id:'41271',name:'안산시'},{id:'41281',name:'고양시'},{id:'41290',name:'과천시'},{id:'41310',name:'구리시'},
+      {id:'41360',name:'남양주시'},{id:'41370',name:'오산시'},{id:'41390',name:'시흥시'},{id:'41410',name:'군포시'},
+      {id:'41430',name:'의왕시'},{id:'41450',name:'하남시'},{id:'41461',name:'용인시'},{id:'41463',name:'파주시'},
+      {id:'41480',name:'이천시'},{id:'41500',name:'안성시'},{id:'41550',name:'김포시'},{id:'41570',name:'화성시'},
+      {id:'41590',name:'광주시'},{id:'41610',name:'양주시'},{id:'41630',name:'포천시'},{id:'41670',name:'여주시'},
+    ],
+    '충북': [{id:'43110',name:'청주시'},{id:'43130',name:'충주시'},{id:'43150',name:'제천시'},{id:'43720',name:'보은군'},{id:'43730',name:'옥천군'},{id:'43740',name:'영동군'},{id:'43750',name:'증평군'},{id:'43760',name:'진천군'},{id:'43770',name:'괴산군'},{id:'43800',name:'음성군'},{id:'43810',name:'단양군'}],
+    '충남': [{id:'44130',name:'천안시'},{id:'44150',name:'공주시'},{id:'44180',name:'보령시'},{id:'44200',name:'아산시'},{id:'44210',name:'서산시'},{id:'44230',name:'논산시'},{id:'44250',name:'계룡시'},{id:'44270',name:'당진시'},{id:'44710',name:'금산군'},{id:'44760',name:'부여군'},{id:'44770',name:'서천군'},{id:'44790',name:'청양군'},{id:'44800',name:'홍성군'},{id:'44810',name:'예산군'},{id:'44825',name:'태안군'}],
+    '전북': [{id:'45111',name:'전주시'},{id:'45130',name:'군산시'},{id:'45140',name:'익산시'},{id:'45180',name:'정읍시'},{id:'45190',name:'남원시'},{id:'45210',name:'김제시'},{id:'45710',name:'완주군'},{id:'45720',name:'진안군'},{id:'45730',name:'무주군'},{id:'45740',name:'장수군'},{id:'45750',name:'임실군'},{id:'45770',name:'순창군'},{id:'45790',name:'고창군'},{id:'45800',name:'부안군'}],
+    '전남': [{id:'46110',name:'목포시'},{id:'46130',name:'여수시'},{id:'46150',name:'순천시'},{id:'46170',name:'나주시'},{id:'46230',name:'광양시'},{id:'46710',name:'담양군'},{id:'46720',name:'곡성군'},{id:'46730',name:'구례군'},{id:'46770',name:'영광군'},{id:'46780',name:'장성군'},{id:'46790',name:'완도군'},{id:'46800',name:'진도군'},{id:'46810',name:'신안군'}],
+    '경북': [{id:'47111',name:'포항시'},{id:'47130',name:'경주시'},{id:'47150',name:'김천시'},{id:'47170',name:'안동시'},{id:'47190',name:'구미시'},{id:'47210',name:'영주시'},{id:'47230',name:'영천시'},{id:'47250',name:'상주시'},{id:'47280',name:'문경시'},{id:'47290',name:'경산시'},{id:'47720',name:'군위군'},{id:'47730',name:'의성군'},{id:'47750',name:'청송군'},{id:'47760',name:'영양군'},{id:'47770',name:'영덕군'},{id:'47820',name:'청도군'},{id:'47830',name:'고령군'},{id:'47840',name:'성주군'},{id:'47850',name:'칠곡군'},{id:'47900',name:'예천군'},{id:'47920',name:'봉화군'},{id:'47930',name:'울진군'},{id:'47940',name:'울릉군'}],
+    '경남': [{id:'48121',name:'창원시'},{id:'48170',name:'진주시'},{id:'48220',name:'통영시'},{id:'48240',name:'사천시'},{id:'48250',name:'김해시'},{id:'48270',name:'밀양시'},{id:'48310',name:'거제시'},{id:'48330',name:'양산시'},{id:'48720',name:'의령군'},{id:'48730',name:'함안군'},{id:'48740',name:'창녕군'},{id:'48820',name:'고성군'},{id:'48840',name:'남해군'},{id:'48850',name:'하동군'},{id:'48860',name:'산청군'},{id:'48870',name:'함양군'},{id:'48880',name:'거창군'},{id:'48890',name:'합천군'}],
+    '제주': [{id:'50110',name:'제주시'},{id:'50130',name:'서귀포시'}],
+    '강원': [{id:'51110',name:'춘천시'},{id:'51130',name:'원주시'},{id:'51150',name:'강릉시'},{id:'51170',name:'동해시'},{id:'51190',name:'태백시'},{id:'51210',name:'속초시'},{id:'51230',name:'삼척시'},{id:'51720',name:'홍천군'},{id:'51730',name:'횡성군'},{id:'51750',name:'영월군'},{id:'51760',name:'평창군'},{id:'51770',name:'정선군'},{id:'51780',name:'철원군'},{id:'51790',name:'화천군'},{id:'51800',name:'양구군'},{id:'51810',name:'인제군'},{id:'51820',name:'고성군'},{id:'51830',name:'양양군'}],
+  };
+
+  // 시군구 → 읍면동 매핑 (코드 기반)
+  const SIGUNGU_EMD_MAP: Record<string, { id: string; name: string }[]> = {
+    // ── 서울 ──
+    '11110': [{id:'1111051',name:'청운효자동'},{id:'1111053',name:'사직동'},{id:'1111055',name:'삼청동'},{id:'1111057',name:'부암동'},{id:'1111060',name:'평창동'},{id:'1111064',name:'혜화동'},{id:'1111068',name:'이화동'},{id:'1111070',name:'창신동'}],
+    '11140': [{id:'1114051',name:'소공동'},{id:'1114053',name:'회현동'},{id:'1114055',name:'명동'},{id:'1114057',name:'필동'},{id:'1114060',name:'장충동'},{id:'1114062',name:'광희동'},{id:'1114065',name:'을지로동'},{id:'1114067',name:'신당동'}],
+    '11170': [{id:'1117051',name:'후암동'},{id:'1117053',name:'용산2가동'},{id:'1117055',name:'남영동'},{id:'1117057',name:'청파동'},{id:'1117060',name:'원효로1동'},{id:'1117062',name:'원효로2동'},{id:'1117065',name:'이촌1동'},{id:'1117067',name:'이촌2동'},{id:'1117070',name:'한강로동'},{id:'1117072',name:'한남동'}],
+    '11200': [{id:'1120051',name:'왕십리2동'},{id:'1120053',name:'왕십리도선동'},{id:'1120055',name:'마장동'},{id:'1120057',name:'사근동'},{id:'1120060',name:'행당1동'},{id:'1120062',name:'행당2동'},{id:'1120065',name:'응봉동'},{id:'1120067',name:'금호1가동'},{id:'1120070',name:'옥수동'},{id:'1120072',name:'성수1가1동'},{id:'1120074',name:'성수1가2동'},{id:'1120076',name:'성수2가1동'},{id:'1120078',name:'성수2가3동'},{id:'1120080',name:'송정동'}],
+    '11440': [{id:'1144051',name:'아현동'},{id:'1144053',name:'공덕동'},{id:'1144055',name:'도화동'},{id:'1144057',name:'용강동'},{id:'1144060',name:'대흥동'},{id:'1144062',name:'서교동'},{id:'1144065',name:'합정동'},{id:'1144067',name:'망원1동'},{id:'1144070',name:'망원2동'},{id:'1144072',name:'연남동'},{id:'1144074',name:'성산1동'},{id:'1144076',name:'성산2동'},{id:'1144078',name:'상암동'}],
+    '11560': [{id:'1156051',name:'여의동'},{id:'1156053',name:'당산1동'},{id:'1156055',name:'당산2동'},{id:'1156057',name:'도림동'},{id:'1156060',name:'문래동'},{id:'1156062',name:'영등포동'},{id:'1156065',name:'영등포본동'},{id:'1156067',name:'신길1동'},{id:'1156070',name:'신길3동'},{id:'1156072',name:'신길4동'},{id:'1156074',name:'신길5동'},{id:'1156076',name:'대림1동'},{id:'1156078',name:'대림2동'},{id:'1156080',name:'대림3동'}],
+    '11650': [{id:'1165051',name:'서초1동'},{id:'1165053',name:'서초2동'},{id:'1165055',name:'서초3동'},{id:'1165057',name:'서초4동'},{id:'1165060',name:'잠원동'},{id:'1165062',name:'반포1동'},{id:'1165065',name:'반포2동'},{id:'1165067',name:'반포3동'},{id:'1165070',name:'반포4동'},{id:'1165072',name:'방배본동'},{id:'1165074',name:'방배1동'},{id:'1165076',name:'방배2동'},{id:'1165078',name:'방배3동'},{id:'1165080',name:'방배4동'},{id:'1165082',name:'내곡동'}],
+    '11680': [{id:'1168051',name:'신사동'},{id:'1168053',name:'논현1동'},{id:'1168055',name:'논현2동'},{id:'1168057',name:'압구정동'},{id:'1168060',name:'청담동'},{id:'1168062',name:'삼성1동'},{id:'1168064',name:'삼성2동'},{id:'1168066',name:'대치1동'},{id:'1168068',name:'대치2동'},{id:'1168070',name:'대치4동'},{id:'1168072',name:'역삼1동'},{id:'1168074',name:'역삼2동'},{id:'1168076',name:'도곡1동'},{id:'1168078',name:'도곡2동'},{id:'1168080',name:'개포1동'},{id:'1168082',name:'개포4동'},{id:'1168084',name:'일원본동'},{id:'1168086',name:'일원1동'},{id:'1168088',name:'수서동'},{id:'1168090',name:'세곡동'}],
+    '11710': [{id:'1171051',name:'잠실본동'},{id:'1171053',name:'잠실2동'},{id:'1171055',name:'잠실3동'},{id:'1171057',name:'잠실4동'},{id:'1171060',name:'잠실6동'},{id:'1171062',name:'잠실7동'},{id:'1171064',name:'송파1동'},{id:'1171066',name:'송파2동'},{id:'1171068',name:'가락본동'},{id:'1171070',name:'가락1동'},{id:'1171072',name:'가락2동'},{id:'1171074',name:'문정1동'},{id:'1171076',name:'문정2동'},{id:'1171078',name:'거여1동'},{id:'1171080',name:'거여2동'},{id:'1171082',name:'마천1동'},{id:'1171084',name:'마천2동'},{id:'1171086',name:'석촌동'},{id:'1171088',name:'풍납1동'},{id:'1171090',name:'풍납2동'},{id:'1171092',name:'오금동'},{id:'1171094',name:'위례동'}],
+    '11740': [{id:'1174051',name:'강일동'},{id:'1174053',name:'상일1동'},{id:'1174055',name:'상일2동'},{id:'1174057',name:'명일1동'},{id:'1174060',name:'명일2동'},{id:'1174062',name:'고덕1동'},{id:'1174064',name:'고덕2동'},{id:'1174066',name:'암사1동'},{id:'1174068',name:'암사2동'},{id:'1174070',name:'암사3동'},{id:'1174072',name:'천호1동'},{id:'1174074',name:'천호2동'},{id:'1174076',name:'천호3동'},{id:'1174078',name:'성내1동'},{id:'1174080',name:'성내2동'},{id:'1174082',name:'성내3동'},{id:'1174084',name:'둔촌1동'},{id:'1174086',name:'둔촌2동'}],
+    // ── 부산 ──
+    '26110': [{id:'2611051',name:'중앙동'},{id:'2611053',name:'동광동'},{id:'2611055',name:'대청동'},{id:'2611057',name:'보수동'},{id:'2611060',name:'부평동'},{id:'2611062',name:'광복동'},{id:'2611064',name:'남포동'},{id:'2611066',name:'영주동'}],
+    '26230': [{id:'2623051',name:'부전1동'},{id:'2623053',name:'부전2동'},{id:'2623055',name:'연지동'},{id:'2623057',name:'초읍동'},{id:'2623060',name:'양정1동'},{id:'2623062',name:'양정2동'},{id:'2623064',name:'전포1동'},{id:'2623066',name:'전포2동'},{id:'2623068',name:'부암1동'},{id:'2623070',name:'부암3동'},{id:'2623072',name:'당감1동'},{id:'2623074',name:'당감4동'},{id:'2623076',name:'가야1동'},{id:'2623078',name:'가야2동'},{id:'2623080',name:'개금1동'},{id:'2623082',name:'개금2동'},{id:'2623084',name:'개금3동'},{id:'2623086',name:'범천1동'},{id:'2623088',name:'범천2동'}],
+    '26350': [{id:'2635051',name:'우1동'},{id:'2635053',name:'우2동'},{id:'2635055',name:'우3동'},{id:'2635057',name:'중1동'},{id:'2635060',name:'중2동'},{id:'2635062',name:'좌1동'},{id:'2635064',name:'좌2동'},{id:'2635066',name:'좌3동'},{id:'2635068',name:'좌4동'},{id:'2635070',name:'송정동'},{id:'2635072',name:'반여1동'},{id:'2635074',name:'반여2동'},{id:'2635076',name:'반여3동'},{id:'2635078',name:'반여4동'},{id:'2635080',name:'반송1동'},{id:'2635082',name:'반송2동'},{id:'2635084',name:'재송1동'},{id:'2635086',name:'재송2동'}],
+    // ── 대구 ──
+    '27110': [{id:'2711051',name:'동인동'},{id:'2711053',name:'삼덕동'},{id:'2711055',name:'성내1동'},{id:'2711057',name:'성내2동'},{id:'2711060',name:'성내3동'},{id:'2711062',name:'대신동'},{id:'2711064',name:'남산1동'},{id:'2711066',name:'남산2동'},{id:'2711068',name:'남산3동'},{id:'2711070',name:'남산4동'},{id:'2711072',name:'대봉1동'},{id:'2711074',name:'대봉2동'}],
+    '27260': [{id:'2726051',name:'범어1동'},{id:'2726053',name:'범어2동'},{id:'2726055',name:'범어3동'},{id:'2726057',name:'범어4동'},{id:'2726060',name:'만촌1동'},{id:'2726062',name:'만촌2동'},{id:'2726064',name:'만촌3동'},{id:'2726066',name:'수성1가동'},{id:'2726068',name:'수성2·3가동'},{id:'2726070',name:'수성4가동'},{id:'2726072',name:'황금1동'},{id:'2726074',name:'황금2동'},{id:'2726076',name:'중동'},{id:'2726078',name:'상동'},{id:'2726080',name:'파동'},{id:'2726082',name:'두산동'},{id:'2726084',name:'지산동'},{id:'2726086',name:'범물1동'},{id:'2726088',name:'범물2동'},{id:'2726090',name:'고산1동'},{id:'2726092',name:'고산2동'},{id:'2726094',name:'고산3동'}],
+    // ── 인천 ──
+    '28185': [{id:'2818551',name:'옥련1동'},{id:'2818553',name:'옥련2동'},{id:'2818555',name:'선학동'},{id:'2818557',name:'연수1동'},{id:'2818560',name:'연수2동'},{id:'2818562',name:'연수3동'},{id:'2818564',name:'청학동'},{id:'2818566',name:'동춘1동'},{id:'2818568',name:'동춘2동'},{id:'2818570',name:'동춘3동'},{id:'2818572',name:'송도1동'},{id:'2818574',name:'송도2동'},{id:'2818576',name:'송도3동'}],
+    '28200': [{id:'2820051',name:'구월1동'},{id:'2820053',name:'구월2동'},{id:'2820055',name:'구월3동'},{id:'2820057',name:'구월4동'},{id:'2820060',name:'간석1동'},{id:'2820062',name:'간석2동'},{id:'2820064',name:'간석3동'},{id:'2820066',name:'간석4동'},{id:'2820068',name:'만수1동'},{id:'2820070',name:'만수2동'},{id:'2820072',name:'만수3동'},{id:'2820074',name:'만수4동'},{id:'2820076',name:'만수5동'},{id:'2820078',name:'만수6동'},{id:'2820080',name:'장수서창동'},{id:'2820082',name:'서창2동'},{id:'2820084',name:'남촌도림동'},{id:'2820086',name:'논현1동'},{id:'2820088',name:'논현2동'},{id:'2820090',name:'논현고잔동'},{id:'2820092',name:'고잔1동'}],
+    // ── 광주 ──
+    '29110': [{id:'2911051',name:'충장동'},{id:'2911053',name:'동명동'},{id:'2911055',name:'계림1동'},{id:'2911057',name:'계림2동'},{id:'2911060',name:'산수1동'},{id:'2911062',name:'산수2동'},{id:'2911064',name:'지산1동'},{id:'2911066',name:'지산2동'},{id:'2911068',name:'서남동'},{id:'2911070',name:'학동'}],
+    '29140': [{id:'2914051',name:'양동'},{id:'2914053',name:'농성1동'},{id:'2914055',name:'농성2동'},{id:'2914057',name:'광천동'},{id:'2914060',name:'유덕동'},{id:'2914062',name:'치평동'},{id:'2914064',name:'상무1동'},{id:'2914066',name:'상무2동'},{id:'2914068',name:'화정1동'},{id:'2914070',name:'화정2동'},{id:'2914072',name:'서창동'},{id:'2914074',name:'금호1동'},{id:'2914076',name:'금호2동'},{id:'2914078',name:'풍암동'},{id:'2914080',name:'동천동'}],
+    // ── 대전 ──
+    '30170': [{id:'3017051',name:'복수동'},{id:'3017053',name:'도마1동'},{id:'3017055',name:'도마2동'},{id:'3017057',name:'정림동'},{id:'3017060',name:'변동'},{id:'3017062',name:'용문동'},{id:'3017064',name:'탄방동'},{id:'3017066',name:'둔산1동'},{id:'3017068',name:'둔산2동'},{id:'3017070',name:'둔산3동'},{id:'3017072',name:'괴정동'},{id:'3017074',name:'갈마1동'},{id:'3017076',name:'갈마2동'},{id:'3017078',name:'월평1동'},{id:'3017080',name:'월평2동'},{id:'3017082',name:'월평3동'},{id:'3017084',name:'만년동'},{id:'3017086',name:'가수원동'},{id:'3017088',name:'도안동'},{id:'3017090',name:'관저1동'},{id:'3017092',name:'관저2동'}],
+    '30200': [{id:'3020051',name:'진잠동'},{id:'3020053',name:'원신흥동'},{id:'3020055',name:'온천1동'},{id:'3020057',name:'온천2동'},{id:'3020060',name:'노은1동'},{id:'3020062',name:'노은2동'},{id:'3020064',name:'노은3동'},{id:'3020066',name:'신성동'},{id:'3020068',name:'전민동'},{id:'3020070',name:'구즉동'},{id:'3020072',name:'관평동'},{id:'3020074',name:'학하동'}],
+    // ── 울산 ──
+    '31110': [{id:'3111051',name:'학성동'},{id:'3111053',name:'복산동'},{id:'3111055',name:'우정동'},{id:'3111057',name:'성안동'},{id:'3111060',name:'반구1동'},{id:'3111062',name:'반구2동'},{id:'3111064',name:'태화동'},{id:'3111066',name:'다운동'},{id:'3111068',name:'야음장생포동'},{id:'3111070',name:'삼산동'},{id:'3111072',name:'신정1동'},{id:'3111074',name:'신정2동'},{id:'3111076',name:'신정3동'},{id:'3111078',name:'신정4동'},{id:'3111080',name:'신정5동'}],
+    '31140': [{id:'3114051',name:'삼호동'},{id:'3114053',name:'무거동'},{id:'3114055',name:'옥동'},{id:'3114057',name:'두왕동'},{id:'3114060',name:'신정동'},{id:'3114062',name:'달동'},{id:'3114064',name:'삼산동'},{id:'3114066',name:'야음동'}],
+    // ── 세종 ──
+    '36110': [{id:'3611051',name:'조치원읍'},{id:'3611053',name:'새롬동'},{id:'3611055',name:'도담동'},{id:'3611057',name:'아름동'},{id:'3611060',name:'종촌동'},{id:'3611062',name:'고운동'},{id:'3611064',name:'보람동'},{id:'3611066',name:'대평동'},{id:'3611068',name:'소정면'},{id:'3611070',name:'금남면'},{id:'3611072',name:'부강면'},{id:'3611074',name:'연기면'},{id:'3611076',name:'연동면'},{id:'3611078',name:'장군면'},{id:'3611080',name:'전의면'},{id:'3611082',name:'전동면'}],
+    // ── 경기 ──
+    '41110': [{id:'4111051',name:'장안구'},{id:'4111053',name:'권선구'},{id:'4111055',name:'팔달구'},{id:'4111057',name:'영통구'}],
+    '41130': [{id:'4113051',name:'수정구'},{id:'4113053',name:'중원구'},{id:'4113055',name:'분당구'}],
+    '41280': [{id:'4128051',name:'덕양구'},{id:'4128053',name:'일산동구'},{id:'4128055',name:'일산서구'}],
+    '41460': [{id:'4146051',name:'처인구'},{id:'4146053',name:'기흥구'},{id:'4146055',name:'수지구'}],
+    // ── 충북 ──
+    '43110': [{id:'4311051',name:'상당구'},{id:'4311053',name:'서원구'},{id:'4311055',name:'흥덕구'},{id:'4311057',name:'청원구'}],
+    '43130': [{id:'4313051',name:'교현동'},{id:'4313053',name:'성내·충인동'},{id:'4313055',name:'호암·직동'},{id:'4313057',name:'봉방동'},{id:'4313060',name:'칠금·금릉동'},{id:'4313062',name:'연수동'},{id:'4313064',name:'안림동'},{id:'4313066',name:'주덕읍'},{id:'4313068',name:'살미면'},{id:'4313070',name:'수안보면'},{id:'4313072',name:'대소원면'},{id:'4313074',name:'엄정면'},{id:'4313076',name:'소태면'},{id:'4313078',name:'노은면'}],
+    '43150': [{id:'4315051',name:'봉양읍'},{id:'4315053',name:'신도·고명동'},{id:'4315055',name:'중앙동'},{id:'4315057',name:'남현동'},{id:'4315060',name:'영서동'},{id:'4315062',name:'동면'},{id:'4315064',name:'송학면'},{id:'4315066',name:'백운면'},{id:'4315068',name:'청풍면'},{id:'4315070',name:'한수면'},{id:'4315072',name:'덕산면'},{id:'4315074',name:'수산면'}],
+    // ── 충남 ──
+    '44130': [{id:'4413051',name:'동남구'},{id:'4413053',name:'서북구'}],
+    '44200': [{id:'4420051',name:'온양1동'},{id:'4420053',name:'온양2동'},{id:'4420055',name:'온양3동'},{id:'4420057',name:'온양4동'},{id:'4420060',name:'온양5동'},{id:'4420062',name:'온양6동'},{id:'4420064',name:'배방읍'},{id:'4420066',name:'탕정면'},{id:'4420068',name:'음봉면'},{id:'4420070',name:'둔포면'},{id:'4420072',name:'영인면'},{id:'4420074',name:'인주면'},{id:'4420076',name:'선장면'},{id:'4420078',name:'도고면'},{id:'4420080',name:'신창면'},{id:'4420082',name:'송악면'}],
+    // ── 전북 ──
+    '45110': [{id:'4511051',name:'완산구'},{id:'4511053',name:'덕진구'}],
+    '45130': [{id:'4513051',name:'중앙동'},{id:'4513053',name:'경암동'},{id:'4513055',name:'월명동'},{id:'4513057',name:'나운1동'},{id:'4513060',name:'나운2동'},{id:'4513062',name:'소룡동'},{id:'4513064',name:'미성동'},{id:'4513066',name:'삼학동'},{id:'4513068',name:'조촌동'},{id:'4513070',name:'개정면'},{id:'4513072',name:'옥구읍'},{id:'4513074',name:'옥산면'},{id:'4513076',name:'회현면'},{id:'4513078',name:'임피면'},{id:'4513080',name:'서수면'},{id:'4513082',name:'대야면'},{id:'4513084',name:'성산면'}],
+    // ── 전남 ──
+    '46110': [{id:'4611051',name:'용당1동'},{id:'4611053',name:'용당2동'},{id:'4611055',name:'연산동'},{id:'4611057',name:'산정동'},{id:'4611060',name:'동명동'},{id:'4611062',name:'삼학동'},{id:'4611064',name:'만호동'},{id:'4611066',name:'유달동'},{id:'4611068',name:'죽교동'},{id:'4611070',name:'북항동'},{id:'4611072',name:'하당동'},{id:'4611074',name:'신흥동'},{id:'4611076',name:'삼호동'},{id:'4611078',name:'석현동'},{id:'4611080',name:'옥암동'},{id:'4611082',name:'부흥동'}],
+    '46130': [{id:'4613051',name:'동문동'},{id:'4613053',name:'중앙동'},{id:'4613055',name:'충무동'},{id:'4613057',name:'광림동'},{id:'4613060',name:'서강동'},{id:'4613062',name:'대교동'},{id:'4613064',name:'국동'},{id:'4613066',name:'월호동'},{id:'4613068',name:'여서동'},{id:'4613070',name:'문수동'},{id:'4613072',name:'미평동'},{id:'4613074',name:'돌산읍'},{id:'4613076',name:'소라면'},{id:'4613078',name:'율촌면'},{id:'4613080',name:'화양면'},{id:'4613082',name:'남면'}],
+    // ── 경북 ──
+    '47111': [{id:'4711151',name:'상대동'},{id:'4711153',name:'해도동'},{id:'4711155',name:'대잠동'},{id:'4711157',name:'두호동'},{id:'4711160',name:'장량동'},{id:'4711162',name:'흥해읍'},{id:'4711164',name:'청하면'},{id:'4711166',name:'송라면'}],
+    '47130': [{id:'4713051',name:'성건동'},{id:'4713053',name:'황남동'},{id:'4713055',name:'동천동'},{id:'4713057',name:'황오·성동동'},{id:'4713060',name:'월성동'},{id:'4713062',name:'보덕동'},{id:'4713064',name:'불국동'},{id:'4713066',name:'양북면'},{id:'4713068',name:'감포읍'},{id:'4713070',name:'안강읍'},{id:'4713072',name:'외동읍'},{id:'4713074',name:'건천읍'},{id:'4713076',name:'산내면'},{id:'4713078',name:'서면'},{id:'4713080',name:'현곡면'}],
+    // ── 경남 ──
+    '48121': [{id:'4812151',name:'의창구'},{id:'4812153',name:'성산구'},{id:'4812155',name:'마산합포구'},{id:'4812157',name:'마산회원구'},{id:'4812160',name:'진해구'}],
+    '48250': [{id:'4825051',name:'동상동'},{id:'4825053',name:'회현동'},{id:'4825055',name:'부원동'},{id:'4825057',name:'내외동'},{id:'4825060',name:'북부동'},{id:'4825062',name:'활천동'},{id:'4825064',name:'삼안동'},{id:'4825066',name:'불암동'},{id:'4825068',name:'장유1동'},{id:'4825070',name:'장유2동'},{id:'4825072',name:'장유3동'},{id:'4825074',name:'진영읍'},{id:'4825076',name:'주촌면'},{id:'4825078',name:'진례면'},{id:'4825080',name:'한림면'},{id:'4825082',name:'생림면'},{id:'4825084',name:'대동면'}],
+    // ── 제주 ──
+    '50110': [{id:'5011051',name:'일도1동'},{id:'5011053',name:'일도2동'},{id:'5011055',name:'이도1동'},{id:'5011057',name:'이도2동'},{id:'5011060',name:'삼도1동'},{id:'5011062',name:'삼도2동'},{id:'5011064',name:'용담1동'},{id:'5011066',name:'용담2동'},{id:'5011068',name:'건입동'},{id:'5011070',name:'화북동'},{id:'5011072',name:'삼양동'},{id:'5011074',name:'봉개동'},{id:'5011076',name:'아라동'},{id:'5011078',name:'오라동'},{id:'5011080',name:'연동'},{id:'5011082',name:'노형동'},{id:'5011084',name:'외도동'},{id:'5011086',name:'이호동'},{id:'5011088',name:'도두동'},{id:'5011090',name:'조천읍'},{id:'5011092',name:'구좌읍'},{id:'5011094',name:'한림읍'},{id:'5011096',name:'애월읍'},{id:'5011098',name:'한경면'},{id:'5011100',name:'추자면'}],
+    '50130': [{id:'5013051',name:'송산동'},{id:'5013053',name:'정방동'},{id:'5013055',name:'중문동'},{id:'5013057',name:'예래동'},{id:'5013060',name:'영천동'},{id:'5013062',name:'동홍동'},{id:'5013064',name:'서홍동'},{id:'5013066',name:'대륜동'},{id:'5013068',name:'대천동'},{id:'5013070',name:'중앙동'},{id:'5013072',name:'효돈동'},{id:'5013074',name:'대정읍'},{id:'5013076',name:'남원읍'},{id:'5013078',name:'성산읍'},{id:'5013080',name:'안덕면'},{id:'5013082',name:'표선면'}],
+    // ── 강원 ──
+    '51110': [{id:'5111051',name:'교동'},{id:'5111053',name:'조운동'},{id:'5111055',name:'약사명동'},{id:'5111057',name:'근화동'},{id:'5111060',name:'소양동'},{id:'5111062',name:'효자1동'},{id:'5111064',name:'효자2동'},{id:'5111066',name:'효자3동'},{id:'5111068',name:'석사동'},{id:'5111070',name:'퇴계동'},{id:'5111072',name:'강남동'},{id:'5111074',name:'신사우동'},{id:'5111076',name:'동면'},{id:'5111078',name:'동산면'},{id:'5111080',name:'신북읍'},{id:'5111082',name:'남면'},{id:'5111084',name:'서면'},{id:'5111086',name:'사북면'},{id:'5111088',name:'북산면'}],
+    '51130': [{id:'5113051',name:'중앙동'},{id:'5113053',name:'원인동'},{id:'5113055',name:'개운동'},{id:'5113057',name:'명륜1동'},{id:'5113060',name:'명륜2동'},{id:'5113062',name:'단구동'},{id:'5113064',name:'일산동'},{id:'5113066',name:'학성동'},{id:'5113068',name:'단계동'},{id:'5113070',name:'우산동'},{id:'5113072',name:'태장1동'},{id:'5113074',name:'태장2동'},{id:'5113076',name:'반곡관설동'},{id:'5113078',name:'행구동'},{id:'5113080',name:'무실동'},{id:'5113082',name:'문막읍'},{id:'5113084',name:'소초면'},{id:'5113086',name:'호저면'},{id:'5113088',name:'지정면'},{id:'5113090',name:'부론면'}],
+    '51150': [{id:'5115051',name:'교1동'},{id:'5115053',name:'교2동'},{id:'5115055',name:'포남1동'},{id:'5115057',name:'포남2동'},{id:'5115060',name:'초당동'},{id:'5115062',name:'송정동'},{id:'5115064',name:'내곡동'},{id:'5115066',name:'강남동'},{id:'5115068',name:'홍제동'},{id:'5115070',name:'성산면'},{id:'5115072',name:'왕산면'},{id:'5115074',name:'주문진읍'},{id:'5115076',name:'연곡면'},{id:'5115078',name:'사천면'},{id:'5115080',name:'옥계면'},{id:'5115082',name:'강동면'}],
+  };
+
   const riskMatrixData = useMemo(() => {
-    const regions = [
+    const nationRegions = [
       { id: '11', name: '서울' }, { id: '26', name: '부산' }, { id: '27', name: '대구' },
       { id: '28', name: '인천' }, { id: '29', name: '광주' }, { id: '30', name: '대전' },
       { id: '31', name: '울산' }, { id: '36', name: '세종' }, { id: '41', name: '경기' },
@@ -1040,6 +1150,51 @@ export function NationalDashboard() {
       { id: '46', name: '전남' }, { id: '47', name: '경북' }, { id: '48', name: '경남' },
       { id: '50', name: '제주' }, { id: '51', name: '강원' },
     ];
+    let regions: { id: string; name: string }[];
+    if (drillLevel === 'nation') {
+      regions = nationRegions;
+    } else if (mapSubRegions.length > 0) {
+      // GeoMapPanel에서 전달받은 실제 GeoJSON 기반 하위 지역 사용 (가장 정확)
+      regions = mapSubRegions;
+    } else if (drillLevel === 'sido') {
+      // GeoJSON 미로드 시 정적 매핑 폴백
+      const fullToShort: Record<string, string> = {
+        '서울특별시':'서울','부산광역시':'부산','대구광역시':'대구','인천광역시':'인천',
+        '광주광역시':'광주','대전광역시':'대전','울산광역시':'울산','세종특별자치시':'세종',
+        '경기도':'경기','충청북도':'충북','충청남도':'충남','전북특별자치도':'전북','전라북도':'전북',
+        '전라남도':'전남','경상북도':'경북','경상남도':'경남','제주특별자치도':'제주',
+        '강원특별자치도':'강원','강원도':'강원',
+      };
+      const rawName = selectedRegion?.name || '';
+      const shortName = fullToShort[rawName] || rawName.replace(/특별자치도|특별자치시|광역시|특별시|도$/g, '').trim() || rawName;
+      regions = SIDO_SIGUNGU_MAP[shortName] || nationRegions;
+    } else {
+      // 시군구 → 읍면동 (코드 기반 매핑 폴백)
+      const code = selectedRegion?.code || '00';
+      const emdFromMap = SIGUNGU_EMD_MAP[code];
+      if (emdFromMap) {
+        regions = emdFromMap;
+      } else {
+        const parentName = selectedRegion?.name || '지역';
+        if (parentName.endsWith('군')) {
+          const gunBase = parentName.slice(0, -1);
+          regions = [
+            {id:`${code}-E1`, name:`${gunBase}읍`},
+            {id:`${code}-E2`, name:'동면'},{id:`${code}-E3`, name:'서면'},
+            {id:`${code}-E4`, name:'남면'},{id:`${code}-E5`, name:'북면'},
+            {id:`${code}-E6`, name:'근남면'},{id:`${code}-E7`, name:'근북면'},
+            {id:`${code}-E8`, name:'원남면'},{id:`${code}-E9`, name:'원서면'},
+          ];
+        } else {
+          regions = [
+            {id:`${code}-E1`, name:'중앙동'},{id:`${code}-E2`, name:'역전동'},
+            {id:`${code}-E3`, name:'동부동'},{id:`${code}-E4`, name:'서부동'},
+            {id:`${code}-E5`, name:'남부동'},{id:`${code}-E6`, name:'북부동'},
+            {id:`${code}-E7`, name:'신시가동'},{id:`${code}-E8`, name:'시청동'},
+          ];
+        }
+      }
+    }
     return regions.map(r => {
       const seed = `${statsScopeKey}-${analyticsPeriod}-risk-${r.id}`;
       const slaRate = Number(seededValue(`${seed}-sla`, 78, 100).toFixed(1));
@@ -1047,7 +1202,7 @@ export function NationalDashboard() {
       const totalCases = Math.round(seededValue(`${seed}-cases`, 200, 3000));
       return { regionId: r.id, regionName: r.name, slaRate, dataRate, totalCases };
     });
-  }, [statsScopeKey, analyticsPeriod]);
+  }, [statsScopeKey, analyticsPeriod, drillLevel, selectedRegion, mapSubRegions]);
 
   /* ─────────────────────────────────────────────────────────────
      처리 단계 분포 스택형 바 데이터
@@ -1350,8 +1505,11 @@ export function NationalDashboard() {
           </div>
 
           {/* ── 리스크 Top 5 ── */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="text-xs font-semibold text-gray-700 mb-2">리스크 Top 5 지역</div>
+          <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-gray-700">리스크 Top 5</span>
+              <span className="text-[9px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-medium">{selectedRegion?.name || '전국'} 하위</span>
+            </div>
             <div className="space-y-1">
               {(() => {
                 const riskTop = [...riskMatrixData]
@@ -1364,7 +1522,11 @@ export function NationalDashboard() {
                 return riskTop.map((r, idx) => (
                   <button
                     key={r.regionId}
-                    onClick={() => drillDown({ code: r.regionId, name: r.regionName, level: 'sido' })}
+                    onClick={() => {
+                      // drillLevel에 따라 다음 레벨로 drillDown
+                      const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
+                      drillDown({ code: r.regionId, name: r.regionName, level: nextLevel });
+                    }}
                     className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors text-left"
                   >
                     <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
@@ -1438,9 +1600,9 @@ export function NationalDashboard() {
                   {drillLevel !== 'nation' && (
                     <button
                       onClick={drillUp}
-                      className="flex items-center gap-1 h-7 px-2 text-xs text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors font-medium"
+                      className="flex items-center gap-1 h-8 px-3 text-sm text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors font-medium"
                     >
-                      <ChevronLeft className="h-3.5 w-3.5" />
+                      <ChevronLeft className="h-4 w-4" />
                       <span>뒤로</span>
                     </button>
                   )}
@@ -1468,13 +1630,13 @@ export function NationalDashboard() {
                   <div className="flex rounded-md border border-gray-200 overflow-hidden">
                     <button
                       onClick={() => setVisualizationMode('geomap')}
-                      className={`px-2 py-0.5 text-[10px] font-medium transition ${
+                      className={`px-3 py-1.5 text-xs font-medium transition ${
                         visualizationMode === 'geomap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
                       }`}
                     >지오맵</button>
                     <button
                       onClick={() => setVisualizationMode('heatmap')}
-                      className={`px-2 py-0.5 text-[10px] font-medium transition border-l border-gray-200 ${
+                      className={`px-3 py-1.5 text-xs font-medium transition border-l border-gray-200 ${
                         visualizationMode === 'heatmap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
                       }`}
                     >히트맵</button>
@@ -1485,7 +1647,7 @@ export function NationalDashboard() {
                       <button
                         key={p}
                         onClick={() => setPeriodType(p)}
-                        className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
                           periodType === p
                             ? 'bg-blue-600 text-white'
                             : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
@@ -1501,7 +1663,7 @@ export function NationalDashboard() {
             </div>
 
             {/* ── 지도/히트맵 본체 ── */}
-            <div className="flex-1 p-2 min-h-0">
+            <div className="p-2 min-h-0">
               {visualizationMode === 'geomap' ? (
                 <GeoMapPanel
                   key={`national-${selectedKpiId}-${drillLevel}-${selectedRegion?.code || 'all'}-${periodType}`}
@@ -1518,6 +1680,7 @@ export function NationalDashboard() {
                   onGoBack={drillUp}
                   externalColorScheme={selectedMapCard.color as MapColorScheme}
                   hideLegendPanel
+                  onSubRegionsChange={handleSubRegionsChange}
                 />
               ) : (
                 <div className="relative w-full" style={{ height: 'clamp(320px, 44vh, 480px)' }}>
@@ -1553,19 +1716,31 @@ export function NationalDashboard() {
               )}
             </div>
 
-            {/* ── KPI 색상 범례 (선택 KPI 기반 그라데이션) ── */}
-            <div className="px-3 py-2.5 border-t border-gray-100 bg-gray-50/50 shrink-0">
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] font-semibold text-gray-500 shrink-0">{selectedMapCard.label}</span>
-                <div className="flex-1 flex items-center gap-1.5">
-                  <span className="text-[9px] text-gray-400">낮음</span>
-                  <div className="flex-1 h-2.5 rounded-full overflow-hidden flex">
-                    {(COLOR_PALETTES[selectedMapCard.color as keyof typeof COLOR_PALETTES] || COLOR_PALETTES.blue).map((c: string, i: number) => (
-                      <div key={i} className="flex-1" style={{ backgroundColor: c }} />
-                    ))}
-                  </div>
-                  <span className="text-[9px] text-gray-400">높음</span>
+            {/* ── KPI 색상 범례 (지오맵 바로 아래, 고도화) ── */}
+            <div className="mx-2 mb-2 px-3 py-2 rounded-lg bg-gradient-to-r from-gray-50 to-gray-100/80 border border-gray-200/60 shrink-0">
+              <div className="flex items-center gap-2 mb-1.5">
+                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue }} />
+                <span className="text-[10px] font-bold text-gray-600 tracking-wide">{selectedMapCard.label}</span>
+                <span className="text-[9px] text-gray-400 ml-auto">{selectedMapCard.unit}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-semibold text-gray-500 tabular-nums min-w-[36px] text-right">
+                  {(() => {
+                    const values = mapHeatmapData.map(d => d.size);
+                    return values.length ? Math.min(...values).toLocaleString() : '-';
+                  })()}
+                </span>
+                <div className="flex-1 h-3 rounded-md overflow-hidden flex shadow-inner">
+                  {(COLOR_PALETTES[selectedMapCard.color as keyof typeof COLOR_PALETTES] || COLOR_PALETTES.blue).map((c: string, i: number) => (
+                    <div key={i} className="flex-1 transition-colors" style={{ backgroundColor: c }} />
+                  ))}
                 </div>
+                <span className="text-[10px] font-semibold text-gray-500 tabular-nums min-w-[36px]">
+                  {(() => {
+                    const values = mapHeatmapData.map(d => d.size);
+                    return values.length ? Math.max(...values).toLocaleString() : '-';
+                  })()}
+                </span>
               </div>
             </div>
           </div>

@@ -61,6 +61,7 @@ type GeoMapPanelProps = {
   onGoBack?: () => void; // 상위 레벨로 돌아가기 콜백
   externalColorScheme?: MapColorScheme; // 외부 KPI 기반 색상 스킴
   hideLegendPanel?: boolean; // 하단 범례 패널 숨김
+  onSubRegionsChange?: (regions: { code: string; name: string }[]) => void; // 현재 표시 중인 하위 지역 목록 전달
 };
 
 function getFeatureCode(feature: any): string {
@@ -125,7 +126,8 @@ export function GeoMapPanel({
   onRegionSelect,
   onGoBack,
   externalColorScheme,
-  hideLegendPanel = false
+  hideLegendPanel = false,
+  onSubRegionsChange
 }: GeoMapPanelProps) {
   const indicator = getGeoIndicator(indicatorId);
   const scopeKey = JSON.stringify(scope);
@@ -330,6 +332,16 @@ export function GeoMapPanel({
     if (level === 'sig') return filteredSig;
     return filteredEmd;
   }, [level, filteredCtprvn, filteredSig, filteredEmd]);
+
+  // 현재 표시 중인 하위 지역 목록을 외부로 전달
+  useEffect(() => {
+    if (!onSubRegionsChange || !currentFeatures.length) return;
+    const regions = currentFeatures.map((f: any) => ({
+      code: getFeatureCode(f),
+      name: getFeatureName(f),
+    }));
+    onSubRegionsChange(regions);
+  }, [currentFeatures, onSubRegionsChange]);
 
   const metricPoints = useMemo(() => {
     if (!currentFeatures.length) return [];

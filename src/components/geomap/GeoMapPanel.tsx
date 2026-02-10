@@ -596,7 +596,7 @@ export function GeoMapPanel({
         </div>
       )}
 
-      <div className="px-4 pb-4">
+      <div className="px-4 pb-8">
         {!isPortal && metricPoints.length > 0 && (
           <div className="mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
             <div className="rounded-lg border border-gray-200 bg-white p-3">

@@ -1321,65 +1321,15 @@ export function NationalDashboard() {
   }, [drillDown]);
 
   return (
-    <div ref={containerRef} className="flex flex-col bg-gray-50 h-full overflow-auto">
+    <div ref={containerRef} className="flex flex-col bg-gray-50 h-full min-h-0">
       {/* ═══════════════════════════════════════════════════════════
-          HEADER (타이틀 상단 배치)
-      ═══════════════════════════════════════════════════════════ */}
-      <header className="h-15 bg-white border-b border-gray-200 flex items-center px-4 shrink-0">
-        <h2 className="text-sm font-bold text-gray-800">전국 운영 대시보드</h2>
-        <div className="flex-1" />
-        
-        {/* ═══ Breadcrumb + Back 버튼 ═══ */}
-        <div className="flex items-center gap-2 mr-4">
-          {drillPath.length > 1 && (
-            <button
-              onClick={drillUp}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
-            >
-              <ChevronLeft className="h-3 w-3" />
-              <span>이전</span>
-            </button>
-          )}
-          <div className="flex items-center gap-1 text-xs text-gray-600">
-            {drillPath.map((item, idx) => (
-              <React.Fragment key={`${item.level}-${item.code}`}>
-                <button
-                  onClick={() => drillTo(idx)}
-                  className={`px-1.5 py-0.5 rounded transition-colors ${
-                    idx === drillPath.length - 1 
-                      ? 'bg-blue-500 text-white font-medium' 
-                      : 'hover:bg-gray-200 text-gray-600'
-                  }`}
-                >
-                  {item.name}
-                </button>
-                {idx < drillPath.length - 1 && <ChevronRight className="h-3 w-3 text-gray-400" />}
-              </React.Fragment>
-            ))}
-          </div>
-          {drillPath.length > 1 && (
-            <button
-              onClick={resetDrill}
-              className="p-1 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded transition-colors"
-              title="전국으로 돌아가기"
-            >
-              <Home className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-        
-        <div className="flex items-center gap-2 text-gray-500">
-          <button className="p-1.5 hover:bg-gray-100 rounded"><HelpCircle className="h-4 w-4" /></button>
-          <button className="p-1.5 hover:bg-gray-100 rounded"><BarChart3 className="h-4 w-4" /></button>
-          <button className="p-1.5 hover:bg-gray-100 rounded"><Download className="h-4 w-4" /></button>
-        </div>
-      </header>
-
-      {/* ═══════════════════════════════════════════════════════════
-          KPI 선택 카드 (버튼) - 지도 히트맵 KPI 변경 (헤더 아래 배치)
+          고정 2행: KPI 선택 카드 + Breadcrumb + 보조 컨트롤
       ═══════════════════════════════════════════════════════════ */}
       <div className="bg-white border-b border-gray-200 px-4 py-2 shrink-0">
-        <div className="flex items-center gap-2 overflow-x-auto">
+        {/* KPI 버튼 + 보조 컨트롤 한 줄 */}
+        <div className="flex items-center gap-2">
+          {/* KPI 버튼 그룹 (스크롤 허용) */}
+          <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0">
           {MAP_KPI_CARDS.map((card) => {
             const isActive = selectedKpiId === card.id;
             const value = card.getValue(statsScopeKey);
@@ -1424,28 +1374,86 @@ export function NationalDashboard() {
               </button>
             );
           })}
+          </div>
+
+          {/* ═══ 구분선 ═══ */}
+          <div className="w-px h-8 bg-gray-200 shrink-0" />
+
+          {/* ═══ Breadcrumb + Back 버튼 ═══ */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {drillPath.length > 1 && (
+              <button
+                onClick={drillUp}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+              >
+                <ChevronLeft className="h-3 w-3" />
+                <span>이전</span>
+              </button>
+            )}
+            <div className="flex items-center gap-1 text-xs text-gray-600">
+              {drillPath.map((item, idx) => (
+                <React.Fragment key={`${item.level}-${item.code}`}>
+                  <button
+                    onClick={() => drillTo(idx)}
+                    className={`px-1.5 py-0.5 rounded transition-colors ${
+                      idx === drillPath.length - 1 
+                        ? 'bg-blue-500 text-white font-medium' 
+                        : 'hover:bg-gray-200 text-gray-600'
+                    }`}
+                  >
+                    {item.name}
+                  </button>
+                  {idx < drillPath.length - 1 && <ChevronRight className="h-3 w-3 text-gray-400" />}
+                </React.Fragment>
+              ))}
+            </div>
+            {drillPath.length > 1 && (
+              <button
+                onClick={resetDrill}
+                className="p-1 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded transition-colors"
+                title="전국으로 돌아가기"
+              >
+                <Home className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* ═══ 구분선 ═══ */}
+          <div className="w-px h-8 bg-gray-200 shrink-0" />
+
+          {/* ═══ 보조 컨트롤 버튼 ═══ */}
+          <div className="flex items-center gap-1 text-gray-500 shrink-0">
+            <button className="p-1.5 hover:bg-gray-100 rounded" title="도움말"><HelpCircle className="h-4 w-4" /></button>
+            <button className="p-1.5 hover:bg-gray-100 rounded" title="분석 차트"><BarChart3 className="h-4 w-4" /></button>
+            <button className="p-1.5 hover:bg-gray-100 rounded" title="다운로드"><Download className="h-4 w-4" /></button>
+          </div>
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════════
+          SCROLL CONTAINER - 통계/지도/차트 전용 스크롤 영역
+      ═══════════════════════════════════════════════════════════ */}
+      <div className="flex-1 overflow-y-auto min-h-0">
 
       {/* ═══════════════════════════════════════════════════════════
           MAIN CONTENT - CSS Grid 3열 레이아웃
           - Desktop (>=1024px): 1.3fr / 2.5fr / 2.2fr
           - Tablet: 2단, Mobile: 1열 스택
       ═══════════════════════════════════════════════════════════ */}
-      <div className={`flex-1 p-2 gap-2 min-h-0 ${
+      <div className={`p-2 gap-2 ${
         layoutMode === 'desktop' 
-          ? 'grid overflow-hidden' 
+          ? 'grid' 
           : layoutMode === 'tablet'
-          ? 'flex flex-col overflow-y-auto'
-          : 'flex flex-col overflow-y-auto'
-      }`} style={layoutMode === 'desktop' ? { gridTemplateColumns: '1.3fr 2.5fr 2.2fr' } : undefined}>
+          ? 'flex flex-col'
+          : 'flex flex-col'
+      }`} style={layoutMode === 'desktop' ? { gridTemplateColumns: '1.2fr 2.2fr 2.6fr', minHeight: 'calc(100vh - 140px)', alignItems: 'stretch' } : undefined}>
         
         {/* ═══════════════════════════════════════════════════════
             LEFT COLUMN - KPI 요약 + 리스크 Top + 연령대별 차트
         ═══════════════════════════════════════════════════════ */}
-        <div className={`flex flex-col gap-2 overflow-y-auto ${
+        <div className={`flex flex-col gap-2 ${
           layoutMode === 'desktop' 
-            ? 'min-w-0 h-full' 
+            ? 'min-w-0' 
             : layoutMode === 'tablet'
             ? 'hidden'
             : 'w-full shrink-0'
@@ -1582,6 +1590,60 @@ export function NationalDashboard() {
               </ResponsiveContainer>
             </div>
           </div>
+
+          {/* ── KPI 요약 테이블 - 토글로 숨김 처리 (기본: 숨김) ── */}
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setShowKpiSummaryTable(!showKpiSummaryTable)}
+              className="w-full flex items-center justify-between px-2 py-2 hover:bg-gray-50 transition-colors"
+            >
+              <span className="text-[10px] font-medium text-gray-700">KPI 요약 테이블</span>
+              <div className="flex items-center gap-1.5">
+                <button 
+                  onClick={(e) => { e.stopPropagation(); /* Excel 다운로드 */ }}
+                  className="px-1.5 py-0.5 text-[9px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100"
+                >
+                  Excel
+                </button>
+                {showKpiSummaryTable ? (
+                  <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+                )}
+              </div>
+            </button>
+            
+            {showKpiSummaryTable && (
+              <div className="px-2 pb-2 border-t border-gray-100">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px]">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="px-1.5 py-1 text-left font-medium text-gray-600">KPI</th>
+                        <th className="px-1.5 py-1 text-right font-medium text-gray-600">평균</th>
+                        <th className="px-1.5 py-1 text-right font-medium text-gray-600">최저</th>
+                        <th className="px-1.5 py-1 text-right font-medium text-gray-600">최고</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulletKPIs.map(kpi => {
+                        const data = kpiDataMap[kpi.id] as TimeSeriesKPIData | null;
+                        if (!data) return null;
+                        return (
+                          <tr key={kpi.id} className="border-b border-gray-100 hover:bg-blue-50/30">
+                            <td className="px-1.5 py-1 truncate max-w-[80px]">{kpi.name}</td>
+                            <td className="px-1.5 py-1 text-right whitespace-nowrap">{data.current}{data.unit}</td>
+                            <td className="px-1.5 py-1 text-right text-red-600 whitespace-nowrap">{(data.current * 0.95).toFixed(1)}{data.unit}</td>
+                            <td className="px-1.5 py-1 text-right text-blue-600 whitespace-nowrap">{(data.current * 1.03).toFixed(1)}{data.unit}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ═══════════════════════════════════════════════════════
@@ -1589,10 +1651,10 @@ export function NationalDashboard() {
         ═══════════════════════════════════════════════════════ */}
         <div className={`${
           layoutMode === 'desktop' 
-            ? 'min-w-0' 
+            ? 'min-w-0 flex flex-col' 
             : 'w-full shrink-0'
         }`}>
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden h-full flex flex-col min-h-[400px]">
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col flex-1">
             {/* ── 중앙 패널 헤더: 뒤로/제목 + 지도/히트맵 토글 + 기간 토글 ── */}
             <div className="px-4 py-3.5 border-b border-gray-200 bg-white rounded-t-lg">
               <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1672,7 +1734,7 @@ export function NationalDashboard() {
                   year={2026}
                   scope={{ mode: 'national' }}
                   variant="portal"
-                  mapHeight={480}
+                  mapHeight={670}
                   hideBreadcrumb
                   externalLevel={drillLevel === 'nation' ? 'ctprvn' : drillLevel === 'sido' ? 'sig' : 'emd'}
                   externalSelectedCode={selectedRegion?.code}
@@ -1750,9 +1812,9 @@ export function NationalDashboard() {
             RIGHT COLUMN - KPI 사전 기반 자동 렌더링
             Desktop: 25% 너비
         ═══════════════════════════════════════════════════════ */}
-        <div className={`flex flex-col gap-2 overflow-y-auto ${
+        <div className={`flex flex-col gap-2 ${
           layoutMode === 'desktop' 
-            ? 'min-w-0 h-full' 
+            ? 'min-w-0' 
             : layoutMode === 'tablet'
             ? 'hidden'
             : 'w-full shrink-0'
@@ -1890,60 +1952,6 @@ export function NationalDashboard() {
             );
           })}
 
-          {/* KPI 요약 테이블 - 토글로 숨김 처리 (기본: 숨김) */}
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <button
-              onClick={() => setShowKpiSummaryTable(!showKpiSummaryTable)}
-              className="w-full flex items-center justify-between p-3 hover:bg-gray-50 transition-colors"
-            >
-              <span className="text-xs font-medium text-gray-700">KPI 요약 테이블</span>
-              <div className="flex items-center gap-2">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); /* Excel 다운로드 */ }}
-                  className="px-2 py-0.5 text-[10px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100"
-                >
-                  Excel 다운로드
-                </button>
-                {showKpiSummaryTable ? (
-                  <ChevronUp className="h-4 w-4 text-gray-400" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-gray-400" />
-                )}
-              </div>
-            </button>
-            
-            {showKpiSummaryTable && (
-              <div className="p-3 pt-0 border-t border-gray-100">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="px-2 py-1.5 text-left font-medium text-gray-600">KPI 구분</th>
-                        <th className="px-2 py-1.5 text-right font-medium text-gray-600">평균값</th>
-                        <th className="px-2 py-1.5 text-right font-medium text-gray-600">최저(지역)</th>
-                        <th className="px-2 py-1.5 text-right font-medium text-gray-600">최고(지역)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {/* KPI 사전 기반 자동 생성 */}
-                      {bulletKPIs.map(kpi => {
-                        const data = kpiDataMap[kpi.id] as TimeSeriesKPIData | null;
-                        if (!data) return null;
-                        return (
-                          <tr key={kpi.id} className="border-b border-gray-100 hover:bg-blue-50/30">
-                            <td className="px-2 py-1.5">{kpi.name}</td>
-                            <td className="px-2 py-1.5 text-right">{data.current}{data.unit}</td>
-                            <td className="px-2 py-1.5 text-right text-red-600">{(data.current * 0.95).toFixed(1)}{data.unit}</td>
-                            <td className="px-2 py-1.5 text-right text-blue-600">{(data.current * 1.03).toFixed(1)}{data.unit}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
         
         {/* ═══════════════════════════════════════════════════════
@@ -2000,7 +2008,7 @@ export function NationalDashboard() {
         )}
       </div>
 
-
+      </div>{/* end scroll container */}
     </div>
   );
 }

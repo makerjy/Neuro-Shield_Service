@@ -4,7 +4,6 @@ import {
   BarChart3, 
   Settings, 
   Bell,
-  Search,
   LogOut,
   Menu,
   X,
@@ -17,7 +16,6 @@ import {
   Brain,
 } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Input } from '../ui/input';
 import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 
@@ -146,17 +144,10 @@ export function CentralCenterLayout({
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-h-0">
         {/* Header */}
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
-          <div className="flex items-center gap-4 flex-1">
-            <div className="relative max-w-md flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                type="text"
-                placeholder="센터, KPI, 감사 항목 검색..."
-                className="pl-10 bg-gray-50"
-              />
-            </div>
-          </div>
+        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0">
+          <h1 className="text-base font-bold text-gray-900">
+            {navigationItems.find(n => n.id === currentPage)?.label || '대시보드'}
+          </h1>
 
           <div className="flex items-center gap-4">
             {/* Notifications */}
@@ -231,7 +222,7 @@ export function CentralCenterLayout({
         </header>
 
         {/* Main Content */}
-        <main className="flex-1 w-full overflow-auto relative">
+        <main className="flex-1 w-full min-h-0 relative flex flex-col">
           {children}
         </main>
       </div>

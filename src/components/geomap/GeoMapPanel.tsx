@@ -742,7 +742,7 @@ export function GeoMapPanel({
                           className="fixed inset-0 z-40" 
                           onClick={() => setShowSettingsDropdown(false)} 
                         />
-                        <div className="absolute right-0 bottom-full mb-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3">
+                        <div className="absolute right-0 top-full mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-lg z-50 p-3">
                           {/* 색상 팔레트 선택 */}
                           <div className="mb-3">
                             <label className="text-xs font-semibold text-gray-700 mb-1.5 block">

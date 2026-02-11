@@ -484,7 +484,7 @@ export function CaseDetailStage3({ caseId, onBack }: CaseDetailStage3Props) {
             </Button>
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="text-[11px] px-2 py-0.5 border-amber-300 text-amber-700 bg-amber-50">DEMO</Badge>
-              <Badge variant="outline" className="text-[11px] px-2 py-0.5 border-emerald-300 text-emerald-700 bg-emerald-50">3차 대상자 (추적관리)</Badge>
+              <Badge variant="outline" className="text-sm px-3.5 py-1.5 border-emerald-300 text-emerald-700 bg-emerald-50 font-bold">3차 대상자 (추적관리)</Badge>
             </div>
           </div>
           <div className="flex items-center gap-4 text-sm overflow-x-auto">

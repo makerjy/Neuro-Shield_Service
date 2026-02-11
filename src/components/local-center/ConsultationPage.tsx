@@ -108,6 +108,9 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
   const [scriptEditMode, setScriptEditMode] = useState(false);
   const [scriptDraft, setScriptDraft] = useState('');
   const [scriptHistory, setScriptHistory] = useState<Array<{ id: string; step: ConsultationStep; title: string; before: string; after: string; ts: string }>>([]);
+
+  // 연락 대상 선택 (대상자 / 보호자)
+  const [consultTarget, setConsultTarget] = useState<'citizen' | 'guardian'>('citizen');
   
   // Mock Case Data
   const caseData = {
@@ -116,6 +119,7 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
     ageGroup: '70대 초반',
     gender: '남성',
     phone: '010-1234-5678',
+    guardianPhone: '010-9876-3064',   // 시민 예약 시 입력된 보호자 번호
     address: '서울시 강남구 **동',
     riskLevel: 'high' as const,
     riskScore: 78,
@@ -471,10 +475,36 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
   const currentScriptSet = consultationScripts[caseStatus];
   const scriptKey = `${caseStatus}-${currentStep}`;
   const currentScriptBase = currentScriptSet[currentStep];
-  const currentScriptData = {
-    ...currentScriptBase,
-    content: scriptEdits[scriptKey] ?? currentScriptBase.content,
+
+  // 보호자 선택 시 스크립트 오버라이드
+  const guardianScriptOverrides: Record<ConsultationStep, { content: string; tips: string[] }> = {
+    greeting: {
+      content: `안녕하세요, 저는 강남구 치매안심센터의 ${caseData.counselor} 상담사입니다. 보호자분이시죠?\n\n대상자분 건강 관련으로 연락드렸습니다. 지금 통화 가능하신가요?`,
+      tips: ['보호자와의 관계(배우자, 자녀 등)를 확인하세요', '대상자 상태를 간접적으로 파악하세요', '보호자의 동의를 먼저 얻으세요'],
+    },
+    purpose: {
+      content: `치매안심센터에서는 지역 주민분들의 인지 건강을 돕기 위해 정기적으로 건강 상태를 확인하고 있습니다.\n\n대상자분의 건강검진 결과를 바탕으로 1차 선별검사 안내를 드리고자 합니다. 보호자님께서 도움을 주시면 큰 힘이 됩니다.`,
+      tips: ['보호자의 부담을 이해하고 공감하세요', '센터의 지원 목적을 명확히 설명하세요', '비밀보장을 강조하세요'],
+    },
+    assessment: {
+      content: `대상자분이 요즘 일상생활에서 불편함이 있으신가요?\n\n보호자님 보시기에 평소와 달라진 행동이 있으신가요? 예를 들어 약속을 자주 잊으시거나, 같은 말을 반복하신다거나 하는 경험이 있으신가요?`,
+      tips: ['보호자 관점의 행동 변화를 중점적으로 파악하세요', '보호자의 돌봄 부담도 함께 확인하세요', '특이사항은 반드시 메모하세요'],
+    },
+    scheduling: {
+      content: `무료로 인지 건강 선별검사를 받으실 수 있습니다.\n\n보호자님이 함께 동행해 주시면 더욱 좋습니다. 편하신 날짜에 방문 예약을 도와드리겠습니다.\n\n보호자님을 위한 상담 프로그램도 안내해드릴 수 있습니다.`,
+      tips: ['보호자 동행의 중요성을 안내하세요', '센터 위치와 교통편을 안내하세요', '보호자용 상담 프로그램도 안내하세요'],
+    },
   };
+
+  const isGuardianConsult = consultTarget === 'guardian' && !!caseData.guardianPhone;
+  const currentScriptData = (() => {
+    const base = { ...currentScriptBase, content: scriptEdits[scriptKey] ?? currentScriptBase.content };
+    if (isGuardianConsult && !scriptEdits[scriptKey]) {
+      const override = guardianScriptOverrides[currentStep];
+      return { ...base, content: override.content, tips: override.tips };
+    }
+    return base;
+  })();
 
   const getElapsedTime = () => {
     if (!consultationStartTime) return '00:00';
@@ -526,6 +556,12 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
               <Phone className="h-3 w-3 text-gray-400" />
               {caseData.phone}
             </p>
+            {caseData.guardianPhone && (
+              <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
+                <User className="h-3 w-3 text-blue-400" />
+                <span className="text-blue-600">보호자</span> {caseData.guardianPhone}
+              </p>
+            )}
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">주소</p>
@@ -597,6 +633,66 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="p-4 space-y-4">
+                      {/* 연락 대상 선택 토글 */}
+                      <div className="border border-gray-200 rounded-lg p-3 bg-white">
+                        <p className="text-[10px] font-semibold text-gray-500 mb-2">연락 대상</p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setConsultTarget('citizen')}
+                            className={`flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 transition-all text-left ${
+                              consultTarget === 'citizen'
+                                ? 'border-blue-500 bg-blue-50'
+                                : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+                            }`}
+                          >
+                            <div className={`w-3 h-3 rounded-full border-2 flex items-center justify-center ${
+                              consultTarget === 'citizen' ? 'border-blue-500' : 'border-gray-300'
+                            }`}>
+                              {consultTarget === 'citizen' && <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                            </div>
+                            <div>
+                              <div className="text-xs font-semibold text-gray-900">대상자 본인</div>
+                              <div className="text-[10px] text-gray-500 flex items-center gap-1">
+                                <Phone className="h-2.5 w-2.5" />{caseData.phone}
+                              </div>
+                            </div>
+                          </button>
+                          {caseData.guardianPhone ? (
+                            <button
+                              onClick={() => setConsultTarget('guardian')}
+                              className={`flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 transition-all text-left ${
+                                consultTarget === 'guardian'
+                                  ? 'border-violet-500 bg-violet-50'
+                                  : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+                              }`}
+                            >
+                              <div className={`w-3 h-3 rounded-full border-2 flex items-center justify-center ${
+                                consultTarget === 'guardian' ? 'border-violet-500' : 'border-gray-300'
+                              }`}>
+                                {consultTarget === 'guardian' && <div className="w-1.5 h-1.5 rounded-full bg-violet-500" />}
+                              </div>
+                              <div>
+                                <div className="text-xs font-semibold text-gray-900 flex items-center gap-1">
+                                  보호자
+                                  <span className="inline-flex px-1 py-0 rounded text-[8px] font-medium bg-blue-100 text-blue-700">시민제공</span>
+                                </div>
+                                <div className="text-[10px] text-gray-500 flex items-center gap-1">
+                                  <Phone className="h-2.5 w-2.5" />{caseData.guardianPhone}
+                                </div>
+                              </div>
+                            </button>
+                          ) : (
+                            <div className="flex-1 flex items-center gap-2 px-3 py-2.5 rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 opacity-50">
+                              <div className="w-3 h-3" />
+                              <div>
+                                <div className="text-xs font-medium text-gray-400">보호자</div>
+                                <div className="text-[10px] text-gray-400">등록된 번호 없음</div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
                       {/* Step Selector */}
                       <div className="grid grid-cols-4 gap-2">
                         {(['greeting', 'purpose', 'assessment', 'scheduling'] as ConsultationStep[]).map((step, idx) => (

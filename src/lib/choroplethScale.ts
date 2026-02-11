@@ -14,6 +14,7 @@ export const COLOR_PALETTES = {
   orange: ['#fff7ed', '#fed7aa', '#fdba74', '#fb923c', '#f97316', '#ea580c', '#c2410c'],
   purple: ['#faf5ff', '#e9d5ff', '#d8b4fe', '#c084fc', '#a855f7', '#9333ea', '#7e22ce'],
   heat: ['#fef3c7', '#fde68a', '#fcd34d', '#fbbf24', '#f59e0b', '#d97706', '#b45309'],
+  risk: ['#ecfdf3', '#bbf7d0', '#86efac', '#fde68a', '#fbbf24', '#f97316', '#dc2626'],
 };
 
 /* ─────────────────────────────────────────────────────────────

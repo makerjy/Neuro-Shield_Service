@@ -1,31 +1,16 @@
 import React, { useState } from 'react';
-import { LocalCenterLayout } from './LocalCenterLayout';
-import { CaseDashboard } from './CaseDashboard';
-import { Calendar } from './Calendar';
-import { CaseDetail } from './CaseDetail';
-import { ConsultationPage } from './ConsultationPage';
-import { ConsultationSession } from './ConsultationSession';
-import { AppointmentBooking } from './AppointmentBooking';
-import { ChurnManagement } from './ChurnManagement';
-import { ReportGeneration } from './ReportGeneration';
-import { AuditLog } from './AuditLog';
-import { Settings } from './Settings';
+import { MainDashboard } from './v2/MainDashboard';
+import { CaseDashboard } from './v2/CaseDashboard';
+import { CalendarView } from './v2/CalendarView';
+import { ReportsView } from './v2/ReportsView';
+import { SettingsView } from './v2/SettingsView';
+import { Sidebar } from './v2/Sidebar';
+import { Header } from './v2/Header';
+import { CaseDetail } from './v2/CaseDetail';
+import { type StageType, type TabType } from './v2/shared';
 import { CaseDetailStage2 } from './CaseDetailStage2';
 import { CaseDetailStage3 } from './CaseDetailStage3';
-
-type PageType = 
-  | 'dashboard' 
-  | 'calendar' 
-  | 'case-detail' 
-  | 'case-detail-stage2'
-  | 'case-detail-stage3'
-  | 'consultation-page'
-  | 'consultation' 
-  | 'appointment-booking'
-  | 'churn-management'
-  | 'reports' 
-  | 'audit-log'
-  | 'settings';
+import { ConsultationPage } from './ConsultationPage';
 
 interface LocalCenterAppProps {
   userRole?: 'counselor' | 'center_manager';
@@ -40,115 +25,142 @@ export function LocalCenterApp({
   centerName = '서울시 강남구 치매안심센터',
   onLogout
 }: LocalCenterAppProps) {
-  const [currentPage, setCurrentPage] = useState<PageType>('dashboard');
-  const [selectedCaseId, setSelectedCaseId] = useState<string>('');
-  const [selectedCaseName, setSelectedCaseName] = useState<string>('');
-  const [selectedCasePhone, setSelectedCasePhone] = useState<string>('');
-  const [selectedStage, setSelectedStage] = useState<number>(1);
+  const [activeTab, setActiveTab] = useState<TabType>('main');
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [selectedCaseStage, setSelectedCaseStage] = useState<StageType>('Stage 1');
+  const [currentFilter, setCurrentFilter] = useState<string | null>(null);
+  const [caseSubView, setCaseSubView] = useState<'detail' | 'consultation' | 'stage-workflow'>('detail');
+  const [globalFilter, setGlobalFilter] = useState({
+    period: 'today',
+    manager: 'all',
+    stage: 'all',
+    quality: 'all',
+  });
 
-  const handleCaseSelect = (caseId: string, stage?: number) => {
+  const handleCaseSelect = (caseId: string, stage: StageType) => {
     setSelectedCaseId(caseId);
-    setSelectedCaseName('김민수');
-    setSelectedCasePhone('010-1234-5678');
-    const s = stage ?? 1;
-    setSelectedStage(s);
-    if (s === 2) setCurrentPage('case-detail-stage2');
-    else if (s === 3) setCurrentPage('case-detail-stage3');
-    else setCurrentPage('case-detail');
+    setSelectedCaseStage(stage);
+    setCaseSubView('detail');
+    setActiveTab('cases');
+  };
+
+  const handleNavigateToCases = (filter: string) => {
+    setCurrentFilter(filter);
+    setSelectedCaseId(null);
+    setCaseSubView('detail');
+    setActiveTab('cases');
+  };
+
+  const resetCaseSelection = () => {
+    setSelectedCaseId(null);
+    setCaseSubView('detail');
   };
 
   const handleStartConsultation = (caseId: string) => {
     setSelectedCaseId(caseId);
-    setCurrentPage('consultation-page');
+    setCaseSubView('consultation');
   };
 
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'dashboard':
-        return <CaseDashboard onCaseSelect={handleCaseSelect} />;
-      case 'case-detail-stage2':
-        return (
-          <CaseDetailStage2
-            caseId={selectedCaseId}
-            onBack={() => setCurrentPage('dashboard')}
-          />
-        );
-      case 'case-detail-stage3':
-        return (
-          <CaseDetailStage3
-            caseId={selectedCaseId}
-            onBack={() => setCurrentPage('dashboard')}
-          />
-        );
-      case 'calendar':
-        return <Calendar />;
-      case 'case-detail':
-        return (
-          <CaseDetail 
-            caseId={selectedCaseId} 
-            onBack={() => setCurrentPage('dashboard')}
-            onStartConsultation={handleStartConsultation}
-          />
-        );
-      case 'consultation-page':
+  const renderContent = () => {
+    if (selectedCaseId && activeTab === 'cases') {
+      if (caseSubView === 'consultation') {
         return (
           <ConsultationPage
             caseId={selectedCaseId}
-            onComplete={() => setCurrentPage('dashboard')}
-            onCancel={() => setCurrentPage('case-detail')}
-            onBack={() => setCurrentPage('case-detail')}
+            onComplete={resetCaseSelection}
+            onCancel={() => setCaseSubView('detail')}
+            onBack={() => setCaseSubView('detail')}
           />
         );
-      case 'consultation':
+      }
+
+      if (caseSubView === 'stage-workflow' && selectedCaseStage === 'Stage 2') {
         return (
-          <ConsultationSession
+          <CaseDetailStage2
             caseId={selectedCaseId}
-            patientName={selectedCaseName}
-            onComplete={() => setCurrentPage('dashboard')}
-            onCancel={() => setCurrentPage('case-detail')}
+            onBack={resetCaseSelection}
           />
         );
-      case 'appointment-booking':
+      }
+
+      if (caseSubView === 'stage-workflow' && selectedCaseStage === 'Stage 3') {
         return (
-          <AppointmentBooking
+          <CaseDetailStage3
             caseId={selectedCaseId}
-            patientName={selectedCaseName}
-            patientPhone={selectedCasePhone}
-            onComplete={() => setCurrentPage('dashboard')}
-            onCancel={() => setCurrentPage('case-detail')}
+            onBack={resetCaseSelection}
           />
         );
-      case 'churn-management':
+      }
+
+      return (
+        <CaseDetail
+          caseId={selectedCaseId}
+          stage={selectedCaseStage}
+          onBack={resetCaseSelection}
+        />
+      );
+    }
+
+    switch (activeTab) {
+      case 'main':
         return (
-          <ChurnManagement
-            caseId={selectedCaseId}
-            patientName={selectedCaseName}
-            patientPhone={selectedCasePhone}
-            onComplete={() => setCurrentPage('dashboard')}
-            onCancel={() => setCurrentPage('case-detail')}
+          <MainDashboard
+            onNavigateToCases={handleNavigateToCases}
+            onSelectCase={handleCaseSelect}
+            centerName={centerName}
           />
         );
+      case 'cases':
+        return (
+          <CaseDashboard
+            onSelectCase={handleCaseSelect}
+            initialFilter={currentFilter}
+          />
+        );
+      case 'calendar':
+        return <CalendarView />;
       case 'reports':
-        return <ReportGeneration />;
-      case 'audit-log':
-        return <AuditLog />;
+        return <ReportsView />;
       case 'settings':
-        return <Settings userName={userName} userRole={userRole} centerName={centerName} />;
+        return <SettingsView />;
       default:
-        return <CaseDashboard onCaseSelect={handleCaseSelect} />;
+        return (
+          <MainDashboard
+            onNavigateToCases={handleNavigateToCases}
+            onSelectCase={handleCaseSelect}
+            centerName={centerName}
+          />
+        );
     }
   };
 
   return (
-    <LocalCenterLayout
-      currentPage={currentPage}
-      userRole={userRole}
-      userName={userName}
-      centerName={centerName}
-      onPageChange={setCurrentPage}
-      onLogout={onLogout}
-    >
-      {renderPage()}
-    </LocalCenterLayout>
+    <div className="flex h-screen w-full bg-gray-50 overflow-hidden text-slate-900 font-sans">
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={(tab) => {
+          setActiveTab(tab);
+          setSelectedCaseId(null);
+          setCurrentFilter(null);
+          setCaseSubView('detail');
+        }}
+        userName={userName}
+        centerName={centerName}
+        userRole={userRole}
+        onLogout={onLogout}
+      />
+
+      <div className="flex-1 flex flex-col min-w-0">
+        <Header
+          activeTab={activeTab}
+          globalFilter={globalFilter}
+          setGlobalFilter={setGlobalFilter}
+        />
+
+        <main className="flex-1 overflow-y-auto p-6">
+          {renderContent()}
+        </main>
+      </div>
+    </div>
   );
 }

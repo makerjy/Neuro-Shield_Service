@@ -62,6 +62,9 @@ export interface Case {
   reservation: Reservation | null;
   autoMemo: AutoMemo;
   smsHistory: SmsHistoryEntry[];
+
+  // 보호자 연락처 (시민 예약 시 입력, 선택 사항)
+  guardianPhone?: string;
 }
 
 // ─── 확장 Appointment ───
@@ -302,6 +305,10 @@ export function generateCases(): Case[] {
         lines: memoLines,
       },
       smsHistory,
+      // 약 30% 케이스에 보호자 연락처 존재 (시민 예약 시 입력)
+      guardianPhone: seeded(`${s}-gp`) < 0.30
+        ? `010-${String(2000 + Math.floor(seeded(`${s}-gp1`) * 8000)).padStart(4, '0')}-${String(1000 + Math.floor(seeded(`${s}-gp2`) * 9000)).padStart(4, '0')}`
+        : undefined,
     };
   });
 }

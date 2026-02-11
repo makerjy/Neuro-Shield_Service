@@ -1,0 +1,579 @@
+import React, { useMemo, useState } from "react";
+import { 
+  ChevronLeft, 
+  UserCircle, 
+  ShieldCheck, 
+  Clock, 
+  Lock, 
+  Eye, 
+  ArrowRight,
+  FileText,
+  Phone,
+  Calendar,
+  AlertTriangle,
+  Activity,
+  CheckCircle2,
+  AlertCircle,
+  BarChart3,
+  History,
+  ArrowRightCircle,
+  ExternalLink,
+  MessageSquare
+} from "lucide-react";
+import { cn, type StageType } from "./shared";
+import { toast } from "sonner";
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
+import { getCaseRecordById, getStage1ContactPriority, maskName, maskPhone, toAgeBand, type CaseRecord } from "./caseRecords";
+
+interface CaseDetailProps {
+  caseId: string;
+  stage: StageType;
+  onBack: () => void;
+}
+
+export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
+  const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
+
+  return (
+    <div className="flex flex-col h-full bg-[#f4f6f9]">
+      {/* 상단 스티키 헤더 */}
+      <div className="sticky top-0 z-20 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-4">
+          <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+            <ChevronLeft size={20} />
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold text-gray-900">{caseId}</h2>
+              <span className={cn(
+                "px-3.5 py-1.5 rounded text-sm font-bold border",
+                stage === "Stage 1" ? "bg-emerald-50 text-emerald-700 border-emerald-100" :
+                stage === "Stage 2" ? "bg-blue-50 text-blue-700 border-blue-100" : "bg-purple-50 text-purple-700 border-purple-100"
+              )}>
+                {stage}
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
+              <span className="font-bold text-gray-700">담당자: 김성실 매니저</span>
+              <span className="w-px h-2 bg-gray-200"></span>
+              <span>현재 상태: <span className="text-blue-600 font-bold">진행중</span></span>
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button className="px-4 py-2 text-xs font-bold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-2">
+            <Activity size={14} /> 운영 지원 요청
+          </button>
+          <button className="px-4 py-2 text-xs font-bold text-white bg-[#163b6f] rounded-lg shadow-sm hover:shadow-md transition-all flex items-center gap-2">
+            다음 액션 1순위 실행 <ArrowRightCircle size={14} />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+              <UserCircle size={16} className="text-gray-500" />
+              개인정보 요약
+            </h3>
+            <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-1 rounded">
+              {stage === "Stage 1" ? "Stage 1: 케이스ID 기반 식별" : "Stage 2+: 비식별 처리 적용"}
+            </span>
+          </div>
+          {profile ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+              <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                <p className="text-[10px] text-gray-400 font-bold uppercase">식별 키</p>
+                <p className="mt-1 font-bold text-gray-800">
+                  {stage === "Stage 1" ? profile.id : `${maskName(profile.profile.name)} (${profile.id})`}
+                </p>
+              </div>
+              <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                <p className="text-[10px] text-gray-400 font-bold uppercase">연령</p>
+                <p className="mt-1 font-bold text-gray-800">
+                  {stage === "Stage 1" ? toAgeBand(profile.profile.age) : `${profile.profile.age}세`}
+                </p>
+              </div>
+              <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                <p className="text-[10px] text-gray-400 font-bold uppercase">연락처</p>
+                <p className="mt-1 font-bold text-gray-800">
+                  {maskPhone(profile.profile.phone)}
+                </p>
+                {stage === "Stage 1" && profile.profile.guardianPhone && (
+                  <p className="mt-1 text-[11px] text-gray-500">보호자: {maskPhone(profile.profile.guardianPhone)}</p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">케이스 프로필 데이터가 없어 기본 식별 정보만 표시합니다.</p>
+          )}
+        </div>
+
+        {stage === "Stage 1" && <Stage1Detail caseRecord={profile} />}
+        {stage === "Stage 2" && <Stage2Detail />}
+        {stage === "Stage 3" && <Stage3Detail />}
+
+        {/* 하단 고정 감사 로그/히스토리 */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+              <History size={16} className="text-gray-400" />
+              변경 사유 및 감사 로그
+            </h3>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded flex items-center gap-1">
+                <ShieldCheck size={10} /> 보안 무결성 확인됨
+              </span>
+              <button className="text-[10px] font-bold text-gray-400 hover:text-gray-600">로그 내보내기</button>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {[
+              { time: "2026-02-11 11:20", user: "김성실", action: "관리 경로 변경", reason: "재평가 트리거 충족 (점수 하락 15% 초과)", logId: "LOG-9921" },
+              { time: "2026-02-10 14:45", user: "박민지", action: "데이터 품질 승인", reason: "누락된 정보 보완 완료 확인", logId: "LOG-8842" },
+              { time: "2026-02-09 10:00", user: "System", action: "Stage 승급", reason: "2차 평가 데이터 입력 완료에 따른 자동 전환", logId: "LOG-7710" },
+            ].map((log, idx) => (
+              <div key={idx} className="flex gap-4 text-xs group">
+                <div className="w-32 shrink-0 font-mono text-gray-400">{log.time}</div>
+                <div className="shrink-0 font-bold text-gray-700 w-20">{log.user}</div>
+                <div className="flex-1">
+                  <span className="font-bold text-[#163b6f]">{log.action}: </span>
+                  <span className="text-gray-600">{log.reason}</span>
+                </div>
+                <div className="shrink-0 font-mono text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">#{log.logId}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Stage 1 Case Detail */
+function Stage1Detail({ caseRecord }: { caseRecord?: CaseRecord }) {
+  const contactPriority = getStage1ContactPriority(caseRecord);
+
+  return (
+    <div className="grid grid-cols-12 gap-6">
+      <div className="col-span-12">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-8">
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">접촉 우선도</span>
+              <span className={cn("inline-flex items-center rounded-md border px-2.5 py-1 text-sm font-bold", contactPriority.tone)}>
+                {contactPriority.label}
+              </span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">개입 레벨</span>
+              <span className="text-sm font-bold text-[#163b6f]">{caseRecord?.path ?? "초기 안내"}</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">연계 상태</span>
+              <span className="text-sm font-bold text-orange-600">{caseRecord?.status ?? "검토중"}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-gray-400">데이터 품질</span>
+            <span className="px-2 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded border border-emerald-100">양호 (100%)</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 좌측 블록: 1차 점수 요약 */}
+      <div className="col-span-8 space-y-6">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-gray-800">1차 점수 요약</h3>
+            <span className="text-[10px] text-gray-400 font-mono">Ver 2.1 (2026-02-10 14:00 산출)</span>
+          </div>
+          <div className="grid grid-cols-4 gap-4 mb-8">
+            {[
+              { label: "기억력", score: 42, color: "text-red-600" },
+              { label: "지남력", score: 68, color: "text-orange-500" },
+              { label: "언어능력", score: 85, color: "text-emerald-600" },
+              { label: "수행능력", score: 72, color: "text-gray-900" },
+            ].map(item => (
+              <div key={item.label} className="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">{item.label}</p>
+                <div className="flex items-center justify-center gap-1">
+                  <span className={cn("text-2xl font-bold", item.color)}>{item.score}</span>
+                  <span className="text-[10px] text-gray-300 font-bold">/100</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="space-y-4">
+            <h4 className="text-xs font-bold text-gray-500 flex items-center gap-2">
+              <BarChart3 size={14} /> 상위 기여 요인 Top3 (범주형)
+            </h4>
+            <div className="flex gap-2">
+              <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs font-bold text-[#163b6f]">최근 망각 빈도 급증</span>
+              <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs font-bold text-[#163b6f]">길 찾기 어려움 호소</span>
+              <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-xs font-bold text-[#163b6f]">사회적 고립 징후</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 우측 블록: 운영 액션 */}
+      <div className="col-span-4 space-y-4">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <h3 className="font-bold text-gray-800 mb-4">운영 액션</h3>
+          <div className="space-y-3">
+            <button className="w-full p-4 border border-gray-100 rounded-xl hover:bg-gray-50 text-left transition-all group">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-gray-400">L0: 정보 제공 기록</span>
+                <CheckCircle2 size={16} className="text-gray-300 group-hover:text-emerald-500" />
+              </div>
+              <p className="text-[10px] text-gray-400">치매 예방 브로슈어 및 서비스 안내 발송</p>
+            </button>
+            <button className="w-full p-4 border border-gray-100 rounded-xl hover:bg-gray-50 text-left transition-all group">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-gray-400">L1: 자가점검/안내 발송</span>
+                <MessageSquare size={16} className="text-gray-300 group-hover:text-blue-500" />
+              </div>
+              <p className="text-[10px] text-gray-400">정기 자가검진 키트(비대면) 발송 예약</p>
+            </button>
+            
+            <div className="relative">
+              <button className="w-full p-4 border-2 border-[#163b6f] bg-blue-50/20 rounded-xl hover:bg-blue-50 text-left transition-all">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-[#163b6f]">L2 후보: 2차 연계 요청</span>
+                  <ArrowRight size={16} className="text-[#163b6f]" />
+                </div>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">동의 完</span>
+                  <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">채널 확인 完</span>
+                  <span className="text-[9px] font-bold bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">목적 고지 중</span>
+                </div>
+              </button>
+              {/* Gate Policy Badge */}
+              <div className="absolute -top-2 -right-2 px-2 py-0.5 bg-red-600 text-white text-[9px] font-bold rounded-full shadow-lg border-2 border-white flex items-center gap-1">
+                <Lock size={8} /> 정책 게이트 미충족
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="bg-gray-900 text-white rounded-xl p-4 shadow-sm">
+          <p className="text-[10px] font-bold opacity-50 uppercase mb-2">운영자 주석</p>
+          <p className="text-xs leading-relaxed">
+            대상자가 2차 연계 목적에 대해 재설명을 요청했습니다. 전화 상담 후 게이트 승인을 완료하십시오.
+          </p>
+        </div>
+      </div>
+      
+      {/* 하단 담당자 액션 로그 (Stage 1 특화) */}
+      <div className="col-span-12">
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-[10px] text-gray-500 italic text-center">
+          * 운영자 주석: L2 후보로 분류된 케이스입니다. 개인정보 활용 동의 및 채널 고지가 완료되었으므로 연계 요청을 실행해 주십시오. (마지막 로그: 김성실, 2026-02-11 11:45)
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Stage 2 Case Detail */
+function Stage2Detail() {
+  const [showSensitive, setShowSensitive] = useState(false);
+
+  const handleReveal = () => {
+    setShowSensitive(true);
+    toast.info("민감 정보 열람이 감사 로그에 실시간 기록되었습니다.", {
+      description: "열람자: 김성실, 열람 일시: 2026-02-11 11:50",
+    });
+  };
+
+  return (
+    <div className="grid grid-cols-12 gap-6">
+      {/* Header Info Block */}
+      <div className="col-span-12">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-4 flex items-center justify-between border-l-8 border-[#163b6f]">
+          <div className="flex items-center gap-12">
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">관리 경로</span>
+              <span className="text-xl font-bold text-[#163b6f]">의뢰 우선 경로</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">처리 상태</span>
+              <span className="text-sm font-bold text-orange-600">2차 검사 완료 (대기)</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">다음 액션</span>
+              <span className="text-sm font-bold text-gray-900">의뢰서 생성 및 전송</span>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50"><Phone size={16} /></button>
+            <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50"><Calendar size={16} /></button>
+          </div>
+        </div>
+      </div>
+
+      <div className="col-span-8 space-y-6">
+        {/* 블록1: 검사 점수 요약 */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <h3 className="font-bold text-gray-800 mb-6">검사 점수 요약</h3>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-white border border-gray-200 flex items-center justify-center font-bold text-[#163b6f] shadow-sm text-lg">1</div>
+                <div>
+                  <p className="text-sm font-bold text-gray-900">1차 선별 검사 (CIST)</p>
+                  <p className="text-[11px] text-gray-500">2026-01-15 시행 | 정규 시점</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-xl font-bold text-orange-600">18 / 30</span>
+                <p className="text-[10px] text-gray-400">신뢰도: 양호</p>
+              </div>
+            </div>
+            <div className="flex items-center justify-between p-4 bg-[#163b6f]/5 rounded-xl border border-[#163b6f]/20 shadow-sm">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-full bg-[#163b6f] flex items-center justify-center font-bold text-white shadow-lg text-lg">2</div>
+                <div>
+                  <p className="text-sm font-bold text-[#163b6f]">2차 신경심리 검사 (SNSB)</p>
+                  <p className="text-[11px] text-gray-500">2026-02-10 시행 | 표준화 분석 완료</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-xl font-bold text-[#163b6f]">-2.1 SD</span>
+                <p className="text-[10px] text-red-600 font-bold">누락항목 1건 (시공간 구성)</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 블록2: 참고 분류 (의료진 확인 전) */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="bg-gray-100/80 px-6 py-3 border-b border-gray-200 flex items-center justify-between">
+            <h3 className="text-xs font-bold text-gray-600 uppercase flex items-center gap-2">
+              <Lock size={14} className="text-orange-500" /> 참고 분류 (의료진 확인 전 - 비진단형)
+            </h3>
+            {!showSensitive && (
+              <button 
+                onClick={handleReveal}
+                className="flex items-center gap-1.5 px-3 py-1 bg-white border border-[#163b6f] rounded text-[10px] font-bold text-[#163b6f] hover:bg-blue-50 transition-colors shadow-sm"
+              >
+                <Eye size={12} /> 권한자 열람 실행
+              </button>
+            )}
+          </div>
+          <div className="p-8 min-h-[140px] flex items-center justify-center bg-gray-50/30">
+            {showSensitive ? (
+              <div className="w-full grid grid-cols-2 gap-6 animate-in fade-in zoom-in duration-300">
+                <div className="p-5 border border-red-200 bg-red-50/50 rounded-2xl text-center shadow-sm">
+                  <p className="text-[10px] font-bold text-gray-400 mb-1 uppercase">참고 분류 후보</p>
+                  <p className="text-2xl font-bold text-red-700">MCI (High)</p>
+                </div>
+                <div className="p-5 border border-blue-200 bg-blue-50/50 rounded-2xl text-center shadow-sm">
+                  <p className="text-[10px] font-bold text-gray-400 mb-1 uppercase">참고 데이터 기반 전환 확률</p>
+                  <p className="text-2xl font-bold text-blue-700">82%</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2">
+                <Lock size={24} className="text-gray-300" />
+                <p className="text-sm text-gray-400 italic">열람 즉시 관리 시스템에 로그가 기록됩니다.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="col-span-4 space-y-6">
+        {/* 블록3: 경로별 액션 */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
+            <ArrowRightCircle size={18} className="text-[#163b6f]" /> 경로별 운영 액션
+          </h3>
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold text-[#163b6f] uppercase border-l-2 border-[#163b6f] pl-2">의뢰 우선 경로</p>
+              <button className="w-full py-3 bg-[#163b6f] text-white text-xs font-bold rounded-xl hover:bg-[#0f2a50] flex items-center justify-center gap-2 shadow-md">
+                <FileText size={16} /> 의뢰서 생성 및 전송
+              </button>
+              <button className="w-full py-2 border border-gray-200 text-gray-700 text-xs font-bold rounded-lg hover:bg-gray-50">병원 예약 현황 추적</button>
+            </div>
+            <div className="space-y-2 pt-4 border-t border-gray-50">
+              <p className="text-[10px] font-bold text-gray-400 uppercase border-l-2 border-gray-200 pl-2">MCI 관리 경로</p>
+              <button className="w-full py-2 border border-gray-200 text-gray-700 text-xs font-bold rounded-lg hover:bg-gray-50">정기 추적 등록 (CRF)</button>
+              <button className="w-full py-2 border border-gray-200 text-gray-700 text-xs font-bold rounded-lg hover:bg-gray-50">교육/상담 프로그램 연계</button>
+            </div>
+            <div className="space-y-2 pt-4 border-t border-gray-50">
+              <p className="text-[10px] font-bold text-gray-400 uppercase border-l-2 border-gray-200 pl-2">정상 추적 권고</p>
+              <button className="w-full py-2 border border-gray-200 text-gray-400 text-xs font-bold rounded-lg cursor-not-allowed" disabled>사례 종결 (기준 미충족)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 하단: 케이스 타임라인 (Stage 2 특화) */}
+      <div className="col-span-12">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 overflow-x-auto">
+          <h3 className="font-bold text-gray-800 mb-8 flex items-center gap-2">
+            <History size={16} /> 검사-의뢰-예약-종결 타임라인
+          </h3>
+          <div className="flex items-center min-w-[800px]">
+            {[
+              { step: "선별검사", date: "01-15", status: "완료", color: "bg-emerald-500" },
+              { step: "2차평가", date: "02-10", status: "완료", color: "bg-emerald-500" },
+              { step: "의뢰서전송", date: "대기", status: "예정", color: "bg-orange-500" },
+              { step: "정밀검사", date: "미정", status: "예정", color: "bg-gray-200" },
+              { step: "추적/종결", date: "미정", status: "예정", color: "bg-gray-200" },
+            ].map((item, idx, arr) => (
+              <React.Fragment key={idx}>
+                <div className="flex flex-col items-center relative z-10">
+                  <div className={cn("w-10 h-10 rounded-full flex items-center justify-center text-white shadow-lg", item.color)}>
+                    {item.status === "완료" ? <CheckCircle2 size={20} /> : <div className="w-2 h-2 bg-white rounded-full"></div>}
+                  </div>
+                  <p className="text-[11px] font-bold text-gray-900 mt-2">{item.step}</p>
+                  <p className="text-[10px] text-gray-400">{item.date}</p>
+                </div>
+                {idx < arr.length - 1 && (
+                  <div className={cn("flex-1 h-1 mx-2", item.status === "완료" && arr[idx+1].status === "완료" ? "bg-emerald-500" : "bg-gray-100")}></div>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Stage 3 Case Detail */
+function Stage3Detail() {
+  const chartData = [
+    { name: "24-Q3", score: 85, trigger: false },
+    { name: "24-Q4", score: 82, trigger: false },
+    { name: "25-Q1", score: 75, trigger: true },
+    { name: "25-Q2", score: 72, trigger: true },
+    { name: "26-Q1", score: 68, trigger: true },
+  ];
+
+  return (
+    <div className="grid grid-cols-12 gap-6">
+      <div className="col-span-12">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm px-6 py-4 flex items-center justify-between border-l-8 border-red-600">
+          <div className="flex items-center gap-12">
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">진행 위험 구간</span>
+              <span className="text-xl font-bold text-red-600">고위험 구간 (Danger Zone)</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">추적 강도</span>
+              <span className="text-sm font-bold text-[#163b6f]">3개월 주기 (상향됨)</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-bold text-gray-400 uppercase">트리거 상태</span>
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-red-600 rounded-full animate-pulse"></div>
+                <span className="text-sm font-bold text-red-600">다중 트리거 활성화</span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+             <span className="text-[10px] font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded">데이터 품질: 95%</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="col-span-8 space-y-6">
+        {/* 블록1: 데이터 요약 */}
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
+            <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">2차 점수 (최근)</p>
+            <p className="text-2xl font-bold text-red-600">-2.4 SD</p>
+            <p className="text-[10px] text-gray-400 mt-1">직전 대비 15% 하락</p>
+          </div>
+          <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
+            <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">MRI 요약</p>
+            <p className="text-sm font-bold text-orange-600">내측 측두엽 위축</p>
+            <p className="text-[10px] text-gray-400 mt-1">MTA Scale 3단계</p>
+          </div>
+          <div className="bg-white p-5 rounded-xl border border-gray-200 shadow-sm">
+            <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">연락 성공률</p>
+            <p className="text-2xl font-bold text-gray-900">33%</p>
+            <p className="text-[10px] text-red-600 font-bold mt-1">3회 연속 부재중</p>
+          </div>
+        </div>
+
+        {/* 블록2: 변화 추이 차트 */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="font-bold text-gray-800">지표 변화 추이</h3>
+            <div className="flex gap-4">
+              <div className="flex items-center gap-1.5 text-[9px] font-bold text-gray-500">
+                <div className="w-2 h-2 rounded-full bg-red-600"></div> 핵심 지표
+              </div>
+              <div className="flex items-center gap-1.5 text-[9px] font-bold text-gray-500">
+                <div className="w-2 h-2 rounded-full bg-gray-200"></div> 관리 임계치
+              </div>
+            </div>
+          </div>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="name" fontSize={10} axisLine={false} tickLine={false} tick={{ fill: '#94a3b8' }} />
+                <YAxis fontSize={10} axisLine={false} tickLine={false} tick={{ fill: '#94a3b8' }} />
+                <Tooltip />
+                <Line type="monotone" dataKey="score" stroke="#dc2626" strokeWidth={3} dot={{ r: 4, fill: "#dc2626" }} />
+                <Line type="monotone" dataKey="threshold" stroke="#e2e8f0" strokeDasharray="5 5" dot={false} strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="col-span-4 space-y-6">
+        {/* 블록3: 재평가 트리거 규칙 패널 */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2 text-sm">
+            <AlertTriangle size={16} className="text-red-600" /> 재평가 트리거 현황
+          </h3>
+          <div className="space-y-4">
+            {[
+              { label: "점수 하락 (10% 이상)", value: "15% 하락", status: "충족", color: "text-red-600 bg-red-50" },
+              { label: "검사 누락 (2회 이상)", value: "1회 누락", status: "미충족", color: "text-gray-400 bg-gray-50" },
+              { label: "연락 실패 (3회 이상)", value: "4회 연속", status: "충족", color: "text-red-600 bg-red-50" },
+            ].map((rule, idx) => (
+              <div key={idx} className="flex flex-col gap-1.5 border-b border-gray-50 pb-3 last:border-0 last:pb-0">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-bold text-gray-700">{rule.label}</span>
+                  <span className={cn("text-[9px] font-bold px-1.5 py-0.5 rounded", rule.color)}>{rule.status}</span>
+                </div>
+                <p className="text-[10px] text-gray-500">현재 상태: {rule.value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 블록4: 운영 액션 */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <h3 className="font-bold text-gray-800 mb-4">운영 액션</h3>
+          <div className="space-y-3">
+            <button className="w-full py-3 bg-red-600 text-white text-xs font-bold rounded-xl flex flex-col items-center gap-1 shadow-lg hover:bg-red-700 transition-all">
+              <Calendar size={18} />
+              <span>재평가 일정 생성</span>
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button className="py-2.5 border border-gray-200 rounded-lg text-[10px] font-bold text-gray-700 hover:bg-gray-50">추적 강도 조정</button>
+              <button className="py-2.5 border border-gray-200 rounded-lg text-[10px] font-bold text-gray-700 hover:bg-gray-50">의뢰/연계 강화</button>
+            </div>
+            <button className="w-full py-2.5 border-2 border-orange-500 text-orange-600 text-[10px] font-bold rounded-lg hover:bg-orange-50">이탈 방지 재연락</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="col-span-12">
+        <div className="bg-red-50 border border-red-100 rounded-xl p-3 text-[10px] text-red-700 font-bold italic text-center">
+          * 위험 구간 변경 및 강도 상향 사유: 26-Q1 점수 하락 트리거 및 연락 실패 반복으로 인한 추적 고도화 필요 (감사 로그 기록됨)
+        </div>
+      </div>
+    </div>
+  );
+}

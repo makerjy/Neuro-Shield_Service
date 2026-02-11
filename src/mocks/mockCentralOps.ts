@@ -667,3 +667,282 @@ export const MOCK_UNIFIED_AUDIT: UnifiedAuditEvent[] = [
     kpiSnapshot: { slaRate: 82.3, riskTop3: ['부산 해운대구', '대구 달서구', '경기 안산시'], regionContext: '전국' },
   },
 ];
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   E) 중앙센터 운영감사형 KPI Mock API
+   Stage0~3 + L0~L2 파이프라인 기반
+   GET /central/dashboard/kpis, /central/metrics/funnel, bottlenecks, linkage, regions, cases
+═══════════════════════════════════════════════════════════════════════════════ */
+
+import type {
+  CentralTimeWindow,
+  CentralKpiId,
+  CentralKpiValue,
+  CentralDashboardKpisResponse,
+  FunnelStage,
+  FunnelResponse,
+  BottleneckMetric,
+  BottleneckResponse,
+  LinkageMetric,
+  LinkageResponse,
+  RegionComparisonRow,
+  RegionComparisonResponse,
+} from '../lib/kpi.types';
+
+/* ── deterministic seed helpers ── */
+function _hash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+function _sv(seed: string, min: number, max: number): number {
+  return min + (((_hash(seed) % 10000) / 10000) * (max - min));
+}
+
+const REGION_LIST = [
+  { code: '11', name: '서울특별시' },    { code: '26', name: '부산광역시' },
+  { code: '27', name: '대구광역시' },    { code: '28', name: '인천광역시' },
+  { code: '29', name: '광주광역시' },    { code: '30', name: '대전광역시' },
+  { code: '31', name: '울산광역시' },    { code: '36', name: '세종특별자치시' },
+  { code: '41', name: '경기도' },        { code: '43', name: '충청북도' },
+  { code: '44', name: '충청남도' },      { code: '45', name: '전라북도' },
+  { code: '46', name: '전라남도' },      { code: '47', name: '경상북도' },
+  { code: '48', name: '경상남도' },      { code: '50', name: '제주특별자치도' },
+  { code: '51', name: '강원특별자치도' },
+];
+
+const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+/* ─────────────────────────────────────────────────────────────
+   1) GET /central/dashboard/kpis?window=
+───────────────────────────────────────────────────────────── */
+export async function fetchCentralKpis(
+  window: CentralTimeWindow = 'LAST_7D'
+): Promise<CentralDashboardKpisResponse> {
+  await delay(200);
+  const seed = `central-kpis-${window}`;
+  const sparkline = (base: number, spread: number) =>
+    Array.from({ length: 7 }, (_, i) => Number((base + _sv(`${seed}-sp-${i}`, -spread, spread)).toFixed(1)));
+
+  const kpis: CentralKpiValue[] = [
+    {
+      kpiId: 'RISK_SIGNAL_DETECTION',
+      window,
+      numerator: Math.round(_sv(`${seed}-rsd-n`, 1200, 2400)),
+      denominator: Math.round(_sv(`${seed}-rsd-d`, 10000, 18000)),
+      value: Number(_sv(`${seed}-rsd-v`, 8, 18).toFixed(1)),
+      delta7d: Number(_sv(`${seed}-rsd-delta`, -2, 3).toFixed(1)),
+      sparkline: sparkline(13, 3),
+    },
+    {
+      kpiId: 'CONSENT_CONVERSION',
+      window,
+      numerator: Math.round(_sv(`${seed}-cc-n`, 600, 1400)),
+      denominator: Math.round(_sv(`${seed}-cc-d`, 1200, 2400)),
+      value: Number(_sv(`${seed}-cc-v`, 48, 75).toFixed(1)),
+      delta7d: Number(_sv(`${seed}-cc-delta`, -5, 8).toFixed(1)),
+      auxiliary: { medianFlaggedToGrantedDays: Number(_sv(`${seed}-cc-aux`, 1.5, 5.0).toFixed(1)) },
+      sparkline: sparkline(62, 8),
+    },
+    {
+      kpiId: 'L2_QUEUE_BACKLOG',
+      window,
+      numerator: Math.round(_sv(`${seed}-l2-n`, 80, 350)),
+      denominator: Math.round(_sv(`${seed}-l2-d`, 500, 1200)),
+      value: Number(_sv(`${seed}-l2-v`, 10, 35).toFixed(1)),
+      delta7d: Number(_sv(`${seed}-l2-delta`, -4, 6).toFixed(1)),
+      auxiliary: {
+        firstActionLatencyMedianHours: Number(_sv(`${seed}-l2-lat`, 4, 36).toFixed(1)),
+        backlogCount: Math.round(_sv(`${seed}-l2-bc`, 30, 200)),
+      },
+      sparkline: sparkline(22, 6),
+    },
+    {
+      kpiId: 'STAGE2_LINKAGE',
+      window,
+      numerator: Math.round(_sv(`${seed}-s2-n`, 200, 800)),
+      denominator: Math.round(_sv(`${seed}-s2-d`, 400, 1200)),
+      value: Number(_sv(`${seed}-s2-v`, 50, 80).toFixed(1)),
+      delta7d: Number(_sv(`${seed}-s2-delta`, -4, 6).toFixed(1)),
+      auxiliary: {
+        medianAppliedToLinkedDays: Number(_sv(`${seed}-s2-lt`, 3, 14).toFixed(1)),
+        blockedCount: Math.round(_sv(`${seed}-s2-blk`, 10, 80)),
+      },
+      sparkline: sparkline(65, 8),
+    },
+    {
+      kpiId: 'MCI_FOLLOWUP_ENROLL',
+      window,
+      numerator: Math.round(_sv(`${seed}-mci-n`, 60, 300)),
+      denominator: Math.round(_sv(`${seed}-mci-d`, 150, 600)),
+      value: Number(_sv(`${seed}-mci-v`, 30, 65).toFixed(1)),
+      delta7d: Number(_sv(`${seed}-mci-delta`, -3, 5).toFixed(1)),
+      sparkline: sparkline(48, 7),
+    },
+  ];
+
+  return { window, timestamp: new Date().toISOString(), kpis };
+}
+
+/* ─────────────────────────────────────────────────────────────
+   2) GET /central/metrics/funnel?window=
+───────────────────────────────────────────────────────────── */
+export async function fetchCentralFunnel(
+  window: CentralTimeWindow = 'LAST_7D'
+): Promise<FunnelResponse> {
+  await delay(150);
+  const seed = `central-funnel-${window}`;
+  const reach = Math.round(_sv(`${seed}-reach`, 50000, 120000));
+  const s0 = Math.round(reach * _sv(`${seed}-s0r`, 0.25, 0.40));
+  const s1 = Math.round(s0 * _sv(`${seed}-s1r`, 0.10, 0.20));
+  const consent = Math.round(s1 * _sv(`${seed}-cnr`, 0.50, 0.72));
+  const l0 = Math.round(consent * _sv(`${seed}-l0r`, 0.30, 0.45));
+  const l1 = Math.round(consent * _sv(`${seed}-l1r`, 0.25, 0.38));
+  const l2 = Math.round(consent * _sv(`${seed}-l2r`, 0.12, 0.25));
+  const s2 = Math.round((l1 + l2) * _sv(`${seed}-s2r`, 0.35, 0.55));
+  const s3 = Math.round(s2 * _sv(`${seed}-s3r`, 0.15, 0.35));
+
+  const stagesRaw = [
+    { stage: 'Reach', label: '접근(Reach)', count: reach },
+    { stage: 'Stage0', label: '0차 스크리닝', count: s0 },
+    { stage: 'Stage1', label: '1차 위험 신호', count: s1 },
+    { stage: 'Consent', label: '동의 획득', count: consent },
+    { stage: 'L0', label: 'L0 자동배정', count: l0 },
+    { stage: 'L1', label: 'L1 일반상담', count: l1 },
+    { stage: 'L2', label: 'L2 심층상담', count: l2 },
+    { stage: 'Stage2', label: '2차 연결', count: s2 },
+    { stage: 'Stage3', label: '3차 추적관리', count: s3 },
+  ];
+
+  const stages: FunnelStage[] = stagesRaw.map((s, i) => ({
+    ...s,
+    conversionRate: i === 0 ? 100 : Number(((s.count / stagesRaw[i - 1].count) * 100).toFixed(1)),
+  }));
+
+  return { window, stages };
+}
+
+/* ─────────────────────────────────────────────────────────────
+   3) GET /central/metrics/bottlenecks?window=
+───────────────────────────────────────────────────────────── */
+export async function fetchCentralBottlenecks(
+  window: CentralTimeWindow = 'LAST_7D'
+): Promise<BottleneckResponse> {
+  await delay(150);
+  const seed = `central-bn-${window}`;
+  const metrics: BottleneckMetric[] = [
+    // 동의 병목
+    { key: 'consent_pending_rate', label: '동의 보류율', value: Number(_sv(`${seed}-cp`, 15, 45).toFixed(1)), unit: '%', threshold: 30, status: _sv(`${seed}-cp`, 15, 45) > 30 ? 'red' : _sv(`${seed}-cp`, 15, 45) > 20 ? 'yellow' : 'green', category: 'consent' },
+    { key: 'consent_median_days', label: '동의 소요 중앙값', value: Number(_sv(`${seed}-cd`, 1.5, 6).toFixed(1)), unit: '일', threshold: 3, status: _sv(`${seed}-cd`, 1.5, 6) > 3 ? 'red' : _sv(`${seed}-cd`, 1.5, 6) > 2 ? 'yellow' : 'green', category: 'consent' },
+    // 입력 readiness
+    { key: 'input_readiness_rate', label: '입력 준비율', value: Number(_sv(`${seed}-ir`, 70, 98).toFixed(1)), unit: '%', threshold: 90, status: _sv(`${seed}-ir`, 70, 98) < 90 ? 'red' : 'green', category: 'readiness' },
+    { key: 'data_completeness', label: '데이터 완전성', value: Number(_sv(`${seed}-dc`, 82, 99).toFixed(1)), unit: '%', threshold: 95, status: _sv(`${seed}-dc`, 82, 99) < 95 ? 'yellow' : 'green', category: 'readiness' },
+    // blocked
+    { key: 'stage2_blocked_rate', label: '2차 차단율', value: Number(_sv(`${seed}-s2b`, 5, 25).toFixed(1)), unit: '%', threshold: 15, status: _sv(`${seed}-s2b`, 5, 25) > 15 ? 'red' : _sv(`${seed}-s2b`, 5, 25) > 10 ? 'yellow' : 'green', category: 'blocked' },
+    { key: 'stage3_blocked_rate', label: '3차 차단율', value: Number(_sv(`${seed}-s3b`, 3, 20).toFixed(1)), unit: '%', threshold: 12, status: _sv(`${seed}-s3b`, 3, 20) > 12 ? 'red' : _sv(`${seed}-s3b`, 3, 20) > 8 ? 'yellow' : 'green', category: 'blocked' },
+    // 시스템
+    { key: 'api_p95_latency', label: 'API P95 응답시간', value: Math.round(_sv(`${seed}-api`, 120, 800)), unit: 'ms', threshold: 500, status: _sv(`${seed}-api`, 120, 800) > 500 ? 'red' : _sv(`${seed}-api`, 120, 800) > 300 ? 'yellow' : 'green', category: 'system' },
+    { key: 'queue_depth', label: '메시지 큐 깊이', value: Math.round(_sv(`${seed}-qd`, 0, 500)), unit: '건', threshold: 200, status: _sv(`${seed}-qd`, 0, 500) > 200 ? 'red' : _sv(`${seed}-qd`, 0, 500) > 100 ? 'yellow' : 'green', category: 'system' },
+  ];
+  return { window, metrics };
+}
+
+/* ─────────────────────────────────────────────────────────────
+   4) GET /central/metrics/linkage?window=
+───────────────────────────────────────────────────────────── */
+export async function fetchCentralLinkage(
+  window: CentralTimeWindow = 'LAST_7D'
+): Promise<LinkageResponse> {
+  await delay(150);
+  const seed = `central-link-${window}`;
+  const metrics: LinkageMetric[] = [
+    {
+      stage: 'stage2',
+      linkageRate: Number(_sv(`${seed}-s2lr`, 55, 82).toFixed(1)),
+      medianLeadTimeDays: Number(_sv(`${seed}-s2lt`, 3, 12).toFixed(1)),
+      blockedCount: Math.round(_sv(`${seed}-s2bc`, 15, 90)),
+      blockedReasons: [
+        { reason: '서류 미비', count: Math.round(_sv(`${seed}-s2r1`, 5, 30)) },
+        { reason: '기관 거부', count: Math.round(_sv(`${seed}-s2r2`, 3, 20)) },
+        { reason: '연락 두절', count: Math.round(_sv(`${seed}-s2r3`, 2, 15)) },
+        { reason: '자격 미달', count: Math.round(_sv(`${seed}-s2r4`, 1, 10)) },
+      ],
+    },
+    {
+      stage: 'stage3',
+      linkageRate: Number(_sv(`${seed}-s3lr`, 40, 70).toFixed(1)),
+      medianLeadTimeDays: Number(_sv(`${seed}-s3lt`, 7, 28).toFixed(1)),
+      blockedCount: Math.round(_sv(`${seed}-s3bc`, 5, 40)),
+      blockedReasons: [
+        { reason: '이탈(dropout)', count: Math.round(_sv(`${seed}-s3r1`, 3, 15)) },
+        { reason: '재평가 대기', count: Math.round(_sv(`${seed}-s3r2`, 2, 10)) },
+        { reason: '타기관 전환', count: Math.round(_sv(`${seed}-s3r3`, 1, 8)) },
+      ],
+    },
+  ];
+  return { window, metrics };
+}
+
+/* ─────────────────────────────────────────────────────────────
+   5) GET /central/metrics/regions?window=
+───────────────────────────────────────────────────────────── */
+export async function fetchCentralRegions(
+  window: CentralTimeWindow = 'LAST_7D'
+): Promise<RegionComparisonResponse> {
+  await delay(200);
+  const seed = `central-reg-${window}`;
+  const rows: RegionComparisonRow[] = REGION_LIST.map(r => {
+    const rs = `${seed}-${r.code}`;
+    return {
+      regionCode: r.code,
+      regionName: r.name,
+      riskSignalDetection: Number(_sv(`${rs}-rsd`, 6, 22).toFixed(1)),
+      consentConversion: Number(_sv(`${rs}-cc`, 40, 80).toFixed(1)),
+      l2QueueBacklog: Number(_sv(`${rs}-l2`, 8, 40).toFixed(1)),
+      stage2Linkage: Number(_sv(`${rs}-s2l`, 45, 85).toFixed(1)),
+      mciFollowupEnroll: Number(_sv(`${rs}-mci`, 25, 70).toFixed(1)),
+      blockedPct: Number(_sv(`${rs}-blk`, 5, 30).toFixed(1)),
+      consentPct: Number(_sv(`${rs}-cnp`, 40, 80).toFixed(1)),
+      backlogCount: Math.round(_sv(`${rs}-bc`, 5, 120)),
+    };
+  });
+
+  // worst-first sort (blockedPct descending)
+  rows.sort((a, b) => b.blockedPct - a.blockedPct);
+  return { window, rows };
+}
+
+/* ─────────────────────────────────────────────────────────────
+   6) GET /central/cases?filters (stub — 목록은 추후 확장)
+───────────────────────────────────────────────────────────── */
+export interface CentralCaseListItem {
+  caseId: string;
+  regionCode: string;
+  regionName: string;
+  currentStage: string;
+  urgency: 'low' | 'medium' | 'high' | 'critical';
+  createdAt: string;
+  lastEventAt: string;
+  blockedReason?: string;
+}
+
+export async function fetchCentralCases(
+  _filters: Record<string, string> = {},
+  _page = 1
+): Promise<{ total: number; page: number; pageSize: number; items: CentralCaseListItem[] }> {
+  await delay(200);
+  const items: CentralCaseListItem[] = Array.from({ length: 10 }, (_, i) => {
+    const reg = REGION_LIST[i % REGION_LIST.length];
+    return {
+      caseId: `CASE-${2026}${String(i + 1).padStart(5, '0')}`,
+      regionCode: reg.code,
+      regionName: reg.name,
+      currentStage: ['Stage1', 'L1', 'L2', 'Stage2', 'Stage3'][i % 5],
+      urgency: (['low', 'medium', 'high', 'critical'] as const)[i % 4],
+      createdAt: `2026-01-${String(10 + i).padStart(2, '0')}T09:00:00+09:00`,
+      lastEventAt: `2026-01-${String(20 + (i % 5)).padStart(2, '0')}T14:00:00+09:00`,
+      blockedReason: i % 3 === 0 ? '서류 미비' : undefined,
+    };
+  });
+  return { total: 42, page: _page, pageSize: 10, items };
+}

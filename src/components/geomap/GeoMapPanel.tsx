@@ -8,7 +8,7 @@ import { ChoroplethScale, formatRange, formatNumber as formatChoroplethNumber, C
 /* ═════════════════════════════════════════════════════════════
    GeoMap UI State Types - 색상 팔레트 및 범례 컨트롤
 ═════════════════════════════════════════════════════════════ */
-export type MapColorScheme = 'blue' | 'green' | 'purple' | 'orange' | 'red' | 'heat';
+export type MapColorScheme = 'blue' | 'green' | 'purple' | 'orange' | 'red' | 'heat' | 'risk';
 
 const COLOR_SCHEME_LABELS: Record<MapColorScheme, string> = {
   blue: '파랑 (Blue)',
@@ -17,6 +17,7 @@ const COLOR_SCHEME_LABELS: Record<MapColorScheme, string> = {
   orange: '주황 (Orange)',
   red: '빨강 (Red)',
   heat: '열지도 (Heat)',
+  risk: '리스크 (녹→주→적)',
 };
 
 // 타입 안전한 색상 팔레트 접근

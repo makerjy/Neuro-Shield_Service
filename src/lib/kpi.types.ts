@@ -129,3 +129,158 @@ export interface ChoroplethScaleConfig {
   steps: number;
   colorRange?: string[];
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   중앙센터(보건복지부) 운영감사형 KPI 타입
+   Stage0~3 + L0~L2 파이프라인 기반
+═══════════════════════════════════════════════════════════════════════════════ */
+
+/** 시간 윈도우 */
+export type CentralTimeWindow = 'LAST_24H' | 'LAST_7D' | 'LAST_30D' | 'LAST_90D';
+
+/** 중앙 KPI ID 리터럴 (5개 핵심 지표) */
+export type CentralKpiId =
+  | 'RISK_SIGNAL_DETECTION'
+  | 'CONSENT_CONVERSION'
+  | 'L2_QUEUE_BACKLOG'
+  | 'STAGE2_LINKAGE'
+  | 'MCI_FOLLOWUP_ENROLL';
+
+/** 중앙 KPI 정의 (감사형 — numerator/denominator/window/drillToken 필수) */
+export interface CentralKpiDefinition {
+  id: CentralKpiId;
+  name: string;
+  shortName: string;        // 카드 라벨용 축약명
+  description: string;
+  formula: string;           // 사람이 읽을 수 있는 공식 문자열
+  numeratorField: string;
+  denominatorField: string;
+  unit: '%' | '건' | '일' | '시간';
+  higherBetter: boolean;
+  baseline: number;
+  target: number;
+  /** 드릴다운 시 사용할 drillToken (서브페이지에서 prefiltered list 연동) */
+  drillToken: string;
+  /** 보조 지표 키 (예: median lead-time, backlog count) */
+  auxiliaryKeys?: string[];
+}
+
+/** 중앙 KPI 응답 값 (API 레벨) */
+export interface CentralKpiValue {
+  kpiId: CentralKpiId;
+  window: CentralTimeWindow;
+  numerator: number;
+  denominator: number;
+  value: number;              // numerator / denominator
+  delta7d: number;            // 전주 대비 변화 (pp)
+  auxiliary?: Record<string, number>; // medianLeadTimeDays, backlogCount 등
+  sparkline?: number[];       // 최근 7 데이터포인트
+}
+
+/** 중앙 대시보드 KPI 목록 응답 */
+export interface CentralDashboardKpisResponse {
+  window: CentralTimeWindow;
+  timestamp: string;
+  kpis: CentralKpiValue[];
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Funnel (National Funnel Subpage)
+───────────────────────────────────────────────────────────── */
+export interface FunnelStage {
+  stage: string;              // Reach, Stage0, Stage1, Consent, L0, L1, L2, Stage2, Stage3
+  label: string;
+  count: number;
+  conversionRate?: number;    // 이전 스테이지 대비 전환율 (%)
+}
+
+export interface FunnelResponse {
+  window: CentralTimeWindow;
+  stages: FunnelStage[];
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Bottleneck (병목 진단)
+───────────────────────────────────────────────────────────── */
+export interface BottleneckMetric {
+  key: string;
+  label: string;
+  value: number;
+  unit: string;
+  threshold: number;
+  status: 'red' | 'yellow' | 'green';
+  category: 'consent' | 'readiness' | 'blocked' | 'system';
+}
+
+export interface BottleneckResponse {
+  window: CentralTimeWindow;
+  metrics: BottleneckMetric[];
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Linkage & Lead-time
+───────────────────────────────────────────────────────────── */
+export interface LinkageMetric {
+  stage: 'stage2' | 'stage3';
+  linkageRate: number;
+  medianLeadTimeDays: number;
+  blockedCount: number;
+  blockedReasons: { reason: string; count: number }[];
+}
+
+export interface LinkageResponse {
+  window: CentralTimeWindow;
+  metrics: LinkageMetric[];
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Regional Comparison Table
+───────────────────────────────────────────────────────────── */
+export interface RegionComparisonRow {
+  regionCode: string;
+  regionName: string;
+  riskSignalDetection: number;
+  consentConversion: number;
+  l2QueueBacklog: number;
+  stage2Linkage: number;
+  mciFollowupEnroll: number;
+  blockedPct: number;
+  consentPct: number;
+  backlogCount: number;
+}
+
+export interface RegionComparisonResponse {
+  window: CentralTimeWindow;
+  rows: RegionComparisonRow[];
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Event Schema (이벤트 기반 집계)
+───────────────────────────────────────────────────────────── */
+export type CentralEventType =
+  | 'STAGE0_PROCESSED'
+  | 'STAGE1_FLAGGED'
+  | 'CONSENT_GRANTED'
+  | 'INTERVENTION_ASSIGNED'
+  | 'L2_FIRST_ACTION_TAKEN'
+  | 'STAGE2_ELIGIBLE'
+  | 'STAGE2_APPLIED'
+  | 'STAGE2_BLOCKED'
+  | 'STAGE2_LINKED'
+  | 'STAGE2_CAREPATH_SET'
+  | 'FOLLOWUP_ENROLLED'
+  | 'STAGE3_ELIGIBLE'
+  | 'STAGE3_APPLIED'
+  | 'STAGE3_BLOCKED'
+  | 'NEXT_REVIEW_SCHEDULED'
+  | 'REVIEW_COMPLETED'
+  | 'DROPOUT_FLAGGED';
+
+export interface CentralEvent {
+  eventId: string;
+  eventType: CentralEventType;
+  caseId: string;
+  regionCode: string;
+  timestamp: string;          // ISO-8601
+  payload?: Record<string, unknown>;
+}

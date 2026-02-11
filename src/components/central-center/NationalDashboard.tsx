@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
-import { Download, BarChart3, HelpCircle, TrendingUp, ChevronLeft, ChevronRight, Home, ChevronDown, ChevronUp } from 'lucide-react';
+import { Download, BarChart3, HelpCircle, ChevronLeft, ChevronRight, Home, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -30,7 +30,10 @@ import { getKPIsByPanel, getKPIsForLevel, fetchKPIData, getChartEnabledKPIs } fr
 import { KPIDefinition, DrillLevel, DonutDataItem, BarDataItem } from '../../lib/kpi.types';
 import { Activity, Shield, Database, ExternalLink as ExternalLinkIcon } from 'lucide-react';
 import type { TabContext } from '../../lib/useTabContext';
-import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS } from '../../mocks/mockCentralOps';
+import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS, fetchCentralKpis, fetchCentralFunnel, fetchCentralBottlenecks, fetchCentralLinkage, fetchCentralRegions } from '../../mocks/mockCentralOps';
+import type { CentralKpiId, CentralTimeWindow, CentralKpiValue, FunnelStage, BottleneckMetric, LinkageMetric, RegionComparisonRow } from '../../lib/kpi.types';
+import { getCentralKpiList, CENTRAL_KPI_COLORS, FUNNEL_STAGE_LABELS } from '../../lib/centralKpiDictionary';
+import { AlertTriangle, Users, Clock, Link2, ClipboardList } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    ResizeObserver 인라인 훅 (새 파일 생성 금지에 따른 인라인 구현)
@@ -826,6 +829,250 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
+   중앙센터 운영감사형 KPI 카드 행 + 드릴다운 서브페이지
+═══════════════════════════════════════════════════════════════════════════════ */
+
+const CENTRAL_KPI_ICONS: Record<CentralKpiId, React.ReactNode> = {
+  RISK_SIGNAL_DETECTION: <AlertTriangle className="h-4 w-4" />,
+  CONSENT_CONVERSION: <Users className="h-4 w-4" />,
+  L2_QUEUE_BACKLOG: <Clock className="h-4 w-4" />,
+  STAGE2_LINKAGE: <Link2 className="h-4 w-4" />,
+  MCI_FOLLOWUP_ENROLL: <ClipboardList className="h-4 w-4" />,
+};
+
+/* ── Sparkline 미니 차트 ── */
+function MiniSparkline({ data, color, width = 80, height = 28 }: { data: number[]; color: string; width?: number; height?: number }) {
+  if (!data || data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - ((v - min) / range) * (height - 4) - 2;
+    return `${x},${y}`;
+  }).join(' ');
+  return (
+    <svg width={width} height={height} className="flex-shrink-0">
+      <polyline points={points} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/* ── Central KPI Card 단일 카드 ── */
+function CentralKpiCard({ kpi, def, isActive, onClick }: {
+  kpi: CentralKpiValue;
+  def: ReturnType<typeof getCentralKpiList>[number];
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const colors = CENTRAL_KPI_COLORS[def.id];
+  const deltaColor = def.higherBetter
+    ? kpi.delta7d >= 0 ? 'text-green-600' : 'text-red-600'
+    : kpi.delta7d <= 0 ? 'text-green-600' : 'text-red-600';
+  const meetsTarget = def.higherBetter ? kpi.value >= def.target : kpi.value <= def.target;
+
+  return (
+    <button
+      onClick={onClick}
+      className={`relative flex flex-col gap-1.5 px-3 py-2.5 rounded-xl border-2 transition-all min-w-[170px] text-left ${
+        isActive
+          ? `${colors.border} ${colors.bg} shadow-md ring-2 ring-offset-1 ring-${colors.border.replace('border-', '')}/30`
+          : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+      }`}
+    >
+      {/* top row: icon + name + sparkline */}
+      <div className="flex items-center gap-2">
+        <span className={`p-1 rounded-md ${isActive ? colors.bg : 'bg-gray-100'} ${isActive ? colors.text : 'text-gray-500'}`}>
+          {CENTRAL_KPI_ICONS[def.id]}
+        </span>
+        <span className={`text-[11px] font-semibold truncate ${isActive ? colors.text : 'text-gray-600'}`}>{def.shortName}</span>
+        <div className="ml-auto">
+          <MiniSparkline data={kpi.sparkline || []} color={isActive ? colors.text.replace('text-', '#').replace('-700', '') : '#9ca3af'} />
+        </div>
+      </div>
+      {/* value row */}
+      <div className="flex items-end gap-1.5">
+        <span className={`text-lg font-bold tabular-nums ${isActive ? colors.text : 'text-gray-800'}`}>{kpi.value}{def.unit}</span>
+        <span className={`text-[11px] font-medium ${deltaColor}`}>
+          {kpi.delta7d > 0 ? '+' : ''}{kpi.delta7d}pp
+        </span>
+      </div>
+      {/* target bar */}
+      <div className="flex items-center gap-1.5">
+        <div className="flex-1 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${meetsTarget ? 'bg-green-500' : 'bg-amber-400'}`}
+            style={{ width: `${Math.min(100, (kpi.value / def.target) * 100)}%` }}
+          />
+        </div>
+        <span className="text-[10px] text-gray-400">목표 {def.target}{def.unit}</span>
+      </div>
+      {/* num/den */}
+      <div className="text-[10px] text-gray-400">
+        {kpi.numerator.toLocaleString()} / {kpi.denominator.toLocaleString()}
+      </div>
+    </button>
+  );
+}
+
+/* ── Funnel Panel ── */
+function FunnelPanel({ stages }: { stages: FunnelStage[] }) {
+  const maxCount = stages.length > 0 ? Math.max(...stages.map(s => s.count)) : 1;
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-3">
+      <div className="text-xs font-semibold text-gray-700 mb-3">전국 파이프라인 퍼널</div>
+      <div className="space-y-1.5">
+        {stages.map((s, i) => {
+          const pct = (s.count / maxCount) * 100;
+          const labelDef = FUNNEL_STAGE_LABELS.find(f => f.stage === s.stage);
+          const color = labelDef?.color || '#94a3b8';
+          return (
+            <div key={s.stage} className="flex items-center gap-2">
+              <span className="w-[90px] text-[11px] text-gray-600 truncate text-right">{s.label}</span>
+              <div className="flex-1 h-5 bg-gray-100 rounded overflow-hidden relative">
+                <div className="h-full rounded transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+                <span className="absolute inset-0 flex items-center pl-2 text-[10px] font-semibold text-white mix-blend-difference">
+                  {s.count.toLocaleString()}
+                </span>
+              </div>
+              {i > 0 && s.conversionRate != null && (
+                <span className="w-[42px] text-[10px] text-gray-500 text-right">{s.conversionRate}%</span>
+              )}
+              {i === 0 && <span className="w-[42px]" />}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Bottleneck Panel ── */
+function BottleneckPanel({ metrics }: { metrics: BottleneckMetric[] }) {
+  const categories: { key: string; label: string; color: string }[] = [
+    { key: 'consent', label: '동의', color: '#8b5cf6' },
+    { key: 'readiness', label: '입력 Readiness', color: '#3b82f6' },
+    { key: 'blocked', label: '차단 원인', color: '#ef4444' },
+    { key: 'system', label: '시스템 안정성', color: '#06b6d4' },
+  ];
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-3">
+      <div className="text-xs font-semibold text-gray-700 mb-3">병목 진단</div>
+      <div className="space-y-3">
+        {categories.map(cat => {
+          const items = metrics.filter(m => m.category === cat.key);
+          if (items.length === 0) return null;
+          return (
+            <div key={cat.key}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
+                <span className="text-[11px] font-semibold text-gray-600">{cat.label}</span>
+              </div>
+              <div className="space-y-1">
+                {items.map(m => (
+                  <div key={m.key} className="flex items-center gap-2">
+                    <span className="flex-1 text-[11px] text-gray-600 truncate">{m.label}</span>
+                    <span className={`text-[11px] font-bold ${m.status === 'red' ? 'text-red-600' : m.status === 'yellow' ? 'text-amber-600' : 'text-green-600'}`}>
+                      {m.value}{m.unit}
+                    </span>
+                    <span className={`w-2 h-2 rounded-full ${m.status === 'red' ? 'bg-red-500' : m.status === 'yellow' ? 'bg-amber-400' : 'bg-green-500'}`} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Linkage Panel ── */
+function LinkagePanel({ metrics }: { metrics: LinkageMetric[] }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-3">
+      <div className="text-xs font-semibold text-gray-700 mb-3">연결률 & 리드타임</div>
+      <div className="space-y-3">
+        {metrics.map(m => (
+          <div key={m.stage} className="border border-gray-100 rounded-lg p-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[12px] font-semibold text-gray-700">
+                {m.stage === 'stage2' ? '2차 연결' : '3차 추적'}
+              </span>
+              <span className={`text-sm font-bold ${m.linkageRate >= 60 ? 'text-green-600' : m.linkageRate >= 40 ? 'text-amber-600' : 'text-red-600'}`}>
+                {m.linkageRate}%
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11px] mb-2">
+              <div>
+                <span className="text-gray-500">median 리드타임</span>
+                <div className="font-semibold text-gray-800">{m.medianLeadTimeDays}일</div>
+              </div>
+              <div>
+                <span className="text-gray-500">차단 건수</span>
+                <div className="font-semibold text-red-600">{m.blockedCount}건</div>
+              </div>
+            </div>
+            {m.blockedReasons.length > 0 && (
+              <div className="space-y-0.5">
+                <span className="text-[10px] text-gray-400">차단 원인</span>
+                {m.blockedReasons.map(r => (
+                  <div key={r.reason} className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-600">{r.reason}</span>
+                    <span className="font-medium text-gray-800">{r.count}건</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Regional Comparison Table ── */
+function RegionalComparisonPanel({ rows }: { rows: RegionComparisonRow[] }) {
+  const kpiDefs = getCentralKpiList();
+  const shortRegion = (name: string) => name.replace(/특별자치도|특별자치시|광역시|특별시|도$/g, '').trim() || name.slice(0, 2);
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-3">
+      <div className="text-xs font-semibold text-gray-700 mb-2">광역 비교 테이블 <span className="text-[10px] text-gray-400 ml-1">(worst-first)</span></div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200">
+              <th className="px-1.5 py-1 text-left font-medium text-gray-600 sticky left-0 bg-gray-50 z-10">지역</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">신호탐지</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">동의전환</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">L2적체</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">2차연결</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">MCI등록</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">차단%</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">적체건</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.regionCode} className={`border-b border-gray-100 hover:bg-amber-50/30 ${i < 3 ? 'bg-red-50/30' : ''}`}>
+                <td className="px-1.5 py-1 font-medium text-gray-800 sticky left-0 bg-inherit z-10">{shortRegion(r.regionName)}</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.riskSignalDetection}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.consentConversion}%</td>
+                <td className={`px-1.5 py-1 text-right tabular-nums font-medium ${r.l2QueueBacklog > 25 ? 'text-red-600' : ''}`}>{r.l2QueueBacklog}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.stage2Linkage}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.mciFollowupEnroll}%</td>
+                <td className={`px-1.5 py-1 text-right tabular-nums font-medium ${r.blockedPct > 20 ? 'text-red-600' : r.blockedPct > 15 ? 'text-amber-600' : 'text-green-600'}`}>{r.blockedPct}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.backlogCount}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
    메인 컴포넌트
 ═══════════════════════════════════════════════════════════════════════════════ */
 interface NationalDashboardProps {
@@ -857,6 +1104,51 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   const handleSubRegionsChange = useCallback((regions: { code: string; name: string }[]) => {
     setMapSubRegions(regions.map(r => ({ id: r.code, name: r.name })));
   }, []);
+
+  /* ── 중앙센터 운영감사형 KPI 상태 ── */
+  const [centralWindow, setCentralWindow] = useState<CentralTimeWindow>('LAST_7D');
+  const [centralKpis, setCentralKpis] = useState<CentralKpiValue[]>([]);
+  const [activeCentralKpi, setActiveCentralKpi] = useState<CentralKpiId | null>(null);
+  const [showDrilldown, setShowDrilldown] = useState(false);
+  const [centralLoading, setCentralLoading] = useState(false);
+  // Drilldown data
+  const [funnelData, setFunnelData] = useState<FunnelStage[]>([]);
+  const [bottleneckData, setBottleneckData] = useState<BottleneckMetric[]>([]);
+  const [linkageData, setLinkageData] = useState<LinkageMetric[]>([]);
+  const [regionData, setRegionData] = useState<RegionComparisonRow[]>([]);
+  const centralKpiDefs = useMemo(() => getCentralKpiList(), []);
+
+  // Central KPI data fetch
+  useEffect(() => {
+    let cancelled = false;
+    setCentralLoading(true);
+    fetchCentralKpis(centralWindow).then(res => {
+      if (!cancelled) {
+        setCentralKpis(res.kpis);
+        setCentralLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [centralWindow]);
+
+  // Drilldown data fetch
+  useEffect(() => {
+    if (!showDrilldown) return;
+    let cancelled = false;
+    Promise.all([
+      fetchCentralFunnel(centralWindow),
+      fetchCentralBottlenecks(centralWindow),
+      fetchCentralLinkage(centralWindow),
+      fetchCentralRegions(centralWindow),
+    ]).then(([funnel, bn, link, reg]) => {
+      if (cancelled) return;
+      setFunnelData(funnel.stages);
+      setBottleneckData(bn.metrics);
+      setLinkageData(link.metrics);
+      setRegionData(reg.rows);
+    });
+    return () => { cancelled = true; };
+  }, [showDrilldown, centralWindow]);
 
   // 드릴다운 상태 (Zustand)
   const { drillLevel, drillPath, selectedRegion, drillDown, drillUp, drillTo, resetDrill } = useDrillState();
@@ -1334,55 +1626,65 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
           고정 2행: KPI 선택 카드 + Breadcrumb + 보조 컨트롤
       ═══════════════════════════════════════════════════════════ */}
       <div className="bg-white border-b border-gray-200 px-4 py-2 shrink-0">
-        {/* KPI 버튼 + 보조 컨트롤 한 줄 */}
+        {/* ── 중앙센터 운영감사형 KPI 카드 바 ── */}
         <div className="flex items-center gap-2">
-          {/* KPI 버튼 그룹 (스크롤 허용) */}
-          <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0">
-          {MAP_KPI_CARDS.map((card) => {
-            const isActive = selectedKpiId === card.id;
-            const value = card.getValue(statsScopeKey);
-            const kpiColorStyles: Record<string, { border: string; bg: string; ring: string; text: string; value: string }> = {
-              blue:   { border: 'border-blue-500',   bg: 'bg-blue-50',   ring: 'ring-blue-200',   text: 'text-blue-700',   value: 'text-blue-600' },
-              green:  { border: 'border-green-500',  bg: 'bg-green-50',  ring: 'ring-green-200',  text: 'text-green-700',  value: 'text-green-600' },
-              red:    { border: 'border-red-500',    bg: 'bg-red-50',    ring: 'ring-red-200',    text: 'text-red-700',    value: 'text-red-600' },
-              orange: { border: 'border-amber-500',  bg: 'bg-amber-50',  ring: 'ring-amber-200',  text: 'text-amber-700',  value: 'text-amber-600' },
-              purple: { border: 'border-purple-500', bg: 'bg-purple-50', ring: 'ring-purple-200', text: 'text-purple-700', value: 'text-purple-600' },
-            };
-            const cs = kpiColorStyles[card.color] || kpiColorStyles.blue;
-            return (
+          {/* 5 Central KPI Cards */}
+          <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0 pb-0.5">
+            {centralKpiDefs.map(def => {
+              const kpiVal = centralKpis.find(k => k.kpiId === def.id);
+              if (!kpiVal) {
+                // skeleton
+                return (
+                  <div key={def.id} className="min-w-[170px] h-[82px] rounded-xl border border-gray-200 bg-gray-50 animate-pulse" />
+                );
+              }
+              return (
+                <CentralKpiCard
+                  key={def.id}
+                  kpi={kpiVal}
+                  def={def}
+                  isActive={activeCentralKpi === def.id}
+                  onClick={() => {
+                    if (activeCentralKpi === def.id) {
+                      setActiveCentralKpi(null);
+                      setShowDrilldown(false);
+                    } else {
+                      setActiveCentralKpi(def.id);
+                      setShowDrilldown(true);
+                    }
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          {/* 시간 윈도우 토글 */}
+          <div className="w-px h-10 bg-gray-200 shrink-0" />
+          <div className="flex items-center gap-0.5 shrink-0">
+            {(['LAST_24H', 'LAST_7D', 'LAST_30D', 'LAST_90D'] as CentralTimeWindow[]).map(w => (
               <button
-                key={card.id}
-                onClick={() => setSelectedKpiId(card.id)}
-                aria-pressed={isActive}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-all min-w-[140px] text-left ${
-                  isActive
-                    ? `${cs.border} ${cs.bg} ring-2 ${cs.ring} shadow-sm`
-                    : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                key={w}
+                onClick={() => setCentralWindow(w)}
+                className={`px-2.5 py-1.5 text-[11px] font-medium rounded-md transition ${
+                  centralWindow === w ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                 }`}
               >
-                <div className={`p-1.5 rounded-md ${card.iconBg}`}>
-                  {card.id === 'total_cases' && <TrendingUp className="h-4 w-4" />}
-                  {card.id === 'completion' && <BarChart3 className="h-4 w-4" />}
-                  {card.id === 'consultation_time' && <Download className="h-4 w-4" />}
-                  {card.id === 'followup_dropout' && <HelpCircle className="h-4 w-4" />}
-                  {card.id === 'dropout' && <ChevronRight className="h-4 w-4" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className={`text-[12px] font-medium truncate ${isActive ? cs.text : 'text-gray-500'}`}>
-                    {card.label}
-                  </div>
-                  <div className={`text-sm font-bold ${isActive ? cs.value : 'text-gray-800'}`}>
-                    {value.toLocaleString()}
-                    <span className="text-[12px] font-normal ml-0.5">{card.unit}</span>
-                  </div>
-                </div>
-                {isActive && (
-                  <div className={`w-1.5 h-1.5 rounded-full shrink-0`} style={{ backgroundColor: COLORS[card.color as keyof typeof COLORS] || COLORS.blue }} />
-                )}
+                {w === 'LAST_24H' ? '24h' : w === 'LAST_7D' ? '7일' : w === 'LAST_30D' ? '30일' : '90일'}
               </button>
-            );
-          })}
+            ))}
           </div>
+
+          {/* Drilldown 토글 버튼 */}
+          <div className="w-px h-10 bg-gray-200 shrink-0" />
+          <button
+            onClick={() => setShowDrilldown(!showDrilldown)}
+            className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition flex items-center gap-1.5 shrink-0 ${
+              showDrilldown ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            {showDrilldown ? '드릴다운 닫기' : '드릴다운'}
+          </button>
 
           {/* ═══ 구분선 ═══ */}
           <div className="w-px h-8 bg-gray-200 shrink-0" />
@@ -1437,6 +1739,39 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
           </div>
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════════
+          DRILLDOWN SUBPAGE - 4패널 (Funnel / Bottleneck / Linkage / Regional)
+      ═══════════════════════════════════════════════════════════ */}
+      {showDrilldown && (
+        <div className="bg-gradient-to-b from-slate-50 to-white border-b border-gray-200 px-4 py-3 shrink-0">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-gray-800">운영 드릴다운</span>
+              <span className="text-[11px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                {centralWindow === 'LAST_24H' ? '최근 24시간' : centralWindow === 'LAST_7D' ? '최근 7일' : centralWindow === 'LAST_30D' ? '최근 30일' : '최근 90일'}
+              </span>
+              {activeCentralKpi && (
+                <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${CENTRAL_KPI_COLORS[activeCentralKpi].bg} ${CENTRAL_KPI_COLORS[activeCentralKpi].text}`}>
+                  {centralKpiDefs.find(d => d.id === activeCentralKpi)?.shortName} 포커스
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setShowDrilldown(false)}
+              className="text-[11px] text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
+            >
+              닫기 ✕
+            </button>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto">
+            <FunnelPanel stages={funnelData} />
+            <BottleneckPanel metrics={bottleneckData} />
+            <LinkagePanel metrics={linkageData} />
+            <RegionalComparisonPanel rows={regionData} />
+          </div>
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════
           SCROLL CONTAINER - 통계/지도/차트 전용 스크롤 영역
@@ -1665,7 +2000,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
               <div className="flex-1 min-w-0">
                 <div className="text-[13px] font-medium text-gray-900">최근 정책 변경</div>
                 <div className="text-[12px] text-gray-500 truncate">
-                  {MOCK_POLICY_CHANGES.filter(c => c.deployStatus === 'deployed').length}건 배포 · {MOCK_POLICY_CHANGES.filter(c => c.deployStatus === 'pending').length}건 대기
+                  {MOCK_POLICY_CHANGES.filter(c => c.status === 'deployed').length}건 배포 · {MOCK_POLICY_CHANGES.filter(c => c.status === 'pending').length}건 대기
                 </div>
               </div>
               <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />

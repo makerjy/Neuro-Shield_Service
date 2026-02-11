@@ -67,6 +67,7 @@ interface PiiData {
   fullName: string; fullAddress: string; detailedPhone: string;
   emergencyContact: string; emergencyContactName: string;
   residentNumber: string; medicalHistory: string[];
+  guardianPhone?: string;
 }
 
 function buildAiAnalysis(c: Case): AiAnalysisData {
@@ -107,6 +108,7 @@ function buildPii(c: Case): PiiData {
     detailedPhone: c.phone, emergencyContact: '010-9876-5432',
     emergencyContactName: '보호자 (배우자)', residentNumber: `${String(2026 - c.age).slice(2)}0215-${c.gender === '남' ? '1' : '2'}******`,
     medicalHistory: c.riskLevel === 'high' ? ['고혈압','당뇨병','고지혈증'] : c.riskLevel === 'medium' ? ['고혈압'] : [],
+    guardianPhone: c.guardianPhone,
   };
 }
 
@@ -132,6 +134,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
   // Consultation Dialog States
   const [consultationOpen, setConsultationOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState<ConsultationStep>('greeting');
+  const [consultTarget, setConsultTarget] = useState<'citizen' | 'guardian'>('citizen');
   const [consultationNotes, setConsultationNotes] = useState<Record<ConsultationStep, string>>({
     greeting: '',
     purpose: '',
@@ -159,6 +162,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
   const [smsDialogOpen, setSmsDialogOpen] = useState(false);
   const [smsTemplate, setSmsTemplate] = useState('');
   const [smsSending, setSmsSending] = useState(false);
+  const [smsTargets, setSmsTargets] = useState<{ citizen: boolean; guardian: boolean }>({ citizen: true, guardian: false });
   const [newMemoText, setNewMemoText] = useState('');
   const [ragLoading, setRagLoading] = useState(false);
   const [ragResult, setRagResult] = useState<{ actions: string[]; cautions: string[]; churnSignals: string[] } | null>(null);
@@ -267,10 +271,12 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
       caseId: caseId,
       userId: 'USER-001',
       userName: sharedCase?.counselor ?? '상담사',
+      target: consultTarget,
       timestamp: new Date().toISOString(),
     });
     setConsultationOpen(true);
     setCurrentStep('greeting');
+    setConsultTarget('citizen');
     if (onStartConsultation) {
       onStartConsultation(caseId);
     }
@@ -402,6 +408,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
 
   const handleSendSms = async () => {
     if (!smsTemplate || !sharedCase) return;
+    if (!smsTargets.citizen && !smsTargets.guardian) return;
     setSmsSending(true);
     try {
       const tpl = smsTemplates.find(t => t.id === smsTemplate);
@@ -409,43 +416,55 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
       const centerName = '강남구 치매안심센터';
       const centerPhone = '02-1234-5678';
 
-      const resp = await fetch('http://localhost:4120/api/outreach/send-sms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          case_id: caseId,
-          center_id: 'center-gangnam-001',
-          template_id: smsTemplate,
-          citizen_phone: sharedCase.phone,
-          variables: {
-            recipient_name: recipientName,
-            center_name: centerName,
-            center_phone: centerPhone,
-            visit_datetime: '예정',
-            visit_place: centerName,
-            supplies: '신분증',
-          },
-          dedupe_key: `${caseId}-${smsTemplate}-${Date.now()}`,
-        }),
-      });
+      // 발송 대상 목록 구성
+      const targets: { phone: string; label: string }[] = [];
+      if (smsTargets.citizen) targets.push({ phone: sharedCase.phone, label: '대상자' });
+      if (smsTargets.guardian && sharedCase.guardianPhone) targets.push({ phone: sharedCase.guardianPhone, label: '보호자' });
 
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ message: '알 수 없는 오류' }));
-        throw new Error(err.message || err.detail || 'SMS 발송 실패');
+      const results: string[] = [];
+      for (const target of targets) {
+        const resp = await fetch('http://localhost:4120/api/outreach/send-sms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            case_id: caseId,
+            center_id: 'center-gangnam-001',
+            template_id: smsTemplate,
+            citizen_phone: target.phone,
+            variables: {
+              recipient_name: recipientName,
+              center_name: centerName,
+              center_phone: centerPhone,
+              visit_datetime: '예정',
+              visit_place: centerName,
+              supplies: '신분증',
+            },
+            dedupe_key: `${caseId}-${smsTemplate}-${target.label}-${Date.now()}`,
+          }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ message: '알 수 없는 오류' }));
+          throw new Error(`${target.label} 발송 실패: ${err.message || err.detail}`);
+        }
+
+        const result = await resp.json();
+        results.push(`${target.label}:${result.status}`);
+
+        const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+        const newEntry: SmsHistoryEntry = { date: now, template: `${tpl?.label ?? smsTemplate} (${target.label})`, status: 'sent' };
+        setLocalSmsHistory(prev => [newEntry, ...prev]);
+        setLocalMemoLines(prev => [`[${now}] SMS 발송(${target.label}): ${tpl?.label} (${result.status})`, ...prev]);
       }
 
-      const result = await resp.json();
-      const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
-      const newEntry: SmsHistoryEntry = { date: now, template: tpl?.label ?? smsTemplate, status: 'sent' };
-      setLocalSmsHistory(prev => [newEntry, ...prev]);
-      setLocalMemoLines(prev => [`[${now}] SMS 발송: ${tpl?.label} (${result.status})`, ...prev]);
-      alert(`SMS 발송 완료 (${result.status})`);
+      alert(`SMS 발송 완료 — ${results.join(', ')}`);
     } catch (e: any) {
       alert(`SMS 발송 실패: ${e.message}`);
     } finally {
       setSmsSending(false);
       setSmsDialogOpen(false);
       setSmsTemplate('');
+      setSmsTargets({ citizen: true, guardian: false });
     }
   };
 
@@ -577,6 +596,19 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
                 </Badge>
               </div>
               <div className="h-10 w-px bg-gray-300" />
+
+              {/* 보호자 연락처 인디케이터 */}
+              {sharedCase.guardianPhone && (
+                <>
+                  <div>
+                    <div className="text-[10px] text-gray-500">보호자 연락처</div>
+                    <Badge variant="outline" className="text-xs mt-0.5 border-blue-300 text-blue-700 bg-blue-50">
+                      ✓ 등록됨 ({maskPhone(sharedCase.guardianPhone)})
+                    </Badge>
+                  </div>
+                  <div className="h-10 w-px bg-gray-300" />
+                </>
+              )}
 
               {/* 담당자 */}
               <div>
@@ -927,8 +959,64 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
-              <Label>수신번호</Label>
-              <Input value={maskPhone(sharedCase?.phone ?? '')} disabled className="mt-1 bg-gray-50" />
+              <Label className="mb-2 block">수신 대상 선택</Label>
+              <div className="space-y-2">
+                {/* 대상자 토글 */}
+                <label
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition-all ${
+                    smsTargets.citizen
+                      ? 'border-orange-400 bg-orange-50'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={smsTargets.citizen}
+                    onChange={(e) => setSmsTargets(prev => ({ ...prev, citizen: e.target.checked }))}
+                    className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-gray-900">대상자 본인</span>
+                      {smsTargets.citizen && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-orange-100 text-orange-700">발송</span>
+                      )}
+                    </div>
+                    <span className="text-xs text-gray-500">{maskPhone(sharedCase?.phone ?? '')}</span>
+                  </div>
+                </label>
+
+                {/* 보호자 토글 — guardianPhone 있을 때만 */}
+                {sharedCase?.guardianPhone && (
+                  <label
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition-all ${
+                      smsTargets.guardian
+                        ? 'border-blue-400 bg-blue-50'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={smsTargets.guardian}
+                      onChange={(e) => setSmsTargets(prev => ({ ...prev, guardian: e.target.checked }))}
+                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900">보호자</span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-100 text-blue-700">시민 제공</span>
+                        {smsTargets.guardian && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-200 text-blue-800">발송</span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500">{maskPhone(sharedCase.guardianPhone)}</span>
+                    </div>
+                  </label>
+                )}
+              </div>
+              {!smsTargets.citizen && !smsTargets.guardian && (
+                <p className="text-xs text-red-500 mt-1">※ 최소 1명의 수신 대상을 선택해주세요</p>
+              )}
             </div>
             <div>
               <Label>발송 템플릿 선택 *</Label>
@@ -954,8 +1042,15 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setSmsDialogOpen(false)}>취소</Button>
-            <Button onClick={handleSendSms} disabled={!smsTemplate || smsSending} className="bg-orange-600 hover:bg-orange-700">
-              {smsSending ? '발송 중…' : 'SMS 발송'}
+            <Button
+              onClick={handleSendSms}
+              disabled={!smsTemplate || smsSending || (!smsTargets.citizen && !smsTargets.guardian)}
+              className="bg-orange-600 hover:bg-orange-700"
+            >
+              {smsSending
+                ? '발송 중…'
+                : `SMS 발송${(smsTargets.citizen ? 1 : 0) + (smsTargets.guardian ? 1 : 0) > 1 ? ` (${(smsTargets.citizen ? 1 : 0) + (smsTargets.guardian ? 1 : 0)}건)` : ''}`
+              }
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1045,6 +1140,17 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
                   <div className="font-medium text-gray-900">{piiData.detailedPhone}</div>
                 </div>
 
+                {piiData.guardianPhone && (
+                  <div className="border-t border-gray-200 pt-3">
+                    <div className="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                      보호자 연락처
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-100 text-blue-700">시민 제공</span>
+                    </div>
+                    <div className="font-medium text-gray-900">{piiData.guardianPhone}</div>
+                    <p className="text-[10px] text-gray-400 mt-1">※ 시민 예약 시 보호자가 직접 입력한 번호입니다</p>
+                  </div>
+                )}
+
                 <div className="border-t border-gray-200 pt-3">
                   <div className="text-xs text-gray-500 mb-1">비상연락망</div>
                   <div className="font-medium text-gray-900">
@@ -1091,6 +1197,73 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
               AI가 현재 케이스 상태를 분석하여 적절한 상담 스크립트를 제공합니다
             </DialogDescription>
           </DialogHeader>
+
+          {/* 연락 대상 선택 */}
+          <div className="border-2 border-gray-200 rounded-lg p-4 bg-gray-50">
+            <p className="text-xs font-semibold text-gray-600 mb-2.5">연락 대상 선택</p>
+            <div className="flex gap-3">
+              {/* 대상자 본인 */}
+              <label
+                className={`flex-1 flex items-center gap-3 px-4 py-3 rounded-lg border-2 cursor-pointer transition-all ${
+                  consultTarget === 'citizen'
+                    ? 'border-blue-500 bg-blue-50 shadow-sm'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="consultTarget"
+                  checked={consultTarget === 'citizen'}
+                  onChange={() => setConsultTarget('citizen')}
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500"
+                />
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">대상자 본인</div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <Phone className="h-3 w-3 text-gray-400" />
+                    <span className="text-xs text-gray-500">{maskPhone(sharedCase?.phone ?? '')}</span>
+                  </div>
+                </div>
+              </label>
+
+              {/* 보호자 */}
+              {sharedCase?.guardianPhone ? (
+                <label
+                  className={`flex-1 flex items-center gap-3 px-4 py-3 rounded-lg border-2 cursor-pointer transition-all ${
+                    consultTarget === 'guardian'
+                      ? 'border-violet-500 bg-violet-50 shadow-sm'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="consultTarget"
+                    checked={consultTarget === 'guardian'}
+                    onChange={() => setConsultTarget('guardian')}
+                    className="h-4 w-4 text-violet-600 focus:ring-violet-500"
+                  />
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-semibold text-gray-900">보호자</span>
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-100 text-blue-700">시민 제공</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <Phone className="h-3 w-3 text-gray-400" />
+                      <span className="text-xs text-gray-500">{maskPhone(sharedCase.guardianPhone)}</span>
+                    </div>
+                  </div>
+                </label>
+              ) : (
+                <div className="flex-1 flex items-center gap-3 px-4 py-3 rounded-lg border-2 border-dashed border-gray-200 bg-gray-50 opacity-50">
+                  <div className="h-4 w-4" />
+                  <div>
+                    <div className="text-sm font-medium text-gray-400">보호자</div>
+                    <span className="text-xs text-gray-400">등록된 보호자 연락처 없음</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Step Progress */}
           <div className="flex items-center justify-between mb-6">

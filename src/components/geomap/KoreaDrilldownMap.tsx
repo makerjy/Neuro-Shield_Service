@@ -179,7 +179,10 @@ export function KoreaDrilldownMap({
                   stroke={isHovered ? '#0b1020' : '#111827'}
                   strokeWidth={isHovered ? 2.2 : 0.9}
                   fillOpacity={hoveredCode && !isHovered ? 0.65 : 0.95}
-                  style={isHovered ? { filter: 'drop-shadow(0 3px 6px rgba(15, 23, 42, 0.35))' } : undefined}
+                  style={{
+                    cursor: level === 'emd' ? 'default' : 'pointer',
+                    ...(isHovered ? { filter: 'drop-shadow(0 3px 6px rgba(15, 23, 42, 0.35))' } : {}),
+                  }}
                   onMouseMove={(event) => {
                     setTooltip({
                       x: event.clientX + 12,
@@ -195,7 +198,6 @@ export function KoreaDrilldownMap({
                     setHoveredCode(null);
                   }}
                   onClick={() => handleClick(feature)}
-                  style={{ cursor: level === 'emd' ? 'default' : 'pointer' }}
                 />
               );
             })}

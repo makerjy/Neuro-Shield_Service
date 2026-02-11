@@ -11,18 +11,20 @@ import {
   X,
   ChevronDown,
   Search,
+  Settings,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Input } from '../ui/input';
 import { RegionalDashboard } from './RegionalDashboard';
 import { BottleneckAnalysis } from './BottleneckAnalysis';
+import { RegionalSettings } from './RegionalSettings';
 import { EducationSupport } from './EducationSupport';
 import { InterventionManager } from './InterventionManager';
 import { Reports } from './Reports';
 import { REGIONAL_SCOPES, resolveRegionFromName } from '../geomap/regions';
 
-type Page = 'dashboard' | 'bottleneck' | 'support' | 'intervention' | 'reports';
+type Page = 'dashboard' | 'bottleneck' | 'support' | 'intervention' | 'reports' | 'settings';
 
 interface RegionalCenterAppProps {
   userRole?: string;
@@ -34,9 +36,9 @@ interface RegionalCenterAppProps {
 /* ─── 좌측 사이드바 네비게이션 정의 (중앙센터와 동일 패턴) ─── */
 const navigationItems: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: 'dashboard', label: '광역 대시보드', icon: LayoutDashboard },
-  { id: 'bottleneck', label: '병목 분석', icon: AlertTriangle },
   { id: 'intervention', label: '병목 개입 관리', icon: GraduationCap },
   { id: 'reports', label: '보고서', icon: FileText },
+  { id: 'settings', label: '설정', icon: Settings },
 ];
 
 export function RegionalCenterApp({
@@ -88,6 +90,8 @@ export function RegionalCenterApp({
         );
       case 'reports':
         return <Reports />;
+      case 'settings':
+        return <RegionalSettings regionCode={regionId} regionLabel={region.label} />;
       default:
         return null;
     }

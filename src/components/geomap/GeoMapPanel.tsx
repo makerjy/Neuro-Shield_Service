@@ -328,9 +328,7 @@ export function GeoMapPanel({
   }, [level, filteredEmd, selectedCodes.emd]);
 
   const currentFeatures = useMemo(() => {
-    if (level === 'ctprvn') return filteredCtprvn;
-    if (level === 'sig') return filteredSig;
-    return filteredEmd;
+    return level === 'ctprvn' ? filteredCtprvn : level === 'sig' ? filteredSig : filteredEmd;
   }, [level, filteredCtprvn, filteredSig, filteredEmd]);
 
   // 현재 표시 중인 하위 지역 목록을 외부로 전달

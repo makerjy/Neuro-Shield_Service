@@ -45,6 +45,8 @@ export function CitizenMobileApp() {
   const [phone, setPhone] = useState('');
   const [birthdate, setBirthdate] = useState('');
   const [additionalNotes, setAdditionalNotes] = useState('');
+  const [guardianPhone, setGuardianPhone] = useState('');
+  const [showGuardianField, setShowGuardianField] = useState(false);
   const [stopContactDialog, setStopContactDialog] = useState(false);
   const [chatbotOpen, setChatbotOpen] = useState(false);
 
@@ -103,9 +105,20 @@ export function CitizenMobileApp() {
     setMode('confirm');
   };
 
+  const phoneRegex = /^01[016789]-?\d{3,4}-?\d{4}$/;
+
   const handleConfirmBooking = () => {
     if (!name || !phone || !birthdate) {
       toast.error('모든 필수 정보를 입력해주세요');
+      return;
+    }
+    if (!phoneRegex.test(phone.replace(/-/g, ''))) {
+      toast.error('연락처 형식이 올바르지 않습니다');
+      return;
+    }
+    // 보호자 연락처: 값이 있을 때만 형식 검증
+    if (guardianPhone && !phoneRegex.test(guardianPhone.replace(/-/g, ''))) {
+      toast.error('보호자 연락처 형식이 올바르지 않습니다');
       return;
     }
 
@@ -117,6 +130,7 @@ export function CitizenMobileApp() {
       name,
       phone,
       birthdate,
+      guardianPhone: guardianPhone || undefined,
       consentOptional,
       notes: additionalNotes,
       timestamp: new Date().toISOString(),
@@ -418,6 +432,40 @@ export function CitizenMobileApp() {
             />
           </div>
 
+          {/* 보호자 연락처 (선택) */}
+          <div className="border-t border-gray-200 pt-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Checkbox
+                id="guardianToggle"
+                checked={showGuardianField}
+                onCheckedChange={(checked) => {
+                  setShowGuardianField(checked as boolean);
+                  if (!checked) setGuardianPhone('');
+                }}
+              />
+              <Label htmlFor="guardianToggle" className="text-sm font-medium text-gray-700 cursor-pointer">
+                보호자에게도 연락을 원합니다
+              </Label>
+            </div>
+            {showGuardianField && (
+              <div className="mt-2">
+                <Label htmlFor="guardianPhone">보호자 연락처 (선택)</Label>
+                <Input
+                  id="guardianPhone"
+                  type="tel"
+                  value={guardianPhone}
+                  onChange={(e) => setGuardianPhone(e.target.value)}
+                  placeholder="010-0000-0000"
+                  className="mt-2"
+                />
+              </div>
+            )}
+            <p className="text-xs text-gray-400 mt-2 leading-relaxed">
+              예약 변경이나 안내가 필요할 경우 보호자에게도 연락드릴 수 있습니다.<br />
+              입력하지 않아도 예약에는 영향이 없습니다.
+            </p>
+          </div>
+
           <div>
             <Label htmlFor="notes">요청사항 (선택)</Label>
             <Textarea
@@ -506,6 +554,12 @@ export function CitizenMobileApp() {
             <span className="text-gray-600">연락처:</span>
             <span className="font-medium">{phone}</span>
           </div>
+          {guardianPhone && (
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">보호자 연락처:</span>
+              <span className="font-medium">{guardianPhone.replace(/(\d{3})\d{4}(\d{4})/, '$1-****-$2')}</span>
+            </div>
+          )}
         </CardContent>
       </Card>
 

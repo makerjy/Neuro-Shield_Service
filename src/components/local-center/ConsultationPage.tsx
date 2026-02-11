@@ -535,7 +535,7 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
             </p>
           </div>
           <div>
-            <p className="text-xs text-gray-500 mb-1">위험도</p>
+            <p className="text-xs text-gray-500 mb-1">우선도</p>
             <Badge variant="destructive" className="text-xs">
               높음 ({caseData.riskScore})
             </Badge>

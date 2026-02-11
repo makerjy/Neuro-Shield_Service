@@ -52,6 +52,8 @@ export interface Case {
   phone: string;
   registeredDate: string;
 
+  riskScore: number;
+
   // 확장 필드
   secondExamStatus: SecondExamStatus;
   secondExamType?: SecondExamType;
@@ -281,6 +283,7 @@ export function generateCases(): Case[] {
       age,
       gender,
       riskLevel,
+      riskScore: riskLevel === 'high' ? 65 + Math.floor(seeded(`${s}-rs`) * 30) : riskLevel === 'medium' ? 35 + Math.floor(seeded(`${s}-rs`) * 30) : 5 + Math.floor(seeded(`${s}-rs`) * 30),
       lastContact,
       status,
       counselor: pick(COUNSELORS, `${s}-coun`),

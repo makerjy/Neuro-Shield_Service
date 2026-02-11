@@ -178,7 +178,7 @@ export function CaseAnalysis({ caseId, onBack, onStartConsultation }: CaseAnalys
           </Button>
           <div className="h-6 w-px bg-gray-300" />
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">AI 위험도 분석</h1>
+            <h1 className="text-2xl font-bold text-gray-900">AI 우선도 분석</h1>
             <p className="text-sm text-gray-500 mt-1">케이스 ID: {caseData.id}</p>
           </div>
         </div>
@@ -199,7 +199,7 @@ export function CaseAnalysis({ caseId, onBack, onStartConsultation }: CaseAnalys
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-4">
               <Badge className={`${getRiskBadgeColor(caseData.riskLevel)} text-base px-3 py-1 border-2`}>
-                위험도: {caseData.riskLevel === 'high' ? '높음' : caseData.riskLevel === 'medium' ? '보통' : '낮음'}
+                우선도: {caseData.riskLevel === 'high' ? '높음' : caseData.riskLevel === 'medium' ? '보통' : '낮음'}
               </Badge>
               <Badge className={`${getUrgencyBadgeColor(caseData.urgency)} text-base px-3 py-1 border-2`}>
                 {caseData.urgency === 'immediate' ? '즉시 조치' : caseData.urgency === 'within_3days' ? '3일 내 조치' : '정기 관리'}
@@ -208,7 +208,7 @@ export function CaseAnalysis({ caseId, onBack, onStartConsultation }: CaseAnalys
 
             <div className="grid grid-cols-3 gap-6">
               <div>
-                <p className="text-sm text-gray-600 mb-1">AI 위험 점수</p>
+                <p className="text-sm text-gray-600 mb-1">AI 우선 점수</p>
                 <div className="flex items-baseline gap-2">
                   <p className="text-4xl font-bold text-red-600">{caseData.riskScore}</p>
                   <p className="text-sm text-gray-500">/ 100</p>
@@ -221,7 +221,7 @@ export function CaseAnalysis({ caseId, onBack, onStartConsultation }: CaseAnalys
                 </div>
               </div>
               <div>
-                <p className="text-sm text-gray-600 mb-1">위험도 순위</p>
+                <p className="text-sm text-gray-600 mb-1">우선도 순위</p>
                 <div className="flex items-baseline gap-2">
                   <p className="text-4xl font-bold text-gray-900">{caseData.riskRank}</p>
                   <p className="text-sm text-gray-500">/ {caseData.totalCases}</p>
@@ -248,8 +248,8 @@ export function CaseAnalysis({ caseId, onBack, onStartConsultation }: CaseAnalys
       {/* Risk Factors */}
       <div className="bg-white border-2 border-gray-900">
         <div className="border-b-2 border-gray-900 bg-gray-50 px-6 py-3">
-          <h2 className="text-lg font-bold text-gray-900">주요 위험 요인</h2>
-          <p className="text-xs text-gray-600 mt-1">AI가 분석한 위험도 영향 요인 (합계: 100%)</p>
+          <h2 className="text-lg font-bold text-gray-900">주요 우선 요인</h2>
+          <p className="text-xs text-gray-600 mt-1">AI가 분석한 우선도 영향 요인 (합계: 100%)</p>
         </div>
         <div className="p-6 space-y-3">
           {riskFactors.map((factor, index) => (

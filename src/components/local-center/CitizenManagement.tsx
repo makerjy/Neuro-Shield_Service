@@ -360,7 +360,7 @@ export function CitizenManagement() {
                 <TableHead>등록일</TableHead>
                 <TableHead>마지막 상담</TableHead>
                 <TableHead>상담 횟수</TableHead>
-                <TableHead>위험도</TableHead>
+                <TableHead>우선도</TableHead>
                 <TableHead>상태</TableHead>
                 <TableHead className="text-right">작업</TableHead>
               </TableRow>

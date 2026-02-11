@@ -392,9 +392,12 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
 
   // ═══ SMS 전송 핸들러 ═══
   const smsTemplates = [
-    { id: 'screening_invite', label: '선별검사 안내', body: '{{name}}님, 치매안심센터에서 무료 인지건강 선별검사를 안내드립니다. 문의: 02-1234-5678' },
-    { id: 'visit_remind', label: '방문 예약 리마인드', body: '{{name}}님, 예약된 치매안심센터 방문일이 다가왔습니다. 일정 확인 부탁드립니다.' },
-    { id: 'follow_up', label: '사후관리 안부', body: '{{name}}님, 최근 건강상태 확인을 위해 연락드렸습니다. 불편사항이 있으시면 02-1234-5678로 연락주세요.' },
+    { id: 'screening_invite', label: '선별검사 안내',
+      preview: (name: string, center: string) => `${name}님, ${center}입니다. 인지건강 선별확인을 위해 아래 링크에서 간단한 확인을 진행해 주세요. [1회성 링크 자동생성] (1회 사용/기간 만료) 문의: 02-1234-5678` },
+    { id: 'visit_reminder', label: '방문 예약 리마인드',
+      preview: (name: string, center: string) => `${name}님, ${center} 방문 예약 안내입니다. 일시: (예약일시) 장소: ${center} 준비물: 신분증 변경/문의: 02-1234-5678` },
+    { id: 'followup_checkin', label: '사후관리 안부',
+      preview: (name: string, center: string) => `${name}님, ${center}입니다. 최근 안내드린 절차 이후 불편한 점은 없으신가요? 도움이 필요하시면 연락 주세요. 문의: 02-1234-5678` },
   ];
 
   const handleSendSms = async () => {
@@ -402,25 +405,43 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
     setSmsSending(true);
     try {
       const tpl = smsTemplates.find(t => t.id === smsTemplate);
-      // citizen_sms_service 연동 (포트 4120)
-      await fetch('http://localhost:4120/api/outreach/send-sms', {
+      const recipientName = piiSource?.fullName ?? '대상자';
+      const centerName = '강남구 치매안심센터';
+      const centerPhone = '02-1234-5678';
+
+      const resp = await fetch('http://localhost:4120/api/outreach/send-sms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           case_id: caseId,
+          center_id: 'center-gangnam-001',
           template_id: smsTemplate,
-          variables: { name: piiSource?.fullName ?? '대상자' },
-          to: sharedCase.phone,
+          citizen_phone: sharedCase.phone,
+          variables: {
+            recipient_name: recipientName,
+            center_name: centerName,
+            center_phone: centerPhone,
+            visit_datetime: '예정',
+            visit_place: centerName,
+            supplies: '신분증',
+          },
           dedupe_key: `${caseId}-${smsTemplate}-${Date.now()}`,
         }),
       });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ message: '알 수 없는 오류' }));
+        throw new Error(err.message || err.detail || 'SMS 발송 실패');
+      }
+
+      const result = await resp.json();
       const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
       const newEntry: SmsHistoryEntry = { date: now, template: tpl?.label ?? smsTemplate, status: 'sent' };
       setLocalSmsHistory(prev => [newEntry, ...prev]);
-      setLocalMemoLines(prev => [`[${now}] SMS 발송: ${tpl?.label}`, ...prev]);
-      alert('SMS 발송 요청이 완료되었습니다.');
-    } catch {
-      alert('SMS 발송에 실패했습니다. 네트워크를 확인해주세요.');
+      setLocalMemoLines(prev => [`[${now}] SMS 발송: ${tpl?.label} (${result.status})`, ...prev]);
+      alert(`SMS 발송 완료 (${result.status})`);
+    } catch (e: any) {
+      alert(`SMS 발송 실패: ${e.message}`);
     } finally {
       setSmsSending(false);
       setSmsDialogOpen(false);
@@ -514,9 +535,9 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
               </div>
               <div className="h-10 w-px bg-gray-300" />
 
-              {/* 위험도 */}
+              {/* 우선도 */}
               <div>
-                <div className="text-[10px] text-gray-500">위험도</div>
+                <div className="text-[10px] text-gray-500">우선도</div>
                 <div className="flex items-center gap-1">
                   <span className={`text-base font-bold ${riskBadge.textColor}`}>{riskBadge.label}</span>
                   <span className={`text-xl font-bold ${riskBadge.textColor}`}>{sharedCase.riskScore}</span>
@@ -594,14 +615,14 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-        {/* (1) AI 위험도 요약 */}
+        {/* (1) AI 우선도 요약 */}
         <section>
           <div className={`border-2 ${riskBadge.borderColor} ${riskBadge.bgColor} p-6`}>
-            <h2 className="text-sm font-semibold text-gray-600 mb-4">AI 위험도 요약</h2>
+            <h2 className="text-sm font-semibold text-gray-600 mb-4">AI 우선도 요약</h2>
             
             <div className="grid grid-cols-4 gap-6">
               <div>
-                <div className="text-xs text-gray-600 mb-1">종합 위험 등급</div>
+                <div className="text-xs text-gray-600 mb-1">종합 우선 등급</div>
                 <div className={`text-3xl font-bold ${riskBadge.textColor}`}>
                   {riskBadge.label}
                 </div>
@@ -611,7 +632,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
               </div>
               
               <div>
-                <div className="text-xs text-gray-600 mb-1">위험 순위</div>
+                <div className="text-xs text-gray-600 mb-1">우선 순위</div>
                 <div className="text-xl font-bold text-gray-900">
                   상위 {100 - (aiAnalysis?.riskPercentile ?? 0)}%
                 </div>
@@ -621,7 +642,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
               </div>
               
               <div>
-                <div className="text-xs text-gray-600 mb-1">최근 위험도 변화</div>
+                <div className="text-xs text-gray-600 mb-1">최근 우선도 변화</div>
                 <div className="text-base font-semibold text-gray-900">
                   {aiAnalysis!.recentChange}
                 </div>
@@ -647,16 +668,16 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
         {/* 구분선 */}
         <div className="border-t-2 border-gray-300"></div>
 
-        {/* (2) 주요 위험 요인 */}
+        {/* (2) 주요 우선 요인 */}
         <section>
-          <h2 className="text-sm font-semibold text-gray-600 mb-4">주요 위험 요인 (중요도 순)</h2>
+          <h2 className="text-sm font-semibold text-gray-600 mb-4">주요 우선 요인 (중요도 순)</h2>
           
           <div className="border-2 border-gray-300 bg-white">
             <table className="w-full">
               <thead className="bg-gray-100 border-b-2 border-gray-300">
                 <tr>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">순위</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">위험 요인명</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">우선 요인명</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">영향도</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">상세 내용</th>
                 </tr>
@@ -926,7 +947,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
               <div className="border border-gray-200 bg-gray-50 p-3 rounded">
                 <p className="text-xs text-gray-500 mb-1">미리보기</p>
                 <p className="text-sm text-gray-800 leading-relaxed">
-                  {smsTemplates.find(t => t.id === smsTemplate)?.body.replace('{{name}}', piiSource?.fullName ?? '대상자')}
+                  {smsTemplates.find(t => t.id === smsTemplate)?.preview(piiSource?.fullName ?? '대상자', '강남구 치매안심센터')}
                 </p>
               </div>
             )}

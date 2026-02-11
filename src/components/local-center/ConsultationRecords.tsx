@@ -317,7 +317,7 @@ export function ConsultationRecords() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="risk-level">위험도 평가 *</Label>
+                <Label htmlFor="risk-level">우선도 평가 *</Label>
                 <Select value={formData.riskLevel} onValueChange={(value) => setFormData({ ...formData, riskLevel: value })}>
                   <SelectTrigger>
                     <SelectValue />

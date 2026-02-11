@@ -10,11 +10,15 @@ import { ChurnManagement } from './ChurnManagement';
 import { ReportGeneration } from './ReportGeneration';
 import { AuditLog } from './AuditLog';
 import { Settings } from './Settings';
+import { CaseDetailStage2 } from './CaseDetailStage2';
+import { CaseDetailStage3 } from './CaseDetailStage3';
 
 type PageType = 
   | 'dashboard' 
   | 'calendar' 
   | 'case-detail' 
+  | 'case-detail-stage2'
+  | 'case-detail-stage3'
   | 'consultation-page'
   | 'consultation' 
   | 'appointment-booking'
@@ -40,13 +44,17 @@ export function LocalCenterApp({
   const [selectedCaseId, setSelectedCaseId] = useState<string>('');
   const [selectedCaseName, setSelectedCaseName] = useState<string>('');
   const [selectedCasePhone, setSelectedCasePhone] = useState<string>('');
+  const [selectedStage, setSelectedStage] = useState<number>(1);
 
-  const handleCaseSelect = (caseId: string) => {
+  const handleCaseSelect = (caseId: string, stage?: number) => {
     setSelectedCaseId(caseId);
-    // In a real app, we would fetch the case details
     setSelectedCaseName('김민수');
     setSelectedCasePhone('010-1234-5678');
-    setCurrentPage('case-detail');
+    const s = stage ?? 1;
+    setSelectedStage(s);
+    if (s === 2) setCurrentPage('case-detail-stage2');
+    else if (s === 3) setCurrentPage('case-detail-stage3');
+    else setCurrentPage('case-detail');
   };
 
   const handleStartConsultation = (caseId: string) => {
@@ -58,6 +66,20 @@ export function LocalCenterApp({
     switch (currentPage) {
       case 'dashboard':
         return <CaseDashboard onCaseSelect={handleCaseSelect} />;
+      case 'case-detail-stage2':
+        return (
+          <CaseDetailStage2
+            caseId={selectedCaseId}
+            onBack={() => setCurrentPage('dashboard')}
+          />
+        );
+      case 'case-detail-stage3':
+        return (
+          <CaseDetailStage3
+            caseId={selectedCaseId}
+            onBack={() => setCurrentPage('dashboard')}
+          />
+        );
       case 'calendar':
         return <Calendar />;
       case 'case-detail':

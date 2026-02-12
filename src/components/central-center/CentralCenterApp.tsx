@@ -36,7 +36,7 @@ export function CentralCenterApp({
       case 'national-dashboard':
         return <NationalDashboard onNavigate={handleNavigate} />;
       case 'kpi-dictionary':
-        return <KPIDictionary />;
+        return <KPIDictionary onNavigate={handleNavigate} />;
       case 'model-apply':
         return <ModelApplyDashboard />;
       case 'model-governance':

@@ -55,36 +55,37 @@ export function CaseDetail({ caseId, stage, onBack, onOpenConsultation }: CaseDe
   const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
 
   return (
-    <div className="flex flex-col h-full bg-[#f4f6f9]">
+    <div className="flex h-full flex-col bg-[#f4f7fb]">
       {/* 상단 스티키 헤더 */}
-      <div className="sticky top-0 z-20 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm">
+      <div className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur">
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+          <button
+            onClick={onBack}
+            className="rounded-full border border-slate-200 bg-white p-2 transition-colors hover:bg-slate-50"
+          >
             <ChevronLeft size={20} />
           </button>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold text-gray-900">{caseId}</h2>
-              <span className={cn(
-                "px-3.5 py-1.5 rounded text-sm font-bold border",
-                stage === "Stage 1" ? "bg-emerald-50 text-emerald-700 border-emerald-100" :
-                stage === "Stage 2" ? "bg-blue-50 text-blue-700 border-blue-100" : "bg-purple-50 text-purple-700 border-purple-100"
-              )}>
+              <span className="rounded border border-blue-200 bg-blue-50 px-3.5 py-1.5 text-sm font-bold text-blue-700">
                 {stage}
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
               <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
               <span className="w-px h-2 bg-gray-200"></span>
-              <span>현재 상태: <span className="text-blue-600 font-bold">{profile?.status ?? "진행중"}</span></span>
+              <span>
+                현재 상태: <span className="font-bold text-blue-700">{profile?.status ?? "진행중"}</span>
+              </span>
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <button className="px-4 py-2 text-xs font-bold text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-2">
+          <button className="flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
             <Activity size={14} /> 운영 지원 요청
           </button>
-          <button className="px-4 py-2 text-xs font-bold text-white bg-[#163b6f] rounded-lg shadow-sm hover:shadow-md transition-all flex items-center gap-2">
+          <button className="flex items-center gap-2 rounded-lg bg-[#15386a] px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:shadow-md">
             다음 액션 1순위 실행 <ArrowRightCircle size={14} />
           </button>
         </div>

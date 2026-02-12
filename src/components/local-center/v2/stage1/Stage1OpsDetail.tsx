@@ -90,43 +90,67 @@ type OutcomeDraft =
 
 type SmsTemplate = {
   id: string;
+  messageType: "CONTACT" | "BOOKING" | "REMINDER";
   label: string;
   body: (params: {
     caseId: string;
     centerName: string;
-    availableHour: string;
-    bookingUrl: string;
+    centerPhone: string;
+    guideLink: string;
+    reservationLink: string;
+    unsubscribe: string;
   }) => string;
 };
 
 const STAGE1_PANEL_OPERATOR = "김성실";
 const DEFAULT_CENTER_NAME = "강남구 치매안심센터";
+const DEFAULT_CENTER_PHONE = "02-555-0199";
+const DEFAULT_GUIDE_LINK = "https://neuro-shield.local/guide";
 const DEFAULT_BOOKING_URL = "https://neuro-shield.local/booking";
+const DEFAULT_UNSUBSCRIBE = "수신거부 080-000-0000";
 
 const SMS_TEMPLATES: SmsTemplate[] = [
   {
-    id: "PURPOSE_NOTICE",
-    label: "목적고지 안내",
-    body: ({ caseId, centerName, availableHour }) =>
-      `[${centerName}] ${caseId} 운영 지원 안내입니다. 본 연락은 관리 경로 운영 지원 목적이며, 담당자 검토 후 다음 절차를 진행합니다. 가능 시간: ${availableHour}`,
+    id: "S1_CONTACT_BASE",
+    messageType: "CONTACT",
+    label: "1차 접촉(기본)",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 인지건강 확인을 위한 안내입니다. 진단이 확정된 상태가 아니며, 확인 절차(상담/선별검사)가 필요할 수 있습니다. 안내 확인 및 희망 연락시간 선택: ${guideLink} / 문의: ${centerPhone}`,
   },
   {
-    id: "GENERAL_GUIDE",
-    label: "일반 안내",
-    body: ({ caseId, centerName, availableHour }) =>
-      `[${centerName}] ${caseId} 현재 위험 신호 모니터링 중입니다. 편한 시간(${availableHour})에 연락 주시면 운영 지원 일정을 도와드리겠습니다.`,
+    id: "S1_CONTACT_GUARDIAN",
+    messageType: "CONTACT",
+    label: "1차 접촉(보호자 옵션)",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 안내 확인 후 본인 응답이 어렵다면 보호자 연락처(선택)를 남길 수 있습니다. 안내 확인/연락시간 선택: ${guideLink} / 문의: ${centerPhone}`,
   },
   {
-    id: "BOOKING_NUDGE",
-    label: "예약 유도",
-    body: ({ caseId, centerName, bookingUrl }) =>
-      `[${centerName}] ${caseId} 후속 경로 후보 안내입니다. 일정 확인 링크: ${bookingUrl} (담당자 검토 단계)`,
+    id: "S1_BOOKING_BASE",
+    messageType: "BOOKING",
+    label: "1차 예약안내(선별/상담)",
+    body: ({ centerName, reservationLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 인지 선별검사/상담 예약 안내드립니다. 가능한 날짜·시간을 선택해주세요. 예약/변경: ${reservationLink} / 문의: ${centerPhone}`,
   },
   {
-    id: "RECONTACT",
-    label: "재접촉 안내",
-    body: ({ caseId, centerName, availableHour }) =>
-      `[${centerName}] ${caseId} 이전 연락이 닿지 않아 재접촉드립니다. 연락 가능 시간 ${availableHour}에 회신 주시면 운영 지원을 이어가겠습니다.`,
+    id: "S1_BOOKING_CHANNEL",
+    messageType: "BOOKING",
+    label: "1차 예약안내(방문/전화 선택)",
+    body: ({ centerName, reservationLink }) =>
+      `[치매안심센터:${centerName}] 상담/선별검사는 방문 또는 전화로 진행될 수 있습니다. 희망 방식을 선택해 예약해주세요. ${reservationLink}`,
+  },
+  {
+    id: "S1_REMINDER_FIRST",
+    messageType: "REMINDER",
+    label: "1차 리마인더(1차 안내)",
+    body: ({ centerName, guideLink, centerPhone, unsubscribe }) =>
+      `[치매안심센터:${centerName}] 이전에 안내드린 인지건강 확인 링크가 아직 미확인 상태입니다. 원치 않으시면 수신거부 가능하며, 확인은 아래 링크에서 가능합니다. ${guideLink} / 문의: ${centerPhone} / ${unsubscribe}`,
+  },
+  {
+    id: "S1_REMINDER_FINAL",
+    messageType: "REMINDER",
+    label: "1차 리마인더(최종)",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 확인이 없어 마지막으로 안내드립니다. 필요 시 아래 링크에서 확인/예약할 수 있습니다. ${guideLink} / 문의: ${centerPhone}`,
   },
 ];
 
@@ -149,7 +173,7 @@ const CALL_SCRIPT_STEPS: Array<{
     step: "purpose",
     title: "2단계: 연락 목적 고지",
     content:
-      "이번 연락은 위험 신호 모니터링과 운영 지원 안내 목적입니다. 의료진 확인 전 단계의 참고 정보이며, 담당자 검토 후 다음 절차를 안내드립니다.",
+      "이번 연락은 인지건강 확인 안내를 위한 운영 절차입니다. 현재 진단이 확정된 상태는 아니며, 상담/선별검사 등 확인 절차를 안내드립니다.",
     tips: ["목적을 선명하게 안내", "불안 유발 표현 금지", "확인 전 단계임을 명시"],
     checkpoints: ["목적 고지 문구 전달", "상대방 이해 여부 확인", "추가 문의 기록"],
   },
@@ -157,7 +181,7 @@ const CALL_SCRIPT_STEPS: Array<{
     step: "assessment",
     title: "3단계: 현재 상황 확인",
     content:
-      "최근 일상에서 불편했던 점이나 연락이 어려웠던 사유가 있었는지 확인드리겠습니다. 필요한 경우 보호자 연락으로 전환해 안내를 이어가겠습니다.",
+      "최근 일상에서 불편한 점, 연락 가능 시간, 상담/선별검사 참여 가능 여부를 확인하겠습니다. 필요 시 보호자 연락으로 전환해 안내를 이어가겠습니다.",
     tips: ["개방형 질문 우선", "기록 중심으로 정리", "재접촉 가능 시간 확인"],
     checkpoints: ["현재 상황 확인", "연락 가능 시간대 확인", "추가 지원 필요 여부 확인"],
   },
@@ -165,7 +189,7 @@ const CALL_SCRIPT_STEPS: Array<{
     step: "scheduling",
     title: "4단계: 다음 실행 정리",
     content:
-      "오늘 확인 내용을 기준으로 다음 안내(문자/재접촉 일정/후속 경로 후보)를 정리하겠습니다. 회신 가능한 시간도 함께 확인하겠습니다.",
+      "오늘 확인 내용을 기준으로 문자 안내, 상담/선별검사 예약, 재접촉 일정을 정리하겠습니다. 회신 가능한 시간도 함께 확인하겠습니다.",
     tips: ["다음 행동 1개로 요약", "문자 안내 여부 확인", "재접촉 일정 설정"],
     checkpoints: ["다음 행동 합의", "문자 발송 동의 확인", "재접촉 시점 설정"],
   },
@@ -540,7 +564,7 @@ function buildInitialTimeline(caseRecord: CaseRecord | undefined, level: Interve
     events.unshift({
       type: "SMS_SENT",
       at: withHoursFromNow(-14),
-      templateId: "GENERAL_GUIDE",
+      templateId: "S1_CONTACT_BASE",
       status: "PENDING",
       by: actor,
     });
@@ -627,7 +651,7 @@ function eventTitle(event: ContactEvent) {
     return "번호 오류";
   }
   if (event.type === "SMS_SENT") {
-    return `문자 발송 (${event.templateId})`;
+    return `문자 발송 (${resolveSmsTemplateLabel(event.templateId)})`;
   }
   if (event.type === "LEVEL_CHANGE") {
     return `개입 레벨 변경 ${event.from} → ${event.to}`;
@@ -696,34 +720,19 @@ function smsResultLabel(result: SmsDispatchStatus) {
   return "전송 예약";
 }
 
-async function sendSmsApi(payload: {
-  case_id: string;
-  template_id: string;
-  citizen_phone: string;
-  message: string;
-  channel: "sms";
-  dedupe_key: string;
-}) {
-  const endpoints = ["/api/outreach/send-sms", "http://localhost:4120/api/outreach/send-sms"];
-
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        return true;
-      }
-    } catch {
-      // ignore and fallback
-    }
-  }
-
-  return false;
+function smsMessageTypeLabel(type: SmsTemplate["messageType"]) {
+  if (type === "CONTACT") return "접촉";
+  if (type === "BOOKING") return "예약안내";
+  return "리마인더";
 }
+
+function resolveSmsTemplateLabel(templateId: string) {
+  const normalized = templateId.split("(")[0];
+  const match = SMS_TEMPLATES.find((template) => template.id === normalized);
+  return match ? `${smsMessageTypeLabel(match.messageType)} · ${match.label}` : templateId;
+}
+
+import { sendSmsApi as sendSmsApiCommon } from "../../sms/smsService";
 
 export function Stage1OpsDetail({
   caseRecord,
@@ -816,8 +825,10 @@ export function Stage1OpsDetail({
     return smsTemplate.body({
       caseId: detail.header.caseId,
       centerName: DEFAULT_CENTER_NAME,
-      availableHour: "09:00~18:00",
-      bookingUrl: DEFAULT_BOOKING_URL,
+      centerPhone: DEFAULT_CENTER_PHONE,
+      guideLink: DEFAULT_GUIDE_LINK,
+      reservationLink: DEFAULT_BOOKING_URL,
+      unsubscribe: DEFAULT_UNSUBSCRIBE,
     });
   }, [detail.header.caseId, smsTemplate]);
 
@@ -1138,15 +1149,14 @@ export function Stage1OpsDetail({
       let finalStatus: SmsDispatchStatus = smsResult;
 
       if (!outcomeModal.scheduled && target.phone && smsResult !== "FAILED") {
-        const ok = await sendSmsApi({
-          case_id: detail.header.caseId,
-          template_id: smsTemplateId,
-          citizen_phone: target.phone,
-          message,
-          channel: "sms",
-          dedupe_key: `${detail.header.caseId}-${smsTemplateId}-${target.label}-${Date.now()}`,
+        const result = await sendSmsApiCommon({
+          caseId: detail.header.caseId,
+          citizenPhone: target.phone,
+          templateId: smsTemplateId,
+          renderedMessage: message,
+          dedupeKey: `${detail.header.caseId}-${smsTemplateId}-${target.label}-${Date.now()}`,
         });
-        if (!ok) {
+        if (!result.success) {
           finalStatus = "FAILED";
         }
       }
@@ -1234,6 +1244,49 @@ export function Stage1OpsDetail({
             onOpenCall={() => openConsultationPage("call")}
             onOpenSms={() => openConsultationPage("sms")}
             lastCallEvent={lastCallEvent}
+            lastSmsEvent={lastSmsEvent}
+          />
+
+          <CallConsolePanel
+            focus={consoleFocus === "CALL"}
+            disabledReason={callDisabledReason}
+            callTarget={callTarget}
+            onTargetChange={setCallTarget}
+            callActive={callActive}
+            callDurationText={callDurationText}
+            callResultDraft={callResultDraft}
+            onResultDraftChange={setCallResultDraft}
+            callMemo={callMemo}
+            onMemoChange={setCallMemo}
+            onOpenScript={() => setScriptOpen(true)}
+            onStartCall={handleCallStart}
+            onStopCall={handleCallStop}
+            onFocus={() => setConsoleFocus("CALL")}
+            onFocusClose={() => setConsoleFocus("NONE")}
+            lastCallEvent={lastCallEvent}
+          />
+
+          <SmsConsolePanel
+            focus={consoleFocus === "SMS"}
+            disabledReason={smsDisabledReason}
+            smsTargets={smsTargets}
+            onToggleTarget={(target, checked) =>
+              setSmsTargets((prev) => ({
+                ...prev,
+                [target]: target === "guardian" ? checked && hasGuardianPhone : checked,
+              }))
+            }
+            guardianAvailable={hasGuardianPhone}
+            smsTemplateId={smsTemplateId}
+            onTemplateChange={setSmsTemplateId}
+            smsScheduleType={smsScheduleType}
+            onScheduleTypeChange={setSmsScheduleType}
+            smsScheduledAt={smsScheduledAt}
+            onScheduledAtChange={setSmsScheduledAt}
+            previewText={smsPreview}
+            onPrepareDispatch={handleSmsDispatchPrepare}
+            onFocus={() => setConsoleFocus("SMS")}
+            onFocusClose={() => setConsoleFocus("NONE")}
             lastSmsEvent={lastSmsEvent}
           />
 
@@ -1738,7 +1791,7 @@ function ConsultationServicePanel({
       </h3>
 
       <p className="mt-2 text-[11px] text-gray-500">
-        전화 상담과 문자 발송은 v1 상담 서비스 화면으로 이동해 처리합니다.
+        하단 인라인 상담/SMS 엔진에서 바로 실행하거나, 필요 시 v1 상담 서비스 화면으로 이동해 처리할 수 있습니다.
       </p>
 
       <div className="mt-3 space-y-2">
@@ -1773,7 +1826,7 @@ function ConsultationServicePanel({
         <p className="text-[11px] text-gray-600">
           최근 문자:{" "}
           {lastSmsEvent?.type === "SMS_SENT"
-            ? `${formatDateTime(lastSmsEvent.at)} · ${lastSmsEvent.templateId}`
+            ? `${formatDateTime(lastSmsEvent.at)} · ${resolveSmsTemplateLabel(lastSmsEvent.templateId)}`
             : "기록 없음"}
         </p>
       </div>
@@ -2080,6 +2133,7 @@ export function SmsConsolePanel({
           )}
         </div>
         <p className="mt-1 text-[11px] text-orange-700">구버전 문자 발송 UI(대상 선택/템플릿/미리보기)를 v2 콘솔로 이식</p>
+        <p className="mt-0.5 text-[10px] text-orange-700">문자 3종(접촉/예약안내/리마인더) 기준 · 확진/AI 판단 표현 금지</p>
       </div>
 
       <div className="p-4 space-y-2">
@@ -2139,7 +2193,7 @@ export function SmsConsolePanel({
         >
           {SMS_TEMPLATES.map((template) => (
             <option key={template.id} value={template.id}>
-              {template.label}
+              {smsMessageTypeLabel(template.messageType)} · {template.label}
             </option>
           ))}
         </select>
@@ -2187,7 +2241,7 @@ export function SmsConsolePanel({
 
         {lastSmsEvent?.type === "SMS_SENT" ? (
           <p className="text-[11px] text-gray-500">
-            최근 이력: {formatDateTime(lastSmsEvent.at)} · {lastSmsEvent.templateId} · {smsResultLabel(lastSmsEvent.status)}
+            최근 이력: {formatDateTime(lastSmsEvent.at)} · {resolveSmsTemplateLabel(lastSmsEvent.templateId)} · {smsResultLabel(lastSmsEvent.status)}
           </p>
         ) : null}
       </div>
@@ -2294,9 +2348,9 @@ export function ScriptDrawer({
 
         <div className="mt-3 rounded-lg border border-gray-100 bg-gray-50 p-3 text-xs text-gray-700 space-y-2">
           <p>안녕하세요. {DEFAULT_CENTER_NAME} {assignee} 담당자입니다.</p>
-          <p>{caseId} 건 운영 지원 안내를 위해 연락드렸습니다.</p>
-          <p>본 연락은 위험 신호 모니터링 및 후속 경로 후보 안내를 위한 운영 절차입니다.</p>
-          <p>확인이 끝나면 연락 가능 시간과 다음 진행 방법을 안내드리겠습니다.</p>
+          <p>{caseId} 건 인지건강 확인 안내를 위해 연락드렸습니다.</p>
+          <p>현재 진단이 확정된 상태는 아니며, 상담/선별검사 등 확인 절차를 안내드리는 단계입니다.</p>
+          <p>확인 후 연락 가능 시간, 예약 방법, 다음 안내 절차를 정리해드리겠습니다.</p>
         </div>
 
         <label className="mt-4 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-900">

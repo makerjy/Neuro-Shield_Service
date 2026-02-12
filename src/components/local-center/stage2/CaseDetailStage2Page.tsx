@@ -1,19 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   CalendarClock,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  ClipboardCheck,
-  ExternalLink,
+  Circle,
+  CircleDashed,
   Eye,
-  FileText,
+  ExternalLink,
   ListChecks,
-  Lock,
+  MessageSquare,
+  Phone,
   ShieldAlert,
   ShieldCheck,
-  Siren,
+  Stethoscope,
 } from "lucide-react";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -26,411 +28,1646 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../ui/dialog";
-import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
+import { CaseDetailPrograms } from "../programs/CaseDetailPrograms";
+import { SmsPanel } from "../sms/SmsPanel";
+import type { SmsTemplate } from "../sms/SmsPanel";
+import type { SmsHistoryItem } from "../sms/smsService";
 import type {
-  ActionItem,
-  ActionKey,
-  AuditLogItem,
-  ClassificationTone,
-  Stage2ActionState,
+  FollowUpState,
+  MciSubClass,
+  ProgramDomain,
+  Stage2ActionKey,
+  Stage2AuditLogItem,
   Stage2CaseDetailData,
   Stage2ChecklistItem,
+  Stage2Class,
   Stage2MemoItem,
-  Stage2OperationalState,
-  TimelineStep,
+  Stage2NextActionItem,
+  Stage2StepKey,
+  Stage2Steps,
+  Stage2TimelineItem,
+  StepStatus,
 } from "./stage2Types";
 
-type FocusTarget = "cist" | "snsb" | "workflow" | "checklist";
-
 interface CaseDetailStage2PageProps {
-  data: Stage2CaseDetailData;
+  data?: Stage2CaseDetailData | null;
   onBack: () => void;
+  isLoading?: boolean;
 }
 
-type StatusChipItem = {
-  id: string;
-  label: string;
-  tone: ClassificationTone;
-  ariaLabel: string;
-  onClick?: () => void;
+const STEP_ORDER: Stage2StepKey[] = ["healthCheck", "neuropsych", "clinicalEval", "specialist"];
+const PROGRAM_DOMAINS: ProgramDomain[] = ["PHYSICAL", "COGNITIVE", "DAILY", "FAMILY"];
+
+const CLASS_LABEL: Record<Stage2Class, string> = {
+  NORMAL: "정상",
+  MCI: "경도인지장애(MCI)",
+  DEMENTIA: "치매",
+  UNCONFIRMED: "분류 미확정",
+};
+
+const MCI_SUBCLASS_LABEL: Record<Exclude<MciSubClass, null>, string> = {
+  MILD_OK: "양호",
+  MODERATE: "중증",
+  HIGH_RISK: "위험",
+};
+
+const STAGE2_SMS_TEMPLATES: SmsTemplate[] = [
+  {
+    id: "S2_CONTACT_BASE",
+    type: "CONTACT",
+    label: "2차 접촉(정밀평가 안내)",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 1차 확인 결과에 따라 2차 정밀평가(인지검사/임상평가) 안내드립니다. 이는 확진이 아니라 추가 확인 절차입니다. 예약/안내 확인: ${guideLink} / 문의: ${centerPhone}`,
+  },
+  {
+    id: "S2_CONTACT_RELIEF",
+    type: "CONTACT",
+    label: "2차 접촉(불안 완화)",
+    body: ({ centerName, guideLink }) =>
+      `[치매안심센터:${centerName}] 추가 확인을 위한 2차 평가 안내입니다. 결과는 의료진 평가를 통해 최종 확인됩니다. 예약/상담 요청: ${guideLink}`,
+  },
+  {
+    id: "S2_BOOKING_STEP1",
+    type: "BOOKING",
+    label: "2차 예약안내(1단계 신경심리)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 2차 1단계 인지검사(신경심리검사) 예약 안내드립니다. 가능한 일정 선택: ${bookingLink}`,
+  },
+  {
+    id: "S2_BOOKING_STEP2",
+    type: "BOOKING",
+    label: "2차 예약안내(2단계 임상평가)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 2차 2단계 임상평가(전문의 상담/의료 연계) 안내드립니다. 일정 선택 또는 상담 요청: ${bookingLink}`,
+  },
+  {
+    id: "S2_REMINDER_BOOKING",
+    type: "REMINDER",
+    label: "2차 리마인더(미예약)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 2차 평가 예약이 아직 완료되지 않았습니다. 추가 확인 절차 진행을 위해 일정 선택 부탁드립니다. ${bookingLink}`,
+  },
+  {
+    id: "S2_REMINDER_NOSHOW",
+    type: "REMINDER",
+    label: "2차 리마인더(노쇼 재예약)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 예약 일정에 참석이 어려우셨다면 재예약이 가능합니다. 편한 시간으로 다시 선택해주세요. ${bookingLink}`,
+  },
+];
+
+const WORK_STATUS_LABEL: Record<Stage2CaseDetailData["workStatus"], string> = {
+  WAITING: "작업 대기",
+  IN_PROGRESS: "진행 중",
+  DONE: "완료",
 };
 
 function formatDateTime(input: Date | string): string {
-  const date = input instanceof Date ? input : new Date(input.replace(" ", "T"));
+  const date = input instanceof Date ? input : new Date(input.includes("T") ? input : input.replace(" ", "T"));
   if (Number.isNaN(date.getTime())) {
     return typeof input === "string" ? input : "";
   }
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
     date.getDate(),
-  ).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(
-    date.getMinutes(),
-  ).padStart(2, "0")}`;
+  ).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function toneClass(tone: ClassificationTone): string {
-  if (tone === "success") return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  if (tone === "warning") return "border-amber-200 bg-amber-50 text-amber-800";
-  if (tone === "attention") return "border-red-200 bg-red-50 text-red-800";
+function statusLabel(status: StepStatus): string {
+  if (status === "DONE") return "완료";
+  if (status === "INPUT_REQUIRED") return "입력대기";
+  if (status === "MISSING") return "누락";
+  return "대기";
+}
+
+function statusTone(status: StepStatus): string {
+  if (status === "DONE") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "INPUT_REQUIRED") return "border-orange-200 bg-orange-50 text-orange-800";
+  if (status === "MISSING") return "border-red-200 bg-red-50 text-red-800";
   return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
-function stageTone(status: TimelineStep["status"]): string {
-  if (status === "done") return "border-emerald-200 bg-emerald-50 text-emerald-800";
-  if (status === "waiting") return "border-amber-200 bg-amber-50 text-amber-800";
+function workStatusTone(status: Stage2CaseDetailData["workStatus"]): string {
+  if (status === "DONE") return "border-emerald-200 bg-emerald-50 text-emerald-800";
+  if (status === "IN_PROGRESS") return "border-blue-200 bg-blue-50 text-blue-800";
   return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
-function referralTone(status: Stage2ActionState["referralStatus"]): ClassificationTone {
-  if (status === "전송 완료") return "success";
-  if (status === "준비 완료") return "warning";
-  return "neutral";
+function confidenceTone(confidence?: Stage2CaseDetailData["decision"]["confidenceNote"]): string {
+  if (confidence === "LOW") return "border-red-200 bg-red-50 text-red-800";
+  if (confidence === "CAUTION") return "border-orange-200 bg-orange-50 text-orange-800";
+  return "border-slate-200 bg-slate-100 text-slate-700";
 }
 
-function reservationTone(status: Stage2ActionState["reservationStatus"]): ClassificationTone {
-  if (status === "예약 준비 완료") return "success";
-  if (status === "예약 요청") return "warning";
-  return "neutral";
+function domainLabel(domain: ProgramDomain): string {
+  if (domain === "PHYSICAL") return "신체건강";
+  if (domain === "COGNITIVE") return "인지기능";
+  if (domain === "DAILY") return "일상생활";
+  return "가족지원";
 }
 
-function buildRecommendedActions(
-  state: Stage2ActionState,
-  operational: Stage2OperationalState,
-  checklistWaiting: boolean,
-): ActionItem[] {
-  const p1: ActionItem =
-    state.referralStatus === "미생성"
-      ? {
-          key: "CREATE_REFERRAL",
-          priority: "P1",
-          label: "의뢰서 준비",
-          helper: "운영 권고(참고)",
-          rationale: [
-            "2차 1단계 결과가 정리되어 문서 초안 준비가 가능합니다.",
-            checklistWaiting
-              ? "2차 2단계가 입력 대기 상태라 후속 단계 정렬이 필요합니다."
-              : "2차 2단계 체크가 준비되어 있어 문서 연결이 용이합니다.",
-            `예약 상태: ${state.reservationStatus}`,
-          ],
-        }
-      : state.referralStatus === "준비 완료"
-        ? {
-            key: "SEND_REFERRAL",
-            priority: "P1",
-            label: "의뢰서 전송",
-            helper: "운영 권고(참고)",
-            rationale: [
-              "의뢰서 초안 준비가 끝나 전송 단계로 이동할 수 있습니다.",
-              "전송 이후 예약 추적 단계와 연결이 가능합니다.",
-              `위험 신호: ${operational.riskSignalLevel}`,
-            ],
-          }
-        : {
-            key: "TRACK_RESERVATION",
-            priority: "P1",
-            label: "예약 현황 추적",
-            helper: "운영 권고(참고)",
-            rationale: [
-              "의뢰 작업 이후 방문 일정 추적이 우선입니다.",
-              "입력 대기와 누락 항목을 함께 점검할 수 있습니다.",
-              `예약 상태: ${state.reservationStatus}`,
-            ],
-          };
+function domainDescription(domain: ProgramDomain): string {
+  if (domain === "PHYSICAL") return "운동/만성질환 관리 중심";
+  if (domain === "COGNITIVE") return "인지훈련·재활 중심";
+  if (domain === "DAILY") return "생활리듬·복약·일상지원";
+  return "보호자 교육·가족 상담";
+}
 
-  return [
-    p1,
-    {
-      key: "AUTHORIZE_VIEW",
+function recommendedDomains(subClass: MciSubClass): ProgramDomain[] {
+  if (subClass === "MILD_OK") return ["PHYSICAL"];
+  if (subClass === "MODERATE") return ["COGNITIVE", "PHYSICAL"];
+  return [];
+}
+
+function stepTitle(stepKey: Stage2StepKey): string {
+  if (stepKey === "healthCheck") return "Step 1 · 건강검진 데이터";
+  if (stepKey === "neuropsych") return "Step 2 · 2차 1단계 신경심리검사(SNSB 등)";
+  if (stepKey === "clinicalEval") return "Step 3 · 2차 2단계 치매임상평가";
+  return "Step 4 · 전문의 진찰";
+}
+
+function stepSummary(steps: Stage2Steps, stepKey: Stage2StepKey): string {
+  if (stepKey === "healthCheck") {
+    return steps.healthCheck.summary ?? "건강검진 데이터 요약 없음";
+  }
+  if (stepKey === "neuropsych") {
+    return steps.neuropsych.summary ?? "신경심리검사 요약 없음";
+  }
+  if (stepKey === "clinicalEval") {
+    const count = steps.clinicalEval.checklistCount ?? 0;
+    const evaluator = steps.clinicalEval.evaluator ?? "평가자 미지정";
+    return `체크리스트 ${count}개 · ${evaluator}`;
+  }
+  return steps.specialist.summary ?? "전문의 진찰 연계 요약 없음";
+}
+
+function nextStepStatus(status: StepStatus): StepStatus {
+  if (status === "MISSING") return "INPUT_REQUIRED";
+  if (status === "PENDING" || status === "INPUT_REQUIRED") return "DONE";
+  return "DONE";
+}
+
+function timelineStatusFromStep(status: StepStatus): Stage2TimelineItem["status"] {
+  if (status === "DONE") return "DONE";
+  if (status === "MISSING") return "UNKNOWN";
+  return "PENDING";
+}
+
+function classSummary(decisionClass: Stage2Class, mciSubClass: MciSubClass): string {
+  if (decisionClass === "MCI" && mciSubClass) {
+    return `${CLASS_LABEL[decisionClass]} · ${MCI_SUBCLASS_LABEL[mciSubClass]}`;
+  }
+  return CLASS_LABEL[decisionClass];
+}
+
+function shouldActivateProgramLink(caseData: Stage2CaseDetailData): boolean {
+  return caseData.decision.class === "MCI" && caseData.decision.mciSubClass !== "HIGH_RISK";
+}
+
+function followUpMappingLabel(subClass: MciSubClass): string {
+  if (subClass === "MILD_OK") return "추적 + 맞춤형사례관리(신체건강)";
+  if (subClass === "MODERATE") return "추적 + 맞춤형사례관리(인지기능+신체건강)";
+  return "감별검사 권고(의뢰/예약 연계)";
+}
+
+function inferClassFromHealthSummary(summary?: string): Stage2Class {
+  const scoreMatch = summary?.match(/(\\d+)점/);
+  if (!scoreMatch) return "MCI";
+  const riskScore = Number(scoreMatch[1]);
+  if (riskScore >= 82) return "DEMENTIA";
+  if (riskScore >= 48) return "MCI";
+  return "NORMAL";
+}
+
+function computeMissingTotal(next: Stage2CaseDetailData): number {
+  let missing = 0;
+  if (next.steps.neuropsych.status === "MISSING") missing += 1;
+  if (next.steps.clinicalEval.status !== "DONE") missing += 1;
+  if (next.steps.specialist.status !== "DONE") missing += 1;
+  if (next.followUp.reservationStatus === "NOT_REGISTERED") missing += 1;
+  if (!next.pii.guardianMasked) missing += 1;
+  return missing;
+}
+
+function normalizeFollowUpByDecision(
+  decisionClass: Stage2Class,
+  mciSubClass: MciSubClass,
+  followUp: FollowUpState,
+): FollowUpState {
+  if (decisionClass === "NORMAL") {
+    return {
+      ...followUp,
+      trackingRegistered: false,
+      programPlan: undefined,
+    };
+  }
+  if (decisionClass === "MCI") {
+    if (mciSubClass === "MILD_OK") {
+      return {
+        ...followUp,
+        programPlan: followUp.programPlan ?? {
+          domains: ["PHYSICAL"],
+          notes: "신체건강 중심",
+        },
+      };
+    }
+    if (mciSubClass === "MODERATE") {
+      return {
+        ...followUp,
+        programPlan: followUp.programPlan ?? {
+          domains: ["COGNITIVE", "PHYSICAL"],
+          notes: "인지+신체 병행",
+        },
+      };
+    }
+    return {
+      ...followUp,
+      programPlan: undefined,
+    };
+  }
+
+  if (decisionClass === "DEMENTIA") {
+    return {
+      ...followUp,
+      trackingRegistered: false,
+      programPlan: undefined,
+    };
+  }
+
+  return followUp;
+}
+
+function buildNextActions(caseData: Stage2CaseDetailData): Stage2NextActionItem[] {
+  const actions: Stage2NextActionItem[] = [];
+  const { decision, steps, followUp } = caseData;
+
+  if (decision.class === "UNCONFIRMED") {
+    if (steps.clinicalEval.status !== "DONE") {
+      actions.push({
+        id: "next-unconfirmed-step3",
+        priority: "P1",
+        title: "2차 2단계 체크리스트 입력",
+        description: "분류 미확정 상태 해소를 위해 Step3 입력이 필요합니다.",
+        actionKey: "FOCUS_STEP",
+        stepId: "clinicalEval",
+      });
+    }
+    if (steps.specialist.status !== "DONE") {
+      actions.push({
+        id: "next-unconfirmed-step4",
+        priority: "P1",
+        title: "전문의 진찰 연계/기록",
+        description: "Step4가 완료되어야 종합 분류를 확정할 수 있습니다.",
+        actionKey: "FOCUS_STEP",
+        stepId: "specialist",
+      });
+    }
+    actions.push({
+      id: "next-unconfirmed-summary",
       priority: "P2",
-      label: "권한자 열람 실행",
-      helper: "운영 권고(참고)",
-      rationale: [
-        "개인정보 요약은 기본 비식별 상태로 유지됩니다.",
-        "열람 실행 시 감사 로그에 즉시 남습니다.",
-        "의료진 확인 전에는 운영 참고 범위만 확인합니다.",
-      ],
-    },
-    {
-      key: "REQUEST_SUPPORT",
+      title: "분류 근거 메모 정리",
+      description: "Step3/4 완료 전 운영 근거를 정리해 담당자 검토를 준비합니다.",
+      actionKey: "SAVE_OPS_MEMO",
+    });
+    return actions.slice(0, 3);
+  }
+
+  if (decision.class === "DEMENTIA" || (decision.class === "MCI" && decision.mciSubClass === "HIGH_RISK")) {
+    if (followUp.referralStatus !== "SENT") {
+      actions.push({
+        id: "next-referral",
+        priority: "P1",
+        title: "감별검사 권고 → 의뢰서 진행",
+        description:
+          followUp.referralStatus === "NOT_CREATED"
+            ? "의뢰서 초안 생성이 필요합니다."
+            : "의뢰서 전송 단계로 진행하세요.",
+        actionKey: "PREPARE_REFERRAL",
+      });
+    }
+    if (followUp.reservationStatus === "NOT_REGISTERED" || followUp.reservationStatus === "REQUESTED") {
+      actions.push({
+        id: "next-reservation",
+        priority: "P1",
+        title: "감별검사 예약/의뢰 연계",
+        description:
+          followUp.reservationStatus === "NOT_REGISTERED"
+            ? "예약/의뢰 동기화 미등록 상태입니다."
+            : "예약 요청 상태를 확정 단계로 연계하세요.",
+        actionKey: "LINK_RESERVATION",
+      });
+    }
+    if (steps.clinicalEval.status !== "DONE") {
+      actions.push({
+        id: "next-step3",
+        priority: "P2",
+        title: "Step3 입력 보완",
+        description: "감별검사 연계 전 2차 2단계 입력 대기를 해소합니다.",
+        actionKey: "FOCUS_STEP",
+        stepId: "clinicalEval",
+      });
+    }
+    return actions.slice(0, 3);
+  }
+
+  if (decision.class === "MCI") {
+    actions.push({
+      id: "next-tracking",
+      priority: "P1",
+      title: followUp.trackingRegistered ? "추적관리 유지 점검" : "추적관리 등록",
+      description: "MCI 분류는 추적 관리를 기본으로 운영합니다.",
+      actionKey: "TOGGLE_TRACKING",
+    });
+    actions.push({
+      id: "next-program",
+      priority: "P2",
+      title: "사례관리 프로그램 선택",
+      description: "세부분류 기준으로 프로그램 연계를 결정합니다.",
+      actionKey: "OPEN_PROGRAM",
+    });
+    actions.push({
+      id: "next-memo",
       priority: "P3",
-      label: "운영 지원 요청",
-      helper: "운영 권고(참고)",
-      rationale: [
-        "입력 대기 항목이 길어질 때 병목 완화에 도움 됩니다.",
-        "센터 간 협업 메모를 남겨 이력을 추적할 수 있습니다.",
-        "누락 항목 보완 요청을 묶어서 전달할 수 있습니다.",
-      ],
-    },
-  ];
-}
+      title: "운영 메모/권고 저장",
+      description: "담당자 검토용 메모를 남기고 감사 로그를 기록합니다.",
+      actionKey: "SAVE_OPS_MEMO",
+    });
+    return actions;
+  }
 
-function nextActionStateByKey(
-  prev: Stage2ActionState,
-  key: ActionKey,
-): Pick<Stage2ActionState, "referralStatus" | "reservationStatus"> {
-  if (key === "CREATE_REFERRAL") {
-    return { referralStatus: "준비 완료", reservationStatus: prev.reservationStatus };
-  }
-  if (key === "SEND_REFERRAL") {
-    return {
-      referralStatus: "전송 완료",
-      reservationStatus: prev.reservationStatus === "미등록" ? "예약 요청" : prev.reservationStatus,
-    };
-  }
-  if (key === "TRACK_RESERVATION") {
-    return {
-      referralStatus: prev.referralStatus,
-      reservationStatus: prev.reservationStatus === "미등록" ? "예약 요청" : "예약 준비 완료",
-    };
-  }
-  return {
-    referralStatus: prev.referralStatus,
-    reservationStatus: prev.reservationStatus,
-  };
-}
-
-function timelineByAction(prev: TimelineStep[], key: ActionKey, timestamp: string): TimelineStep[] {
-  return prev.map((item) => {
-    if (item.title === "의뢰서 작업" && key === "CREATE_REFERRAL") {
-      return { ...item, status: "waiting", at: timestamp };
-    }
-    if (item.title === "의뢰서 작업" && key === "SEND_REFERRAL") {
-      return { ...item, status: "done", at: timestamp };
-    }
-    if (item.title === "예약 추적" && key === "TRACK_RESERVATION") {
-      return { ...item, status: "waiting", at: timestamp };
-    }
-    if (item.title === "최종 운영 정리" && (key === "SEND_REFERRAL" || key === "TRACK_RESERVATION")) {
-      return { ...item, status: "waiting", at: timestamp };
-    }
-    return item;
+  actions.push({
+    id: "next-normal-trigger",
+    priority: "P1",
+    title: "재분석 트리거 설정",
+    description: "건강검진 데이터 업데이트 시 재분석 트리거를 관리합니다.",
+    actionKey: "TOGGLE_REEVAL",
   });
+  actions.push({
+    id: "next-normal-step1",
+    priority: "P2",
+    title: "건강검진 데이터 최신성 확인",
+    description: "정상 분류는 데이터 업데이트 모니터링이 우선입니다.",
+    actionKey: "FOCUS_STEP",
+    stepId: "healthCheck",
+  });
+  actions.push({
+    id: "next-normal-memo",
+    priority: "P3",
+    title: "모니터링 메모 기록",
+    description: "재평가 기준과 운영 의견을 남깁니다.",
+    actionKey: "SAVE_OPS_MEMO",
+  });
+
+  return actions;
 }
 
-export function CaseDetailStage2Page({ data, onBack }: CaseDetailStage2PageProps) {
-  const [actions, setActions] = useState<Stage2ActionState>(data.actions);
-  const [timeline, setTimeline] = useState<TimelineStep[]>(data.timeline);
-  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(data.auditLogs);
-  const [checklist, setChecklist] = useState<Stage2ChecklistItem[]>(data.checklist);
-  const [memos, setMemos] = useState<Stage2MemoItem[]>(data.memos);
+export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDetailStage2PageProps) {
+  const [caseData, setCaseData] = useState<Stage2CaseDetailData | null>(data ?? null);
+  const [focusedStep, setFocusedStep] = useState<Stage2StepKey | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [memoInput, setMemoInput] = useState("");
-  const [memoExpanded, setMemoExpanded] = useState(true);
-  const [actionModal, setActionModal] = useState<ActionItem | null>(null);
-  const [actionReason, setActionReason] = useState("");
+  const [evidenceExpanded, setEvidenceExpanded] = useState(false);
+  const [programModalOpen, setProgramModalOpen] = useState(false);
+  const [programDraftDomains, setProgramDraftDomains] = useState<ProgramDomain[]>([]);
+  const [programDraftNote, setProgramDraftNote] = useState("");
   const [authorizeModalOpen, setAuthorizeModalOpen] = useState(false);
   const [authorizeReason, setAuthorizeReason] = useState("");
-  const [piiExpanded, setPiiExpanded] = useState(false);
-  const [focusTarget, setFocusTarget] = useState<FocusTarget | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const cistRef = useRef<HTMLDivElement>(null);
-  const snsbRef = useRef<HTMLDivElement>(null);
-  const workflowRef = useRef<HTMLDivElement>(null);
-  const checklistRef = useRef<HTMLDivElement>(null);
+  const healthRef = useRef<HTMLDivElement>(null);
+  const neuroRef = useRef<HTMLDivElement>(null);
+  const clinicalRef = useRef<HTMLDivElement>(null);
+  const specialistRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setActions(data.actions);
-    setTimeline(data.timeline);
-    setAuditLogs(data.auditLogs);
-    setChecklist(data.checklist);
-    setMemos(data.memos);
-    setPiiExpanded(false);
-    setActionModal(null);
-    setActionReason("");
-    setAuthorizeReason("");
+    setCaseData(data ?? null);
     setMemoInput("");
+    setEvidenceExpanded(false);
+    setProgramModalOpen(false);
+    setAuthorizeModalOpen(false);
+    setAuthorizeReason("");
   }, [data]);
 
   useEffect(() => {
-    if (!focusTarget) return;
-    const timer = setTimeout(() => setFocusTarget(null), 1700);
-    return () => clearTimeout(timer);
-  }, [focusTarget]);
-
-  useEffect(() => {
     if (!toastMessage) return;
-    const timer = setTimeout(() => setToastMessage(null), 2600);
-    return () => clearTimeout(timer);
+    const timer = window.setTimeout(() => setToastMessage(null), 2400);
+    return () => window.clearTimeout(timer);
   }, [toastMessage]);
 
-  const checklistWaiting = data.evidence.stage2Clinical.status === "입력 대기";
-  const missingDetails = useMemo(() => {
-    const items: string[] = [];
-    if (data.evidence.snsb.missingCount > 0) {
-      items.push(`SNSB 누락 ${data.evidence.snsb.missingCount}건`);
-    }
-    if (checklistWaiting) {
-      items.push("2차 2단계 체크리스트 입력 대기");
-    }
-    if (actions.reservationStatus === "미등록") {
-      items.push("예약 정보 미등록");
-    }
-    if (!data.pii.guardianMasked) {
-      items.push("보호자 연락처 미등록");
-    }
-    return items.slice(0, 4);
-  }, [actions.reservationStatus, checklistWaiting, data.evidence.snsb.missingCount, data.pii.guardianMasked]);
+  useEffect(() => {
+    if (!focusedStep) return;
+    const timer = window.setTimeout(() => setFocusedStep(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [focusedStep]);
 
-  const primaryAction = actions.recommendedActions[0];
-  const secondaryActions = actions.recommendedActions.slice(1);
-
-  const scrollToTarget = (target: FocusTarget) => {
-    const map: Record<FocusTarget, React.RefObject<HTMLDivElement>> = {
-      cist: cistRef,
-      snsb: snsbRef,
-      workflow: workflowRef,
-      checklist: checklistRef,
-    };
-    map[target].current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    setFocusTarget(target);
+  const focusStep = (stepId: Stage2StepKey) => {
+    const targetRef =
+      stepId === "healthCheck"
+        ? healthRef
+        : stepId === "neuropsych"
+          ? neuroRef
+          : stepId === "clinicalEval"
+            ? clinicalRef
+            : specialistRef;
+    targetRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setFocusedStep(stepId);
   };
 
-  const appendAuditLog = (message: string) => {
-    const timestamp = formatDateTime(new Date());
-    setAuditLogs((prev) => [
-      {
-        id: `AUD-${Date.now()}-${prev.length}`,
-        timestamp,
-        actor: data.header.assignee.name,
-        message,
+  const applyMutation = (
+    mutate: (prev: Stage2CaseDetailData, timestamp: string) => Stage2CaseDetailData,
+    options?: {
+      auditMessage?: string;
+      memoMessage?: string;
+      toast?: string;
+      actor?: string;
+    },
+  ) => {
+    setCaseData((prev) => {
+      if (!prev) return prev;
+      const timestamp = formatDateTime(new Date());
+      let next = mutate(prev, timestamp);
+
+      if (options?.auditMessage) {
+        const log: Stage2AuditLogItem = {
+          id: `AUD-${Date.now()}-${next.auditLogs.length}`,
+          timestamp,
+          actor: options.actor ?? prev.owner,
+          message: options.auditMessage,
+        };
+        next = { ...next, auditLogs: [log, ...next.auditLogs] };
+      }
+
+      if (options?.memoMessage) {
+        const memo: Stage2MemoItem = {
+          id: `MEMO-${Date.now()}-${next.memos.length}`,
+          timestamp,
+          author: options.actor ?? prev.owner,
+          content: options.memoMessage,
+        };
+        next = { ...next, memos: [memo, ...next.memos] };
+      }
+
+      next = {
+        ...next,
+        lastUpdatedAt: timestamp,
+        missingTotal: computeMissingTotal(next),
+      };
+
+      return next;
+    });
+
+    if (options?.toast) {
+      setToastMessage(options.toast);
+    }
+  };
+
+  const updateStepStatus = (stepId: Stage2StepKey, nextStatus?: StepStatus) => {
+    const currentStatus = caseData?.steps[stepId].status ?? "PENDING";
+    const resolvedStatus = nextStatus ?? nextStepStatus(currentStatus);
+
+    applyMutation(
+      (prev, timestamp) => {
+        const current = prev.steps[stepId].status;
+        const status = nextStatus ?? nextStepStatus(current);
+        const nextSteps: Stage2Steps = {
+          ...prev.steps,
+          [stepId]: {
+            ...prev.steps[stepId],
+            status,
+            date: prev.steps[stepId].date ?? timestamp,
+          },
+        };
+
+        const decisionCanConfirm =
+          nextSteps.clinicalEval.status === "DONE" && nextSteps.specialist.status === "DONE";
+
+        let nextDecision = prev.decision;
+        if (prev.decision.class === "UNCONFIRMED" && decisionCanConfirm) {
+          const fallbackClass: Stage2Class =
+            prev.followUp.referralStatus === "SENT"
+              ? "DEMENTIA"
+              : inferClassFromHealthSummary(prev.steps.healthCheck.summary);
+
+          const fallbackSubClass: MciSubClass =
+            fallbackClass === "MCI"
+              ? prev.decision.mciSubClass ??
+                (prev.followUp.programPlan?.domains.includes("COGNITIVE") ? "MODERATE" : "MILD_OK")
+              : null;
+
+          nextDecision = {
+            ...prev.decision,
+            class: fallbackClass,
+            mciSubClass: fallbackSubClass,
+            evidence: [
+              "Step3/Step4 완료로 종합 분류(운영 참고) 확정",
+              ...prev.decision.evidence.filter((item) => !item.includes("분류 미확정")),
+            ],
+          };
+        }
+
+        const nextFollowUp = normalizeFollowUpByDecision(
+          nextDecision.class,
+          nextDecision.mciSubClass,
+          prev.followUp,
+        );
+
+        const nextChecklist = prev.checklist.map((item) =>
+          item.stepId === stepId
+            ? {
+                ...item,
+                done: status === "DONE",
+                note: status === "DONE" ? "완료" : item.note,
+              }
+            : item,
+        );
+
+        const nextTimeline = prev.timeline.map((item) => {
+          if (item.stepId === stepId) {
+            return {
+              ...item,
+              status: timelineStatusFromStep(status),
+              at: timestamp,
+            };
+          }
+          if (item.title === "종합 분류(운영 참고)") {
+            return {
+              ...item,
+              status: nextDecision.class === "UNCONFIRMED" ? "PENDING" : "DONE",
+              at: timestamp,
+            };
+          }
+          return item;
+        });
+
+        return {
+          ...prev,
+          steps: nextSteps,
+          decision: nextDecision,
+          followUp: nextFollowUp,
+          checklist: nextChecklist,
+          timeline: nextTimeline,
+        };
       },
-      ...prev,
-    ]);
-  };
-
-  const appendMemo = (content: string, author = data.header.assignee.name) => {
-    const timestamp = formatDateTime(new Date());
-    setMemos((prev) => [
       {
-        id: `MEMO-${Date.now()}-${prev.length}`,
-        timestamp,
-        author,
-        content,
+        auditMessage: `${stepTitle(stepId)} 상태 업데이트 (${statusLabel(resolvedStatus)})`,
+        toast: `${stepTitle(stepId)} 업데이트가 반영되었습니다.`,
       },
-      ...prev,
-    ]);
+    );
   };
 
-  const runAction = (action: ActionItem, reason?: string) => {
-    if (action.key === "AUTHORIZE_VIEW") {
-      setAuthorizeModalOpen(true);
-      setActionReason(reason ?? "");
+  const toggleTracking = () => {
+    applyMutation(
+      (prev) => ({
+        ...prev,
+        followUp: {
+          ...prev.followUp,
+          trackingRegistered: !prev.followUp.trackingRegistered,
+        },
+      }),
+      {
+        auditMessage: "추적 관리 상태 변경",
+        memoMessage: "추적 관리 등록/해제 실행 기록",
+        toast: `추적 관리 상태가 변경되었습니다.`,
+      },
+    );
+  };
+
+  const toggleReevalTrigger = () => {
+    applyMutation(
+      (prev) => ({
+        ...prev,
+        followUp: {
+          ...prev.followUp,
+          reevalTrigger: prev.followUp.reevalTrigger === "ON" ? "OFF" : "ON",
+        },
+      }),
+      {
+        auditMessage: "재분석 트리거 설정 변경",
+        memoMessage: "건강검진 데이터 업데이트 재분석 트리거 설정",
+        toast: "재분석 트리거 설정이 저장되었습니다.",
+      },
+    );
+  };
+
+  const advanceReferral = () => {
+    applyMutation(
+      (prev, timestamp) => {
+        const nextReferral =
+          prev.followUp.referralStatus === "NOT_CREATED"
+            ? "DRAFT"
+            : prev.followUp.referralStatus === "DRAFT"
+              ? "SENT"
+              : "SENT";
+
+        const nextTimeline = prev.timeline.map((item) => {
+          if (item.title === "후속조치 연계") {
+            return {
+              ...item,
+              status: nextReferral === "SENT" ? "DONE" : "PENDING",
+              at: timestamp,
+            };
+          }
+          return item;
+        });
+
+        return {
+          ...prev,
+          followUp: {
+            ...prev.followUp,
+            referralStatus: nextReferral,
+          },
+          timeline: nextTimeline,
+        };
+      },
+      {
+        auditMessage: "감별검사 의뢰서 상태 업데이트",
+        memoMessage: "감별검사 의뢰서 상태 업데이트",
+        toast: "의뢰서 진행 상태가 반영되었습니다.",
+      },
+    );
+  };
+
+  const advanceReservation = () => {
+    applyMutation(
+      (prev, timestamp) => {
+        const nextReservation =
+          prev.followUp.reservationStatus === "NOT_REGISTERED"
+            ? "REQUESTED"
+            : prev.followUp.reservationStatus === "REQUESTED"
+              ? "CONFIRMED"
+              : "CONFIRMED";
+
+        const nextTimeline = prev.timeline.map((item) => {
+          if (item.title === "후속조치 연계") {
+            return {
+              ...item,
+              status: nextReservation === "CONFIRMED" ? "DONE" : "PENDING",
+              at: timestamp,
+            };
+          }
+          return item;
+        });
+
+        return {
+          ...prev,
+          followUp: {
+            ...prev.followUp,
+            reservationStatus: nextReservation,
+          },
+          timeline: nextTimeline,
+        };
+      },
+      {
+        auditMessage: "감별검사 예약/의뢰 연계 상태 업데이트",
+        memoMessage: "예약/의뢰 연계 실행 기록",
+        toast: "예약/의뢰 연계 상태가 반영되었습니다.",
+      },
+    );
+  };
+
+  const saveOpsMemo = () => {
+    if (!memoInput.trim()) {
+      setToastMessage("저장할 운영 메모를 입력해 주세요.");
       return;
     }
 
-    const timestamp = formatDateTime(new Date());
-    const nextBase = nextActionStateByKey(actions, action.key);
-    const nextState: Stage2ActionState = {
-      ...actions,
-      ...nextBase,
-      recommendedActions: buildRecommendedActions(
-        { ...actions, ...nextBase, recommendedActions: actions.recommendedActions },
-        data.operational,
-        checklistWaiting,
-      ),
-    };
-
-    setActions(nextState);
-    setTimeline((prev) => timelineByAction(prev, action.key, timestamp));
-
-    const reasonSuffix = reason?.trim() ? ` · 사유: ${reason.trim()}` : "";
-    appendAuditLog(`${action.label} 실행 기록${reasonSuffix}`);
-    appendMemo(`운영 권고(참고) 실행: ${action.label}${reasonSuffix}`, data.header.assignee.name);
-    setToastMessage(`${action.label} 실행 기록이 저장되었습니다.`);
-  };
-
-  const toggleChecklist = (id: string) => {
-    setChecklist((prev) => {
-      const next = prev.map((item) => (item.id === id ? { ...item, done: !item.done } : item));
-      const changed = next.find((item) => item.id === id);
-      if (changed) {
-        appendAuditLog(`체크리스트 변경: ${changed.label} (${changed.done ? "완료" : "대기"})`);
-      }
-      return next;
-    });
-  };
-
-  const handleSaveMemo = () => {
-    if (!memoInput.trim()) return;
-    appendMemo(memoInput.trim(), data.header.assignee.name);
-    appendAuditLog(`운영 메모 등록: ${memoInput.trim().slice(0, 40)}`);
+    const content = memoInput.trim();
+    applyMutation(
+      (prev) => prev,
+      {
+        auditMessage: `운영 메모 저장: ${content.slice(0, 40)}`,
+        memoMessage: content,
+        toast: "운영 메모가 저장되었습니다.",
+      },
+    );
     setMemoInput("");
-    setToastMessage("운영 메모가 저장되었습니다.");
   };
 
-  const handleAuthorize = () => {
-    const reason = authorizeReason.trim() || "운영 추적";
-    setPiiExpanded(true);
+  const runAuthorize = () => {
+    const reason = authorizeReason.trim() || "운영 검토";
+    applyMutation(
+      (prev) => prev,
+      {
+        auditMessage: `권한자 열람 실행 (${reason})`,
+        memoMessage: `권한자 열람 실행 사유: ${reason}`,
+        toast: "권한자 열람 실행 기록이 저장되었습니다.",
+      },
+    );
     setAuthorizeModalOpen(false);
-    appendAuditLog(`권한자 열람 실행 (${reason})`);
-    appendMemo(`권한자 열람 실행 사유: ${reason}`);
     setAuthorizeReason("");
-    setToastMessage("권한자 열람 실행 기록이 저장되었습니다.");
   };
 
-  const handleInputCta = () => {
-    scrollToTarget("checklist");
-    appendAuditLog("2차 2단계 입력 이동 버튼 실행");
-    setToastMessage("2차 2단계 입력 위치로 이동했습니다.");
+  const toggleProgramDomain = (domain: ProgramDomain) => {
+    setProgramDraftDomains((prev) =>
+      prev.includes(domain) ? prev.filter((item) => item !== domain) : [...prev, domain],
+    );
   };
+
+  const openProgramModal = () => {
+    if (!caseData) return;
+    setProgramDraftDomains(caseData.followUp.programPlan?.domains ?? recommendedDomains(caseData.decision.mciSubClass));
+    setProgramDraftNote(caseData.followUp.programPlan?.notes ?? "");
+    setProgramModalOpen(true);
+  };
+
+  const saveProgramPlan = () => {
+    if (!caseData) return;
+    if (programDraftDomains.length === 0) {
+      setToastMessage("최소 1개 영역을 선택해 주세요.");
+      return;
+    }
+
+    applyMutation(
+      (prev) => ({
+        ...prev,
+        followUp: {
+          ...prev.followUp,
+          programPlan: {
+            domains: programDraftDomains,
+            notes: programDraftNote.trim() || undefined,
+          },
+        },
+      }),
+      {
+        auditMessage: "사례관리 프로그램 계획 저장",
+        memoMessage: `프로그램 연계: ${programDraftDomains.map(domainLabel).join(", ")}${
+          programDraftNote.trim() ? ` / ${programDraftNote.trim()}` : ""
+        }`,
+        toast: "프로그램 연계 계획이 저장되었습니다.",
+      },
+    );
+
+    setProgramModalOpen(false);
+  };
+
+  const setMciSubClass = (subClass: Exclude<MciSubClass, null>) => {
+    applyMutation(
+      (prev) => {
+        if (prev.decision.class !== "MCI") return prev;
+
+        const nextDecision = {
+          ...prev.decision,
+          mciSubClass: subClass,
+        };
+
+        return {
+          ...prev,
+          decision: nextDecision,
+          followUp: normalizeFollowUpByDecision("MCI", subClass, prev.followUp),
+        };
+      },
+      {
+        auditMessage: `MCI 세부분류 설정: ${MCI_SUBCLASS_LABEL[subClass]}`,
+        toast: `MCI 세부분류를 ${MCI_SUBCLASS_LABEL[subClass]}로 설정했습니다.`,
+      },
+    );
+  };
+
+  /* ── SMS 발송 콜백 (SmsPanel 통합) ── */
+  const handleStage2SmsSent = (item: SmsHistoryItem) => {
+    const isBooking = item.type === "BOOKING";
+    applyMutation(
+      (prev, timestamp) => {
+        const nextReservationStatus = isBooking
+          ? prev.followUp.reservationStatus === "NOT_REGISTERED" ? "REQUESTED" : prev.followUp.reservationStatus
+          : prev.followUp.reservationStatus;
+        return {
+          ...prev,
+          followUp: { ...prev.followUp, reservationStatus: nextReservationStatus },
+          timeline: isBooking
+            ? prev.timeline.map((t) =>
+                t.title === "후속조치 연계"
+                  ? { ...t, status: nextReservationStatus === "CONFIRMED" ? "DONE" : "PENDING", at: item.at }
+                  : t,
+              )
+            : prev.timeline,
+        };
+      },
+      {
+        auditMessage: `2차 문자 ${item.mode === "NOW" ? "발송" : "예약"}: ${item.templateLabel} (${item.status})`,
+        memoMessage: `2차 문자: ${item.templateLabel}${item.note ? ` / ${item.note}` : ""}`,
+        toast: item.status === "SENT" ? "문자 발송이 완료되었습니다." : item.status === "SCHEDULED" ? "문자 예약이 등록되었습니다." : "문자 발송에 실패했습니다.",
+      },
+    );
+  };
+
+  const handleStage2Consultation = (note: string, type: string, templateLabel: string) => {
+    applyMutation(
+      (prev) => prev,
+      {
+        auditMessage: `2차 상담 실행 기록 (${type})`,
+        memoMessage: `2차 상담 실행: ${templateLabel}${note ? ` / ${note}` : ""}`,
+        toast: "상담 실행 기록이 저장되었습니다.",
+      },
+    );
+  };
+
+  const runNextAction = (action: Stage2NextActionItem) => {
+    switch (action.actionKey) {
+      case "FOCUS_STEP":
+        if (action.stepId) {
+          focusStep(action.stepId);
+          setToastMessage(`${stepTitle(action.stepId)}로 이동했습니다.`);
+        }
+        return;
+      case "TOGGLE_REEVAL":
+        toggleReevalTrigger();
+        return;
+      case "TOGGLE_TRACKING":
+        toggleTracking();
+        return;
+      case "OPEN_PROGRAM":
+        openProgramModal();
+        return;
+      case "SAVE_OPS_MEMO":
+        saveOpsMemo();
+        return;
+      case "PREPARE_REFERRAL":
+        advanceReferral();
+        return;
+      case "LINK_RESERVATION":
+        advanceReservation();
+        return;
+      case "AUTHORIZE_VIEW":
+        setAuthorizeModalOpen(true);
+        return;
+      case "CONFIRM_STEP":
+        if (action.stepId) {
+          updateStepStatus(action.stepId);
+        }
+        return;
+      default:
+        return;
+    }
+  };
+
+  const checklistProgress = useMemo(() => {
+    if (!caseData || caseData.checklist.length === 0) return 0;
+    const doneCount = caseData.checklist.filter((item) => item.done).length;
+    return Math.round((doneCount / caseData.checklist.length) * 100);
+  }, [caseData]);
+
+  if (isLoading) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
+        Stage2 상세 데이터를 불러오는 중입니다...
+      </div>
+    );
+  }
+
+  if (!caseData) {
+    return (
+      <div className="space-y-4 rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900">
+        <p className="text-base font-bold">분류 요약을 표시할 데이터가 없음</p>
+        <p>Step3/Step4 입력 데이터가 없거나 케이스 로드가 실패했습니다.</p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={onBack}>
+            목록으로 이동
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const nextActions = buildNextActions(caseData);
+  const primaryAction = nextActions[0] ?? null;
+  const hasIncompleteSteps = STEP_ORDER.some((stepId) => caseData.steps[stepId].status !== "DONE");
+  const neuropsychMissingCount = caseData.steps.neuropsych.missingCount ?? 0;
+  const hasEvidenceGap = neuropsychMissingCount > 0;
+
+  const followUpSummary =
+    caseData.decision.class === "NORMAL"
+      ? {
+          value: `재분석 ${caseData.followUp.reevalTrigger}`,
+          helper: "건강검진 업데이트 기반 재분석 모니터링",
+          done: caseData.followUp.reevalTrigger === "ON",
+        }
+      : caseData.decision.class === "MCI" && caseData.decision.mciSubClass !== "HIGH_RISK"
+        ? {
+            value: caseData.followUp.trackingRegistered ? "추적 등록" : "등록 필요",
+            helper: caseData.followUp.programPlan?.domains.length
+              ? `프로그램 ${caseData.followUp.programPlan.domains.map(domainLabel).join(", ")}`
+              : "프로그램 선택 필요",
+            done: caseData.followUp.trackingRegistered && Boolean(caseData.followUp.programPlan?.domains.length),
+          }
+        : caseData.decision.class === "MCI" || caseData.decision.class === "DEMENTIA"
+          ? {
+              value:
+                caseData.followUp.referralStatus === "SENT" || caseData.followUp.reservationStatus === "CONFIRMED"
+                  ? "연계 완료"
+                  : caseData.followUp.referralStatus === "DRAFT" || caseData.followUp.reservationStatus === "REQUESTED"
+                    ? "연계 진행"
+                    : "준비 필요",
+              helper: `의뢰 ${caseData.followUp.referralStatus} · 예약 ${caseData.followUp.reservationStatus}`,
+              done:
+                caseData.followUp.referralStatus === "SENT" || caseData.followUp.reservationStatus === "CONFIRMED",
+            }
+          : {
+              value: "분류 확정 필요",
+              helper: "Step3/Step4 완료 후 후속조치가 확정됩니다.",
+              done: false,
+            };
+
+  const hasFollowUpPending =
+    caseData.decision.class !== "UNCONFIRMED" &&
+    !followUpSummary.done;
+
+  const serviceSummaryCards = [
+    {
+      key: "decision",
+      title: "분류 확정",
+      value: caseData.decision.class === "UNCONFIRMED" ? "미확정" : "확정",
+      helper:
+        caseData.decision.class === "UNCONFIRMED"
+          ? "Step3/Step4 완료 필요"
+          : classSummary(caseData.decision.class, caseData.decision.mciSubClass),
+      done: caseData.decision.class !== "UNCONFIRMED",
+    },
+    {
+      key: "followup",
+      title: "후속조치 준비",
+      value: followUpSummary.value,
+      helper: followUpSummary.helper,
+      done: followUpSummary.done,
+    },
+    {
+      key: "program",
+      title: "프로그램 연계",
+      value: caseData.followUp.programPlan?.domains.length ? "계획 설정" : "미설정",
+      helper: caseData.followUp.programPlan?.domains.map(domainLabel).join(", ") || "분류 기반 선택 필요",
+      done: Boolean(caseData.followUp.programPlan?.domains.length),
+    },
+    {
+      key: "comms",
+      title: "상담/문자 실행",
+      value: caseData.memos.length > 0 ? "기록 있음" : "기록 없음",
+      helper: `최근 메모 ${caseData.memos.length}건`,
+      done: caseData.memos.length > 0,
+    },
+  ] as const;
 
   return (
     <div className="min-h-screen bg-[#f4f7fb] pb-24">
       {toastMessage && (
-        <div className="fixed right-4 top-20 z-50 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-700 shadow-lg">
+        <div className="fixed right-4 top-20 z-50 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg">
           {toastMessage}
         </div>
       )}
 
-      <StickyCaseHeader
-        data={data}
-        operational={data.operational}
-        onBack={onBack}
-        onRequestSupport={() => setActionModal(actions.recommendedActions.find((item) => item.key === "REQUEST_SUPPORT") ?? null)}
-        onFocusMissing={() => scrollToTarget("checklist")}
-      />
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
+        <div className="mx-auto w-full max-w-[1320px] px-4 py-3 md:px-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="icon" onClick={onBack} aria-label="목록으로 이동">
+                  <ArrowLeft className="h-4 w-4" />
+                </Button>
+                <h1 className="text-base font-bold text-slate-900 md:text-lg">{caseData.caseId}</h1>
+                <Badge className="border-blue-200 bg-blue-50 text-blue-800">{caseData.stageLabel}</Badge>
+                <Badge className={cn("border", workStatusTone(caseData.workStatus))}>
+                  {WORK_STATUS_LABEL[caseData.workStatus]}
+                </Badge>
+              </div>
+              <p className="text-xs text-slate-600">
+                대상 유형: 선별검사 인지저하자 · {caseData.owner} ({caseData.roleLabel}) · {caseData.centerName}
+              </p>
+              <p className="text-sm font-semibold text-slate-900">
+                현재 분류(운영 참고): {classSummary(caseData.decision.class, caseData.decision.mciSubClass)}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className="border-blue-200 bg-blue-50 text-blue-800">
+                  {CLASS_LABEL[caseData.decision.class]}
+                </Badge>
+                {caseData.decision.class === "MCI" && caseData.decision.mciSubClass && (
+                  <Badge className="border-sky-200 bg-sky-50 text-sky-800">
+                    MCI {MCI_SUBCLASS_LABEL[caseData.decision.mciSubClass]}
+                  </Badge>
+                )}
+              </div>
+              <p className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900">
+                의료진 확인 전 / 담당자 검토 필요
+              </p>
+            </div>
 
-      <main className="mx-auto grid w-full max-w-[1320px] grid-cols-1 gap-4 px-4 py-5 md:px-6">
-        <ExecutiveSummaryGrid
-          data={data}
-          actions={actions}
-          primaryAction={primaryAction}
-          secondaryActions={secondaryActions}
-          onOpenAction={setActionModal}
-          onFocusCard={scrollToTarget}
-          missingDetails={missingDetails}
-        />
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                최근 업데이트 {caseData.lastUpdatedAt}
+              </span>
+              <span className="rounded-md border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] font-semibold text-orange-800">
+                누락 {caseData.missingTotal}건
+              </span>
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700"
+                onClick={toggleReevalTrigger}
+              >
+                재평가 트리거 {caseData.followUp.reevalTrigger}
+              </button>
+              <Button variant="outline" className="h-8 px-3 text-xs font-semibold" onClick={() => setAuthorizeModalOpen(true)}>
+                <ShieldCheck className="h-3.5 w-3.5" />
+                권한자 열람 실행
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
 
-        <EvidenceGrid
-          data={data}
-          focusTarget={focusTarget}
-          cistRef={cistRef}
-          snsbRef={snsbRef}
-          checklistWaiting={checklistWaiting}
-          onInputCta={handleInputCta}
-        />
+      <main className="mx-auto grid w-full max-w-[1320px] grid-cols-1 gap-4 px-4 py-5 xl:grid-cols-12 md:px-6">
+        <section className="space-y-4 xl:col-span-9">
+          {hasIncompleteSteps && (
+            <Card className="border-orange-200 bg-orange-50 shadow-sm">
+              <CardContent className="px-4 py-3 text-xs text-orange-900">
+                Partial Data 상태: 일부 단계가 입력 대기/누락 상태입니다. 분류 또는 후속조치는 운영 참고로 사용하며 의료진 확인 전 단계입니다.
+              </CardContent>
+            </Card>
+          )}
 
-        <WorkflowTraceGrid
-          focusTarget={focusTarget}
-          workflowRef={workflowRef}
-          checklistRef={checklistRef}
-          timeline={timeline}
-          checklist={checklist}
-          auditLogs={auditLogs}
-          memos={memos}
-          pii={data.pii}
-          piiExpanded={piiExpanded}
-          memoExpanded={memoExpanded}
-          memoInput={memoInput}
-          onToggleChecklist={toggleChecklist}
-          onToggleMemoExpanded={() => setMemoExpanded((prev) => !prev)}
-          onMemoInputChange={setMemoInput}
-          onSaveMemo={handleSaveMemo}
-          onOpenAuthorize={() => setAuthorizeModalOpen(true)}
-        />
+          {!hasIncompleteSteps && hasEvidenceGap && (
+            <Card className="border-amber-200 bg-amber-50 shadow-sm">
+              <CardContent className="px-4 py-3 text-xs text-amber-900">
+                검사 단계는 완료되었지만 신경심리검사 세부 누락 {neuropsychMissingCount}건이 남아 있습니다. 현재 분류/권고는 운영 참고로 사용하고 담당자 검토를 진행하세요.
+              </CardContent>
+            </Card>
+          )}
 
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          {!hasIncompleteSteps && hasFollowUpPending && (
+            <Card className="border-blue-200 bg-blue-50 shadow-sm">
+              <CardContent className="px-4 py-3 text-xs text-blue-900">
+                분류는 확정되었으며, 현재는 후속조치 실행 항목이 남아 있습니다. 우측 Next Action 우선순위에 따라 연계/추적 등록을 진행하세요.
+              </CardContent>
+            </Card>
+          )}
+
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="border-b border-slate-100 px-4 py-3">
+              <CardTitle className="text-sm font-bold text-slate-900">서비스 운영 보드</CardTitle>
+              <p className="text-[11px] text-slate-600">분류 확정/연계/커뮤니케이션 진행 상태를 한 번에 확인합니다.</p>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 gap-2 px-4 py-4 sm:grid-cols-2 lg:grid-cols-4">
+              {serviceSummaryCards.map((item) => (
+                <div key={item.key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">{item.title}</p>
+                  <p className="mt-1 text-sm font-bold text-slate-900">{item.value}</p>
+                  <p className="mt-1 text-[11px] text-slate-600">{item.helper}</p>
+                  <span
+                    className={cn(
+                      "mt-2 inline-flex rounded-md border px-2 py-0.5 text-[10px] font-semibold",
+                      item.done
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : "border-orange-200 bg-orange-50 text-orange-800",
+                    )}
+                  >
+                    {item.done ? "준비됨" : "확인 필요"}
+                  </span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="border-b border-slate-100 px-4 py-3">
+              <CardTitle className="text-sm font-bold text-slate-900">Stage2 진단 플로우</CardTitle>
+              <p className="text-[11px] text-slate-600">운영 참고 흐름 · 의료진 확인 전</p>
+            </CardHeader>
+            <CardContent className="space-y-3 px-4 py-4">
+              {STEP_ORDER.map((stepId) => {
+                const step = caseData.steps[stepId];
+                return (
+                  <div
+                    key={stepId}
+                    ref={
+                      stepId === "healthCheck"
+                        ? healthRef
+                        : stepId === "neuropsych"
+                          ? neuroRef
+                          : stepId === "clinicalEval"
+                            ? clinicalRef
+                            : specialistRef
+                    }
+                    className={cn(
+                      "rounded-lg border border-slate-200 bg-slate-50 p-3 transition",
+                      focusedStep === stepId && "ring-2 ring-blue-400 ring-offset-2",
+                    )}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="space-y-1">
+                        <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                          <StepStatusIcon status={step.status} />
+                          {stepTitle(stepId)}
+                        </p>
+                        <p className="text-xs text-slate-600">{stepSummary(caseData.steps, stepId)}</p>
+                        <p className="text-[11px] text-slate-500">{step.date ?? "기록일 미입력"}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={cn("rounded-md border px-2 py-0.5 text-[11px] font-semibold", statusTone(step.status))}>
+                          {statusLabel(step.status)}
+                        </span>
+                        <Button
+                          className="h-8 bg-[#15386a] px-3 text-[11px] font-semibold text-white hover:bg-[#102b4e]"
+                          onClick={() => updateStepStatus(stepId)}
+                        >
+                          {step.status === "MISSING"
+                            ? "보완 바로가기"
+                            : step.status === "DONE"
+                              ? "확인 바로가기"
+                              : step.status === "INPUT_REQUIRED"
+                                ? "입력 바로가기"
+                                : "진행 바로가기"}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                <p className="text-xs font-semibold text-blue-900">종합 분류(운영 참고)</p>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-bold text-blue-900">
+                    {classSummary(caseData.decision.class, caseData.decision.mciSubClass)}
+                  </p>
+                  <span className={cn("rounded-md border px-2 py-0.5 text-[11px] font-semibold", confidenceTone(caseData.decision.confidenceNote))}>
+                    신뢰도 {caseData.decision.confidenceNote ?? "N/A"}
+                  </span>
+                </div>
+                <ul className="mt-2 space-y-1 text-[11px] text-blue-900">
+                  {caseData.decision.evidence.slice(0, 4).map((item) => (
+                    <li key={item} className="flex items-start gap-2">
+                      <span className="mt-[6px] h-1 w-1 rounded-full bg-blue-700" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="border-b border-slate-100 px-4 py-3">
+              <CardTitle className="text-sm font-bold text-slate-900">분류 기반 후속조치</CardTitle>
+              <p className="text-[11px] text-slate-600">운영 참고/의료진 확인 전</p>
+            </CardHeader>
+            <CardContent className="space-y-3 px-4 py-4">
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                운영 참고/의료진 확인 전 · 분류 확정 후에도 담당자 검토가 필요합니다.
+              </div>
+
+              {caseData.decision.class === "UNCONFIRMED" && (
+                <div className="space-y-3 rounded-lg border border-orange-200 bg-orange-50 p-3">
+                  <p className="text-sm font-bold text-orange-900">분류 미확정(운영 참고)</p>
+                  <p className="text-xs text-orange-900">
+                    Step3(치매임상평가)와 Step4(전문의 진찰) 완료 전에는 분류를 확정할 수 없습니다.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button className="h-8 bg-[#15386a] px-3 text-xs font-semibold text-white hover:bg-[#102b4e]" onClick={() => focusStep("clinicalEval")}>
+                      Step3 입력 이동
+                    </Button>
+                    <Button variant="outline" className="h-8 px-3 text-xs font-semibold" onClick={() => focusStep("specialist")}>
+                      Step4 연계 확인
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {caseData.decision.class === "NORMAL" && (
+                <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                  <p className="text-sm font-bold text-emerald-900">정상(운영 참고)</p>
+                  <p className="text-xs text-emerald-900">건강검진 데이터 업데이트 시 재분석이 트리거됩니다.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button className="h-8 bg-[#15386a] px-3 text-xs font-semibold text-white hover:bg-[#102b4e]" onClick={toggleReevalTrigger}>
+                      재분석 트리거 {caseData.followUp.reevalTrigger === "ON" ? "OFF" : "ON"} 설정
+                    </Button>
+                    <Button variant="outline" className="h-8 px-3 text-xs font-semibold" onClick={saveOpsMemo}>
+                      모니터링 메모 기록
+                    </Button>
+                  </div>
+                  <p className="rounded-md border border-emerald-200 bg-white px-2 py-1 text-[11px] text-emerald-800">
+                    재분석 트리거는 건강검진 데이터 변경 감지를 위한 운영 옵션입니다.
+                  </p>
+                </div>
+              )}
+
+              {caseData.decision.class === "MCI" && (
+                <div className="space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+                  <p className="text-sm font-bold text-blue-900">경도인지장애(MCI) (운영 참고)</p>
+                  <div className="flex flex-wrap gap-2">
+                    {(["MILD_OK", "MODERATE", "HIGH_RISK"] as const).map((subClass) => (
+                      <button
+                        key={subClass}
+                        type="button"
+                        className={cn(
+                          "rounded-md border px-2.5 py-1 text-xs font-semibold",
+                          caseData.decision.mciSubClass === subClass
+                            ? "border-blue-300 bg-white text-blue-900"
+                            : "border-blue-200 bg-blue-100 text-blue-700",
+                        )}
+                        onClick={() => setMciSubClass(subClass)}
+                      >
+                        {MCI_SUBCLASS_LABEL[subClass]}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-blue-900">
+                    후속조치: {followUpMappingLabel(caseData.decision.mciSubClass)}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button className="h-8 bg-[#15386a] px-3 text-xs font-semibold text-white hover:bg-[#102b4e]" onClick={toggleTracking}>
+                      추적 관리 {caseData.followUp.trackingRegistered ? "해제" : "등록"}
+                    </Button>
+                    <Button variant="outline" className="h-8 px-3 text-xs font-semibold" onClick={openProgramModal}>
+                      사례관리 프로그램 선택
+                    </Button>
+                    <Button variant="outline" className="h-8 px-3 text-xs font-semibold" onClick={saveOpsMemo}>
+                      운영 메모/권고 저장
+                    </Button>
+                  </div>
+
+                  {caseData.decision.mciSubClass === "HIGH_RISK" && (
+                    <div className="rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-900">
+                      <p className="font-semibold">감별검사 권고</p>
+                      <p className="mt-1">위험 세부분류는 의뢰/예약 연계를 최우선으로 실행합니다.</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Button className="h-8 bg-red-600 px-3 text-xs font-semibold text-white hover:bg-red-700" onClick={advanceReferral}>
+                          의뢰서 준비
+                        </Button>
+                        <Button variant="outline" className="h-8 border-red-200 px-3 text-xs font-semibold text-red-800" onClick={advanceReservation}>
+                          감별검사 예약 연계
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {caseData.decision.class === "DEMENTIA" && (
+                <div className="space-y-3 rounded-lg border border-red-200 bg-red-50 p-3">
+                  <p className="text-sm font-bold text-red-900">치매(운영 참고)</p>
+                  <p className="text-xs text-red-900">후속조치: 감별검사(의뢰/예약 연계)</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button className="h-8 bg-red-600 px-3 text-xs font-semibold text-white hover:bg-red-700" onClick={advanceReferral}>
+                      의뢰서 생성/보완
+                    </Button>
+                    <Button variant="outline" className="h-8 border-red-200 px-3 text-xs font-semibold text-red-800" onClick={advanceReservation}>
+                      예약/의뢰 연계
+                    </Button>
+                    <Button variant="outline" className="h-8 border-red-200 px-3 text-xs font-semibold text-red-800" onClick={() => setAuthorizeModalOpen(true)}>
+                      권한자 열람 실행
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="stage2-memo" className="text-xs font-semibold text-slate-700">
+                  운영 메모/권고
+                </label>
+                <Textarea
+                  id="stage2-memo"
+                  value={memoInput}
+                  onChange={(event) => setMemoInput(event.target.value)}
+                  className="mt-1 min-h-[86px]"
+                  placeholder="후속조치 실행 근거를 남겨주세요."
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ── 프로그램 제공(행정 실행) — 고도화된 UI ── */}
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="border-b border-slate-100 px-4 py-3">
+              <CardTitle className="text-sm font-bold text-slate-900">프로그램 제공(사례관리)</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 py-4">
+              {shouldActivateProgramLink(caseData) || caseData.decision.class === "DEMENTIA" ? (
+                <CaseDetailPrograms
+                  caseId={caseData.caseId}
+                  stage={2}
+                  resultLabel={
+                    caseData.decision.class === "NORMAL" ? "정상"
+                    : caseData.decision.class === "MCI" ? "MCI"
+                    : caseData.decision.class === "DEMENTIA" ? "치매"
+                    : "정상"
+                  }
+                  mciSeverity={
+                    caseData.decision.mciSubClass === "MILD_OK" ? "양호"
+                    : caseData.decision.mciSubClass === "MODERATE" ? "중등"
+                    : caseData.decision.mciSubClass === "HIGH_RISK" ? "중증"
+                    : undefined
+                  }
+                  riskTags={[]}
+                  actorId="OP-001"
+                  actorName={caseData.owner}
+                />
+              ) : (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                  {caseData.decision.class === "NORMAL" && "정상 분류는 재분석 트리거 모니터링이 우선이므로 프로그램 연계는 비활성입니다."}
+                  {caseData.decision.class === "MCI" &&
+                    caseData.decision.mciSubClass === "HIGH_RISK" &&
+                    "MCI 위험 분류는 감별검사 권고가 우선이므로 프로그램 연계를 잠시 비활성합니다. 감별검사 경로를 먼저 검토하세요."}
+                  {caseData.decision.class === "UNCONFIRMED" &&
+                    "분류 미확정 상태에서는 프로그램 연계를 활성화할 수 없습니다."}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <button
+              type="button"
+              onClick={() => setEvidenceExpanded((prev) => !prev)}
+              className="flex w-full items-center justify-between px-4 py-3 text-left"
+            >
+              <div>
+                <p className="text-sm font-bold text-slate-900">근거 상세(CIST/SNSB 등)</p>
+                <p className="text-[11px] text-slate-600">운영 참고/의료진 확인 전</p>
+              </div>
+              {evidenceExpanded ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+            </button>
+            {evidenceExpanded && (
+              <CardContent className="space-y-3 border-t border-slate-100 px-4 py-4">
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  점수/근거는 운영 참고 정보이며 의료진 확인 전입니다.
+                </div>
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold text-slate-800">건강검진·CIST 요약</p>
+                    <p className="mt-1 text-xs text-slate-700">{caseData.steps.healthCheck.summary ?? "요약 없음"}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">{caseData.steps.healthCheck.date ?? "시각 미입력"}</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold text-slate-800">SNSB 요약</p>
+                    <p className="mt-1 text-xs text-slate-700">{caseData.steps.neuropsych.summary ?? "요약 없음"}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">신뢰도 {caseData.steps.neuropsych.reliability ?? "N/A"}</p>
+                  </div>
+                </div>
+                <ul className="space-y-1 text-xs text-slate-700">
+                  {caseData.decision.evidence.map((item) => (
+                    <li key={item} className="flex items-start gap-2">
+                      <span className="mt-[6px] h-1 w-1 rounded-full bg-slate-600" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            )}
+          </Card>
+        </section>
+
+        <aside className="space-y-4 xl:col-span-3">
+          <Card className="border-[#163b6f]/20 bg-[#f7fbff] shadow-sm">
+            <CardHeader className="border-b border-blue-100 px-4 py-3">
+              <CardTitle className="text-sm font-bold text-[#15386a]">Next Action Panel</CardTitle>
+              <p className="text-[11px] text-slate-600">분류 기반 우선순위</p>
+            </CardHeader>
+            <CardContent className="space-y-2 px-4 py-4">
+              {nextActions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  onClick={() => runNextAction(action)}
+                  className={cn(
+                    "w-full rounded-lg border border-blue-200 bg-white p-3 text-left transition hover:shadow-sm",
+                    primaryAction?.id === action.id && "border-[#15386a]/40",
+                  )}
+                >
+                  <p className="text-xs font-bold text-slate-900">
+                    {action.priority}: {action.title}
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-600">{action.description}</p>
+                </button>
+              ))}
+            </CardContent>
+          </Card>
+
+          <SmsPanel
+            stageLabel="2차"
+            templates={STAGE2_SMS_TEMPLATES}
+            defaultVars={{
+              centerName: caseData.centerName ?? "강남구 치매안심센터",
+            }}
+            caseId={caseData.caseId}
+            citizenPhone={caseData.pii.maskedPhone}
+            guardianPhone={caseData.pii.guardianMasked ?? undefined}
+            onSmsSent={handleStage2SmsSent}
+            onConsultation={handleStage2Consultation}
+          />
+
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="border-b border-slate-100 px-4 py-3">
+              <CardTitle className="text-sm font-bold text-slate-900">운영 메모/개인정보 요약</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 px-4 py-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <InfoLine label="이름" value={caseData.pii.maskedName} />
+                  <InfoLine label="연령/성별" value={`${caseData.pii.age}세 · ${caseData.pii.gender}`} />
+                  <InfoLine label="연락처" value={caseData.pii.maskedPhone} />
+                  <InfoLine label="보호자" value={caseData.pii.guardianMasked ?? "미등록"} />
+                </div>
+                <Button variant="outline" className="mt-3 h-8 w-full text-xs font-semibold" onClick={() => setAuthorizeModalOpen(true)}>
+                  <Eye className="h-3.5 w-3.5" />
+                  권한자 열람 실행
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-700">메모 이력</p>
+                  <span className="text-[11px] text-slate-500">{caseData.memos.length}건</span>
+                </div>
+                <div className="max-h-[220px] space-y-2 overflow-auto">
+                  {caseData.memos.length === 0 ? (
+                    <p className="text-xs text-slate-500">저장된 메모가 없습니다.</p>
+                  ) : (
+                    caseData.memos.map((memo) => (
+                      <div key={memo.id} className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
+                        <p className="text-[11px] text-slate-500">
+                          {memo.timestamp} · {memo.author}
+                        </p>
+                        <p className="mt-0.5 text-xs text-slate-700">{memo.content}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </aside>
+
+        <section className="space-y-4 xl:col-span-12">
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+            <Card className="border-slate-200 bg-white shadow-sm xl:col-span-4">
+              <CardHeader className="border-b border-slate-100 px-4 py-3">
+                <CardTitle className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                  <CalendarClock className="h-4 w-4 text-slate-600" />
+                  작업 타임라인
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 px-4 py-4">
+                {caseData.timeline.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-800">{item.title}</p>
+                      <span
+                        className={cn(
+                          "rounded-md border px-2 py-0.5 text-[11px] font-semibold",
+                          item.status === "DONE"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : item.status === "PENDING"
+                              ? "border-orange-200 bg-orange-50 text-orange-800"
+                              : "border-slate-200 bg-slate-100 text-slate-700",
+                        )}
+                      >
+                        {item.status === "DONE" ? "완료" : item.status === "PENDING" ? "대기" : "미입력"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-500">{item.at ?? "시각 미입력"}</p>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 bg-white shadow-sm xl:col-span-4">
+              <CardHeader className="border-b border-slate-100 px-4 py-3">
+                <CardTitle className="flex items-center justify-between text-sm font-bold text-slate-900">
+                  <span className="flex items-center gap-2">
+                    <ListChecks className="h-4 w-4 text-slate-600" />
+                    체크리스트
+                  </span>
+                  <span className="text-[11px] text-slate-500">완료율 {checklistProgress}%</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 px-4 py-4">
+                {caseData.checklist.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => focusStep(item.stepId)}
+                        className="flex-1 text-left"
+                      >
+                        <p className="text-xs font-semibold text-slate-800">{item.label}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">{item.note ?? ""}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          applyMutation(
+                            (prev) => {
+                              const nextChecklist = prev.checklist.map((row) =>
+                                row.id === item.id ? { ...row, done: !row.done } : row,
+                              );
+                              const nextStatus = !item.done ? "DONE" : "PENDING";
+                              const nextSteps = {
+                                ...prev.steps,
+                                [item.stepId]: {
+                                  ...prev.steps[item.stepId],
+                                  status: nextStatus as StepStatus,
+                                },
+                              };
+
+                              return {
+                                ...prev,
+                                checklist: nextChecklist,
+                                steps: nextSteps,
+                                timeline: prev.timeline.map((row) =>
+                                  row.stepId === item.stepId
+                                    ? { ...row, status: timelineStatusFromStep(nextStatus as StepStatus) }
+                                    : row,
+                                ),
+                              };
+                            },
+                            {
+                              auditMessage: `체크리스트 변경: ${item.label} (${item.done ? "대기" : "완료"})`,
+                            },
+                          )
+                        }
+                        className={cn(
+                          "rounded-md border px-2 py-1 text-[11px] font-semibold",
+                          item.done
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                            : "border-orange-200 bg-orange-50 text-orange-800",
+                        )}
+                      >
+                        {item.done ? "완료" : "대기"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 bg-white shadow-sm xl:col-span-4">
+              <CardHeader className="border-b border-slate-100 px-4 py-3">
+                <CardTitle className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                  <Stethoscope className="h-4 w-4 text-slate-600" />
+                  후속조치 상태
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 px-4 py-4 text-xs text-slate-700">
+                <InfoLine label="재분석 트리거" value={caseData.followUp.reevalTrigger} />
+                <InfoLine label="추적 관리" value={caseData.followUp.trackingRegistered ? "등록" : "미등록"} />
+                <InfoLine
+                  label="의뢰 상태"
+                  value={
+                    caseData.followUp.referralStatus === "NOT_CREATED"
+                      ? "미생성"
+                      : caseData.followUp.referralStatus === "DRAFT"
+                        ? "초안"
+                        : "전송 완료"
+                  }
+                />
+                <InfoLine
+                  label="예약 상태"
+                  value={
+                    caseData.followUp.reservationStatus === "NOT_REGISTERED"
+                      ? "미등록"
+                      : caseData.followUp.reservationStatus === "REQUESTED"
+                        ? "요청"
+                        : "확정"
+                  }
+                />
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="border-b border-slate-100 px-4 py-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                <ShieldAlert className="h-4 w-4 text-slate-600" />
+                감사 로그
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-0 py-0">
+              {caseData.auditLogs.length === 0 ? (
+                <p className="px-4 py-4 text-xs text-slate-500">감사 로그가 아직 없습니다.</p>
+              ) : (
+                <div className="max-h-[280px] overflow-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50 text-[11px] text-slate-500">
+                      <tr>
+                        <th className="px-4 py-2 font-medium">시각</th>
+                        <th className="px-4 py-2 font-medium">행위자</th>
+                        <th className="px-4 py-2 font-medium">기록</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {caseData.auditLogs.map((log) => (
+                        <tr key={log.id} className="border-t border-slate-100 text-xs">
+                          <td className="whitespace-nowrap px-4 py-2 text-slate-600">{log.timestamp}</td>
+                          <td className="whitespace-nowrap px-4 py-2 font-semibold text-slate-800">{log.actor}</td>
+                          <td className="px-4 py-2 text-slate-700">{log.message}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        <p className="xl:col-span-12 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
           모든 분류/점수/권고는 운영 참고 정보입니다. 의료진 확인 전 / 담당자 검토 필요.
         </p>
       </main>
@@ -439,98 +1676,38 @@ export function CaseDetailStage2Page({ data, onBack }: CaseDetailStage2PageProps
         <div className="fixed bottom-4 left-4 right-4 z-40 md:hidden">
           <Button
             className="h-12 w-full rounded-xl bg-[#15386a] text-sm font-bold text-white hover:bg-[#102b4e]"
-            onClick={() => setActionModal(primaryAction)}
+            onClick={() => runNextAction(primaryAction)}
           >
             <ExternalLink className="h-4 w-4" />
-            다음 액션 1순위 실행: {primaryAction.label}
+            다음 액션 1순위 실행
           </Button>
         </div>
       )}
-
-      <Dialog open={Boolean(actionModal)} onOpenChange={(open) => !open && setActionModal(null)}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>다음 액션 실행 전 확인</DialogTitle>
-            <DialogDescription>
-              아래 근거는 운영 참고 정보입니다. 의료진 확인 전 / 담당자 검토 필요.
-            </DialogDescription>
-          </DialogHeader>
-
-          {actionModal && (
-            <div className="space-y-3">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-sm font-bold text-slate-900">
-                  {actionModal.priority}. {actionModal.label}
-                </p>
-                <p className="mt-1 text-xs text-slate-600">{actionModal.helper}</p>
-                <ul className="mt-2 space-y-1 text-xs text-slate-700">
-                  {actionModal.rationale.map((item) => (
-                    <li key={item} className="flex items-start gap-2">
-                      <span className="mt-[6px] h-1 w-1 rounded-full bg-slate-500" />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div>
-                <label htmlFor="action-reason" className="text-xs font-semibold text-slate-600">
-                  실행 사유(선택)
-                </label>
-                <Input
-                  id="action-reason"
-                  value={actionReason}
-                  onChange={(event) => setActionReason(event.target.value)}
-                  className="mt-1"
-                  placeholder="예: 예약 지연 예방을 위한 우선 처리"
-                />
-              </div>
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setActionModal(null)}>
-              취소
-            </Button>
-            <Button
-              onClick={() => {
-                if (!actionModal) return;
-                runAction(actionModal, actionReason);
-                setActionModal(null);
-                setActionReason("");
-              }}
-              className="bg-[#15386a] text-white hover:bg-[#102b4e]"
-            >
-              실행 기록 남기기
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={authorizeModalOpen} onOpenChange={setAuthorizeModalOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>권한자 열람 실행</DialogTitle>
             <DialogDescription>
-              개인정보 열람은 기본 비식별 상태에서 필요한 경우에만 실행하며, 감사 로그에 자동 기록됩니다.
+              개인정보 열람은 운영 참고 범위에서만 수행하며, 감사 로그에 자동 기록됩니다.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3">
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-              운영 참고용 열람입니다. 최종 조치는 담당자와 의료진 확인 절차를 따릅니다.
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              운영 참고/의료진 확인 전 · 담당자 검토 필요
             </div>
 
             <div>
-              <label htmlFor="authorize-reason" className="text-xs font-semibold text-slate-600">
+              <label htmlFor="authorize-reason" className="text-xs font-semibold text-slate-700">
                 열람 사유
               </label>
               <Textarea
                 id="authorize-reason"
                 value={authorizeReason}
                 onChange={(event) => setAuthorizeReason(event.target.value)}
-                className="mt-1 min-h-[90px]"
-                placeholder="예: 보호자 문의 대응을 위한 연락처 재확인"
+                className="mt-1 min-h-[96px]"
+                placeholder="예: 보호자 문의 대응을 위한 연락처 확인"
               />
             </div>
           </div>
@@ -539,913 +1716,14 @@ export function CaseDetailStage2Page({ data, onBack }: CaseDetailStage2PageProps
             <Button variant="outline" onClick={() => setAuthorizeModalOpen(false)}>
               닫기
             </Button>
-            <Button onClick={handleAuthorize} className="bg-[#15386a] text-white hover:bg-[#102b4e]">
-              열람 실행 기록 남기기
+            <Button className="bg-[#15386a] text-white hover:bg-[#102b4e]" onClick={runAuthorize}>
+              기록 후 열람 실행
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
   );
-}
-
-interface StickyCaseHeaderProps {
-  data: Stage2CaseDetailData;
-  operational: Stage2OperationalState;
-  onBack: () => void;
-  onRequestSupport: () => void;
-  onFocusMissing: () => void;
-}
-
-export function StickyCaseHeader({
-  data,
-  operational,
-  onBack,
-  onRequestSupport,
-  onFocusMissing,
-}: StickyCaseHeaderProps) {
-  const chipItems: StatusChipItem[] = [
-    {
-      id: "risk",
-      label: `위험 신호(참고) ${operational.riskSignalLevel}`,
-      tone: operational.riskSignalLevel === "즉시 확인 필요" ? "attention" : operational.riskSignalLevel === "주의" ? "warning" : "success",
-      ariaLabel: `위험 신호 참고 ${operational.riskSignalLevel}`,
-    },
-    {
-      id: "missing",
-      label: `누락 ${operational.dataMissingCount}건`,
-      tone: operational.dataMissingCount > 0 ? "warning" : "success",
-      ariaLabel: `누락 ${operational.dataMissingCount}건`,
-      onClick: onFocusMissing,
-    },
-    {
-      id: "trigger",
-      label: `재평가 트리거 ${operational.reevalTrigger}`,
-      tone: operational.reevalTrigger === "ON" ? "warning" : "neutral",
-      ariaLabel: `재평가 트리거 ${operational.reevalTrigger}`,
-    },
-  ];
-
-  return (
-    <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-      <div className="mx-auto flex w-full max-w-[1320px] flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-6">
-        <div className="flex min-w-0 items-center gap-3">
-          <Button variant="outline" size="icon" onClick={onBack} aria-label="목록으로 이동">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-base font-bold text-slate-900 md:text-lg">{data.header.caseId}</h1>
-              <Badge className="border-blue-200 bg-blue-50 text-blue-800">{data.header.stageLabel}</Badge>
-              <Badge className="border-slate-200 bg-slate-100 text-slate-700">{data.header.currentStatus}</Badge>
-            </div>
-            <p className="truncate text-xs text-slate-600">
-              {data.header.assignee.name} · {data.header.assignee.role} · {data.header.centerName}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
-            최근 업데이트 {data.header.lastUpdatedAt}
-          </span>
-          <StatusChips items={chipItems} />
-          <Button variant="outline" className="h-8 px-3 text-xs font-semibold" onClick={onRequestSupport}>
-            <ShieldCheck className="h-3.5 w-3.5" />
-            운영 지원 요청
-          </Button>
-        </div>
-      </div>
-    </header>
-  );
-}
-
-interface ExecutiveSummaryGridProps {
-  data: Stage2CaseDetailData;
-  actions: Stage2ActionState;
-  primaryAction: ActionItem;
-  secondaryActions: ActionItem[];
-  onOpenAction: (item: ActionItem) => void;
-  onFocusCard: (target: FocusTarget) => void;
-  missingDetails: string[];
-}
-
-export function ExecutiveSummaryGrid({
-  data,
-  actions,
-  primaryAction,
-  secondaryActions,
-  onOpenAction,
-  onFocusCard,
-  missingDetails,
-}: ExecutiveSummaryGridProps) {
-  return (
-    <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:col-span-8">
-        <SummaryCard
-          title="인지검사 요약(참고)"
-          value={`${data.evidence.cist.score}/${data.evidence.cist.maxScore}`}
-          description={`CIST · 신뢰도 ${data.evidence.cist.reliability}`}
-          caption={`시행일 ${data.evidence.cist.date}`}
-          icon={<ClipboardCheck className="h-4 w-4 text-blue-700" />}
-          chips={[
-            {
-              id: "cist-reliability",
-              label: `신뢰도 ${data.evidence.cist.reliability}`,
-              tone: data.evidence.cist.reliability === "양호" ? "success" : data.evidence.cist.reliability === "보통" ? "warning" : "attention",
-              ariaLabel: `CIST 신뢰도 ${data.evidence.cist.reliability}`,
-            },
-          ]}
-          onClick={() => onFocusCard("cist")}
-        />
-
-        <SummaryCard
-          title="2차 1단계 결과(참고)"
-          value={`${data.evidence.snsb.zScore} SD`}
-          description={`SNSB · 신뢰도 ${data.evidence.snsb.reliability}`}
-          caption={`누락 ${data.evidence.snsb.missingCount}건`}
-          icon={<Siren className="h-4 w-4 text-amber-700" />}
-          chips={[
-            {
-              id: "snsb-missing",
-              label: `누락 ${data.evidence.snsb.missingCount}건`,
-              tone: data.evidence.snsb.missingCount > 0 ? "warning" : "success",
-              ariaLabel: `SNSB 누락 ${data.evidence.snsb.missingCount}건`,
-            },
-            {
-              id: "snsb-reliability",
-              label: `신뢰도 ${data.evidence.snsb.reliability}`,
-              tone: data.evidence.snsb.reliability === "양호" ? "success" : data.evidence.snsb.reliability === "보통" ? "warning" : "attention",
-              ariaLabel: `SNSB 신뢰도 ${data.evidence.snsb.reliability}`,
-            },
-          ]}
-          onClick={() => onFocusCard("snsb")}
-        />
-
-        <SummaryCard
-          title="2차 2단계 상태"
-          value={data.evidence.stage2Clinical.status}
-          description={`체크 항목 ${data.evidence.stage2Clinical.checklistCount}개 · 평가자 ${data.evidence.stage2Clinical.evaluator}`}
-          caption={data.evidence.stage2Clinical.evalDate ? `평가일 ${data.evidence.stage2Clinical.evalDate}` : "평가일 미입력"}
-          icon={<ListChecks className="h-4 w-4 text-slate-700" />}
-          chips={[
-            {
-              id: "clinical-status",
-              label: data.evidence.stage2Clinical.status,
-              tone: data.evidence.stage2Clinical.status === "완료" ? "success" : "warning",
-              ariaLabel: `2차 2단계 ${data.evidence.stage2Clinical.status}`,
-            },
-          ]}
-          onClick={() => onFocusCard("checklist")}
-        />
-
-        <SummaryCard
-          title="예약/의뢰 진행"
-          value={`${actions.referralStatus} · ${actions.reservationStatus}`}
-          description="의뢰 및 예약 동기화 상태"
-          caption={missingDetails.length ? `누락: ${missingDetails.join(", ")}` : "누락 없음"}
-          icon={<CalendarClock className="h-4 w-4 text-indigo-700" />}
-          chips={[
-            {
-              id: "referral",
-              label: `의뢰 ${actions.referralStatus}`,
-              tone: referralTone(actions.referralStatus),
-              ariaLabel: `의뢰 상태 ${actions.referralStatus}`,
-            },
-            {
-              id: "reservation",
-              label: `예약 ${actions.reservationStatus}`,
-              tone: reservationTone(actions.reservationStatus),
-              ariaLabel: `예약 상태 ${actions.reservationStatus}`,
-            },
-          ]}
-          onClick={() => onFocusCard("workflow")}
-        />
-      </div>
-
-      <NextActionPanel
-        primaryAction={primaryAction}
-        secondaryActions={secondaryActions}
-        onOpenAction={onOpenAction}
-      />
-    </section>
-  );
-}
-
-interface SummaryCardProps {
-  title: string;
-  value: string;
-  description: string;
-  caption: string;
-  chips: StatusChipItem[];
-  icon: React.ReactNode;
-  onClick: () => void;
-}
-
-export function SummaryCard({
-  title,
-  value,
-  description,
-  caption,
-  chips,
-  icon,
-  onClick,
-}: SummaryCardProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-      aria-label={`${title} 카드 열기`}
-    >
-      <Card className="h-full min-h-[170px] border-slate-200 bg-white shadow-sm transition hover:border-blue-200 hover:shadow-md">
-        <CardHeader className="flex min-h-[64px] flex-row items-start justify-between border-b border-slate-100 px-4 py-3">
-          <CardTitle className="text-sm font-semibold text-slate-800">{title}</CardTitle>
-          {icon}
-        </CardHeader>
-        <CardContent className="space-y-2 px-4 py-3">
-          <p className="text-xl font-bold text-slate-900">{value}</p>
-          <p className="text-xs text-slate-600">{description}</p>
-          <StatusChips items={chips} />
-          <p className="text-[11px] text-slate-500">{caption}</p>
-        </CardContent>
-      </Card>
-    </button>
-  );
-}
-
-interface NextActionPanelProps {
-  primaryAction: ActionItem;
-  secondaryActions: ActionItem[];
-  onOpenAction: (item: ActionItem) => void;
-}
-
-export function NextActionPanel({
-  primaryAction,
-  secondaryActions,
-  onOpenAction,
-}: NextActionPanelProps) {
-  const quickMap: Record<ActionKey, string> = {
-    CREATE_REFERRAL: "의뢰서 생성",
-    SEND_REFERRAL: "의뢰서 전송",
-    TRACK_RESERVATION: "예약 현황 추적",
-    AUTHORIZE_VIEW: "권한자 열람 실행",
-    REQUEST_SUPPORT: "운영 지원 요청",
-  };
-
-  return (
-    <Card className="border-[#163b6f]/20 bg-[#f7fbff] shadow-sm xl:col-span-4">
-      <CardHeader className="border-b border-blue-100 px-4 py-3">
-        <CardTitle className="text-sm font-bold text-[#15386a]">Next Action Panel</CardTitle>
-        <p className="text-[11px] text-slate-600">운영 권고(참고) · 의료진 확인 전 / 담당자 검토 필요</p>
-      </CardHeader>
-      <CardContent className="space-y-3 px-4 py-4">
-        <div className="rounded-lg border border-blue-200 bg-white p-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-bold text-slate-900">
-              {primaryAction.priority}. {primaryAction.label}
-            </p>
-            <Badge className="border-blue-200 bg-blue-50 text-blue-800">{primaryAction.helper}</Badge>
-          </div>
-          <div className="mt-2 space-y-1 text-xs text-slate-700">
-            {primaryAction.rationale.map((reason) => (
-              <p key={reason} className="flex items-start gap-2">
-                <span className="mt-[6px] h-1 w-1 rounded-full bg-slate-500" />
-                <span>{reason}</span>
-              </p>
-            ))}
-          </div>
-          <Button
-            className="mt-3 h-9 w-full bg-[#15386a] text-xs font-bold text-white hover:bg-[#102b4e]"
-            onClick={() => onOpenAction(primaryAction)}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            다음 액션 1순위 실행
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {secondaryActions.map((action) => (
-            <Button
-              key={action.key}
-              variant="outline"
-              className="h-8 justify-start text-xs font-semibold"
-              onClick={() => onOpenAction(action)}
-            >
-              {action.priority}. {quickMap[action.key]}
-            </Button>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface EvidenceGridProps {
-  data: Stage2CaseDetailData;
-  focusTarget: FocusTarget | null;
-  cistRef: React.RefObject<HTMLDivElement>;
-  snsbRef: React.RefObject<HTMLDivElement>;
-  checklistWaiting: boolean;
-  onInputCta: () => void;
-}
-
-export function EvidenceGrid({
-  data,
-  focusTarget,
-  cistRef,
-  snsbRef,
-  checklistWaiting,
-  onInputCta,
-}: EvidenceGridProps) {
-  return (
-    <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <div ref={cistRef}>
-        <CistEvidenceCard
-          metric={data.evidence.cist}
-          highlight={focusTarget === "cist"}
-          checklistWaiting={checklistWaiting}
-          onInputCta={onInputCta}
-        />
-      </div>
-      <div ref={snsbRef}>
-        <SnsbEvidenceCard
-          metric={data.evidence.snsb}
-          highlight={focusTarget === "snsb"}
-          checklistWaiting={checklistWaiting}
-          onInputCta={onInputCta}
-        />
-      </div>
-    </section>
-  );
-}
-
-interface CistEvidenceCardProps {
-  metric: Stage2CaseDetailData["evidence"]["cist"];
-  highlight: boolean;
-  checklistWaiting: boolean;
-  onInputCta: () => void;
-}
-
-export function CistEvidenceCard({
-  metric,
-  highlight,
-  checklistWaiting,
-  onInputCta,
-}: CistEvidenceCardProps) {
-  return (
-    <Card className={cn("border-slate-200 bg-white shadow-sm transition", highlight && "ring-2 ring-blue-400 ring-offset-2")}>
-      <CardHeader className="flex min-h-[72px] flex-row items-start justify-between border-b border-slate-100 px-4 py-3">
-        <div>
-          <CardTitle className="text-sm font-bold text-slate-900">CIST 결과(참고)</CardTitle>
-          <p className="text-xs text-slate-600">의료진 확인 전 / 담당자 검토 필요</p>
-        </div>
-        <StatusChips
-          items={[
-            {
-              id: "cist-reliability",
-              label: `신뢰도 ${metric.reliability}`,
-              tone: metric.reliability === "양호" ? "success" : metric.reliability === "보통" ? "warning" : "attention",
-              ariaLabel: `CIST 신뢰도 ${metric.reliability}`,
-            },
-          ]}
-        />
-      </CardHeader>
-
-      <CardContent className="space-y-3 px-4 py-4">
-        <div className="flex items-end justify-between gap-2">
-          <p className="text-3xl font-bold text-slate-900">
-            {metric.score}
-            <span className="ml-1 text-lg text-slate-500">/ {metric.maxScore}</span>
-          </p>
-          <Badge className="border-slate-200 bg-slate-100 text-slate-700">구간 해석은 운영 참고</Badge>
-        </div>
-
-        {checklistWaiting && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            <span className="font-medium">2차 2단계 입력 대기</span>
-            <Button size="sm" className="h-7 bg-amber-600 text-[11px] text-white hover:bg-amber-700" onClick={onInputCta}>
-              입력하러 가기
-            </Button>
-          </div>
-        )}
-
-        <ScoreGauge
-          label={metric.label}
-          score={metric.score}
-          maxScore={metric.maxScore}
-          segments={metric.segments}
-          cutLines={metric.cutLines}
-        />
-
-        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-          <p>시행일: {metric.date}</p>
-          <p className="text-right">평가자: {metric.evaluator}</p>
-          <p>누락 항목: {metric.missingCount}건</p>
-          <p className="text-right">신뢰도: {metric.reliability}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface SnsbEvidenceCardProps {
-  metric: Stage2CaseDetailData["evidence"]["snsb"];
-  highlight: boolean;
-  checklistWaiting: boolean;
-  onInputCta: () => void;
-}
-
-export function SnsbEvidenceCard({
-  metric,
-  highlight,
-  checklistWaiting,
-  onInputCta,
-}: SnsbEvidenceCardProps) {
-  return (
-    <Card className={cn("border-slate-200 bg-white shadow-sm transition", highlight && "ring-2 ring-blue-400 ring-offset-2")}>
-      <CardHeader className="flex min-h-[72px] flex-row items-start justify-between border-b border-slate-100 px-4 py-3">
-        <div>
-          <CardTitle className="text-sm font-bold text-slate-900">SNSB 결과(참고)</CardTitle>
-          <p className="text-xs text-slate-600">이탈 정도는 운영 정렬용 지표입니다.</p>
-        </div>
-        <StatusChips
-          items={[
-            {
-              id: "snsb-missing",
-              label: `누락 ${metric.missingCount}건`,
-              tone: metric.missingCount > 0 ? "warning" : "success",
-              ariaLabel: `SNSB 누락 ${metric.missingCount}건`,
-            },
-          ]}
-        />
-      </CardHeader>
-
-      <CardContent className="space-y-3 px-4 py-4">
-        <div className="flex items-end justify-between gap-2">
-          <p className="text-3xl font-bold text-slate-900">
-            {metric.zScore}
-            <span className="ml-1 text-lg text-slate-500">SD</span>
-          </p>
-          <Badge className="border-slate-200 bg-slate-100 text-slate-700">컷라인은 운영 참고</Badge>
-        </div>
-
-        {checklistWaiting && (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-            <span className="font-medium">2차 2단계 입력 대기</span>
-            <Button size="sm" className="h-7 bg-amber-600 text-[11px] text-white hover:bg-amber-700" onClick={onInputCta}>
-              입력하러 가기
-            </Button>
-          </div>
-        )}
-
-        <ZScoreBar
-          value={metric.zScore}
-          min={metric.scaleMin}
-          max={metric.scaleMax}
-          cutLines={metric.cutLines}
-        />
-
-        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-          <p>시행일: {metric.date}</p>
-          <p className="text-right">평가자: {metric.evaluator}</p>
-          <p>누락 항목: {metric.missingCount}건</p>
-          <p className="text-right">신뢰도: {metric.reliability}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface WorkflowTraceGridProps {
-  focusTarget: FocusTarget | null;
-  workflowRef: React.RefObject<HTMLDivElement>;
-  checklistRef: React.RefObject<HTMLDivElement>;
-  timeline: TimelineStep[];
-  checklist: Stage2ChecklistItem[];
-  auditLogs: AuditLogItem[];
-  memos: Stage2MemoItem[];
-  pii: Stage2CaseDetailData["pii"];
-  piiExpanded: boolean;
-  memoExpanded: boolean;
-  memoInput: string;
-  onToggleChecklist: (id: string) => void;
-  onToggleMemoExpanded: () => void;
-  onMemoInputChange: (value: string) => void;
-  onSaveMemo: () => void;
-  onOpenAuthorize: () => void;
-}
-
-export function WorkflowTraceGrid({
-  focusTarget,
-  workflowRef,
-  checklistRef,
-  timeline,
-  checklist,
-  auditLogs,
-  memos,
-  pii,
-  piiExpanded,
-  memoExpanded,
-  memoInput,
-  onToggleChecklist,
-  onToggleMemoExpanded,
-  onMemoInputChange,
-  onSaveMemo,
-  onOpenAuthorize,
-}: WorkflowTraceGridProps) {
-  return (
-    <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-      <div ref={workflowRef} className="space-y-4 xl:col-span-7">
-        <WorkflowTimeline timeline={timeline} highlight={focusTarget === "workflow"} />
-        <div ref={checklistRef}>
-          <ChecklistPanel checklist={checklist} highlight={focusTarget === "checklist"} onToggle={onToggleChecklist} />
-        </div>
-      </div>
-
-      <div className="space-y-4 xl:col-span-5">
-        <AuditLogTable logs={auditLogs} />
-        <OperationalMemoPanel
-          pii={pii}
-          piiExpanded={piiExpanded}
-          memos={memos}
-          memoExpanded={memoExpanded}
-          memoInput={memoInput}
-          onToggleMemoExpanded={onToggleMemoExpanded}
-          onMemoInputChange={onMemoInputChange}
-          onSaveMemo={onSaveMemo}
-          onOpenAuthorize={onOpenAuthorize}
-        />
-      </div>
-    </section>
-  );
-}
-
-interface WorkflowTimelineProps {
-  timeline: TimelineStep[];
-  highlight: boolean;
-}
-
-export function WorkflowTimeline({ timeline, highlight }: WorkflowTimelineProps) {
-  return (
-    <Card className={cn("border-slate-200 bg-white shadow-sm transition", highlight && "ring-2 ring-blue-400 ring-offset-2")}>
-      <CardHeader className="border-b border-slate-100 px-4 py-3">
-        <CardTitle className="flex items-center gap-2 text-sm font-bold text-slate-900">
-          <ClockLabelIcon />
-          작업 타임라인
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2 px-4 py-4">
-        {timeline.map((step) => (
-          <div key={step.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-slate-800">{step.title}</p>
-              <Badge className={cn("text-[11px]", stageTone(step.status))}>
-                {step.status === "done" ? "완료" : step.status === "waiting" ? "대기" : "미입력"}
-              </Badge>
-            </div>
-            <p className="mt-1 text-[11px] text-slate-600">{step.at ?? "시각 미입력"}</p>
-          </div>
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
-
-interface ChecklistPanelProps {
-  checklist: Stage2ChecklistItem[];
-  highlight: boolean;
-  onToggle: (id: string) => void;
-}
-
-export function ChecklistPanel({ checklist, highlight, onToggle }: ChecklistPanelProps) {
-  return (
-    <Card className={cn("border-slate-200 bg-white shadow-sm transition", highlight && "ring-2 ring-blue-400 ring-offset-2")}>
-      <CardHeader className="border-b border-slate-100 px-4 py-3">
-        <CardTitle className="flex items-center gap-2 text-sm font-bold text-slate-900">
-          <ListChecks className="h-4 w-4 text-slate-600" />
-          체크리스트
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2 px-4 py-4">
-        {checklist.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onToggle(item.id)}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left transition hover:bg-slate-50"
-            aria-label={`체크리스트 ${item.label} ${item.done ? "완료" : "대기"}`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-slate-800">{item.label}</p>
-              <Badge className={cn("text-[11px]", item.done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800")}>
-                {item.done ? "완료" : "대기"}
-              </Badge>
-            </div>
-            {item.note && <p className="mt-1 text-[11px] text-slate-600">{item.note}</p>}
-          </button>
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
-
-interface AuditLogTableProps {
-  logs: AuditLogItem[];
-}
-
-export function AuditLogTable({ logs }: AuditLogTableProps) {
-  return (
-    <Card className="border-slate-200 bg-white shadow-sm">
-      <CardHeader className="border-b border-slate-100 px-4 py-3">
-        <CardTitle className="flex items-center gap-2 text-sm font-bold text-slate-900">
-          <ShieldAlert className="h-4 w-4 text-slate-600" />
-          감사 로그
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="px-0 py-0">
-        {logs.length === 0 ? (
-          <p className="px-4 py-4 text-xs text-slate-500">감사 로그가 아직 없습니다.</p>
-        ) : (
-          <div className="max-h-[260px] overflow-auto">
-            <table className="w-full text-left">
-              <thead className="bg-slate-50 text-[11px] text-slate-500">
-                <tr>
-                  <th className="px-4 py-2 font-medium">시각</th>
-                  <th className="px-4 py-2 font-medium">행위자</th>
-                  <th className="px-4 py-2 font-medium">기록</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((log) => (
-                  <tr key={log.id} className="border-t border-slate-100 text-xs">
-                    <td className="whitespace-nowrap px-4 py-2 text-slate-600">{log.timestamp}</td>
-                    <td className="whitespace-nowrap px-4 py-2 font-semibold text-slate-800">{log.actor}</td>
-                    <td className="px-4 py-2 text-slate-700">{log.message}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-interface OperationalMemoPanelProps {
-  pii: Stage2CaseDetailData["pii"];
-  piiExpanded: boolean;
-  memos: Stage2MemoItem[];
-  memoExpanded: boolean;
-  memoInput: string;
-  onToggleMemoExpanded: () => void;
-  onMemoInputChange: (value: string) => void;
-  onSaveMemo: () => void;
-  onOpenAuthorize: () => void;
-}
-
-export function OperationalMemoPanel({
-  pii,
-  piiExpanded,
-  memos,
-  memoExpanded,
-  memoInput,
-  onToggleMemoExpanded,
-  onMemoInputChange,
-  onSaveMemo,
-  onOpenAuthorize,
-}: OperationalMemoPanelProps) {
-  return (
-    <Card className="border-slate-200 bg-white shadow-sm">
-      <CardHeader className="border-b border-slate-100 px-4 py-3">
-        <CardTitle className="flex items-center gap-2 text-sm font-bold text-slate-900">
-          <FileText className="h-4 w-4 text-slate-600" />
-          운영 메모/권고
-        </CardTitle>
-      </CardHeader>
-
-      <CardContent className="space-y-3 px-4 py-4">
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-          운영 권고(참고): 분류 결과는 정렬용 정보입니다. 의료진 확인 전 / 담당자 검토 필요.
-        </div>
-
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-slate-700">개인정보 요약(기본 접힘)</p>
-            <Button variant="outline" size="sm" className="h-7 text-[11px]" onClick={onOpenAuthorize}>
-              <Eye className="h-3.5 w-3.5" />
-              권한자 열람 실행
-            </Button>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
-            <InfoLine label="이름" value={pii.maskedName} />
-            <InfoLine label="연령/성별" value={`${pii.age}세 · ${pii.gender}`} />
-            <InfoLine label="연락처" value={pii.maskedPhone} />
-            <InfoLine label="보호자" value={pii.guardianMasked ?? "미등록"} />
-          </div>
-          {piiExpanded ? (
-            <div className="mt-2 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-900">
-              권한자 열람 실행 상태: 상세 확인 가능 · 감사 로그 기록됨
-            </div>
-          ) : (
-            <div className="mt-2 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600">
-              비식별 상태 유지 중입니다.
-            </div>
-          )}
-        </div>
-
-        <div className="rounded-lg border border-slate-200">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between px-3 py-2 text-left text-xs font-semibold text-slate-700"
-            onClick={onToggleMemoExpanded}
-          >
-            <span className="flex items-center gap-2">
-              <Lock className="h-3.5 w-3.5 text-slate-500" />
-              운영 메모 이력
-            </span>
-            {memoExpanded ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
-          </button>
-
-          {memoExpanded && (
-            <div className="space-y-2 border-t border-slate-200 px-3 py-3">
-              <div className="max-h-[180px] space-y-2 overflow-auto">
-                {memos.length === 0 ? (
-                  <p className="text-xs text-slate-500">저장된 운영 메모가 없습니다.</p>
-                ) : (
-                  memos.map((memo) => (
-                    <div key={memo.id} className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1.5">
-                      <p className="text-[11px] text-slate-500">
-                        {memo.timestamp} · {memo.author}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-700">{memo.content}</p>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              <Textarea
-                value={memoInput}
-                onChange={(event) => onMemoInputChange(event.target.value)}
-                className="min-h-[90px]"
-                placeholder="운영 참고 메모를 입력하세요."
-              />
-              <Button className="h-8 w-full bg-[#15386a] text-xs font-semibold text-white hover:bg-[#102b4e]" onClick={onSaveMemo}>
-                메모 저장
-              </Button>
-            </div>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface ScoreGaugeProps {
-  label: string;
-  score: number;
-  maxScore: number;
-  segments: Stage2CaseDetailData["evidence"]["cist"]["segments"];
-  cutLines: number[];
-}
-
-export function ScoreGauge({ label, score, maxScore, segments, cutLines }: ScoreGaugeProps) {
-  const markerLeft = (clampValue(score, 0, maxScore) / maxScore) * 100;
-  return (
-    <div
-      className="space-y-2"
-      role="img"
-      aria-label={`${label} 점수 ${score}/${maxScore}, 운영 참고용 게이지`}
-      title="운영 참고용 구간이며 의료진 확인 전입니다."
-    >
-      <div className="relative">
-        <div className="flex h-4 overflow-hidden rounded-full border border-slate-200">
-          {segments.map((segment) => {
-            const width = ((segment.max - segment.min) / maxScore) * 100;
-            return (
-              <div
-                key={`${segment.label}-${segment.min}`}
-                className={cn(
-                  "h-full",
-                  segment.tone === "success" && "bg-emerald-200",
-                  segment.tone === "warning" && "bg-amber-200",
-                  segment.tone === "attention" && "bg-red-200",
-                  segment.tone === "neutral" && "bg-slate-200",
-                )}
-                style={{ width: `${width}%` }}
-              />
-            );
-          })}
-        </div>
-
-        {cutLines.map((line) => (
-          <span
-            key={line}
-            className="absolute top-0 h-4 w-[2px] bg-slate-500/60"
-            style={{ left: `${(line / maxScore) * 100}%` }}
-            aria-hidden="true"
-          />
-        ))}
-
-        <span
-          className="absolute -top-1 h-6 w-[3px] rounded bg-[#15386a]"
-          style={{ left: `${markerLeft}%` }}
-          aria-hidden="true"
-        />
-      </div>
-
-      <div className="flex items-center justify-between text-[11px] text-slate-500">
-        <span>0</span>
-        <span>컷 {cutLines.join(" / ")}</span>
-        <span>{maxScore}</span>
-      </div>
-      <p className="text-[11px] text-slate-600">운영 참고용 구간이며 의료진 확인 전 해석 기준입니다.</p>
-    </div>
-  );
-}
-
-interface ZScoreBarProps {
-  value: number;
-  min: number;
-  max: number;
-  cutLines: number[];
-}
-
-export function ZScoreBar({ value, min, max, cutLines }: ZScoreBarProps) {
-  const toLeft = (number: number) => ((clampValue(number, min, max) - min) / (max - min)) * 100;
-  const markerLeft = toLeft(value);
-  const zeroLeft = toLeft(0);
-
-  return (
-    <div
-      className="space-y-2"
-      role="img"
-      aria-label={`SNSB Z score ${value}, 축 범위 ${min}부터 ${max}까지`}
-      title="운영 참고용 구간이며 의료진 확인 전입니다."
-    >
-      <div className="relative h-5 rounded-full border border-slate-200 bg-gradient-to-r from-red-100 via-amber-100 to-emerald-100">
-        <span className="absolute top-0 h-5 w-[2px] bg-slate-500" style={{ left: `${zeroLeft}%` }} aria-hidden="true" />
-
-        {cutLines.map((line) => (
-          <span
-            key={line}
-            className="absolute top-0 h-5 w-[1px] border-r border-dashed border-slate-500/80"
-            style={{ left: `${toLeft(line)}%` }}
-            aria-hidden="true"
-          />
-        ))}
-
-        <span className="absolute -top-1 h-7 w-[3px] rounded bg-[#15386a]" style={{ left: `${markerLeft}%` }} aria-hidden="true" />
-      </div>
-      <div className="flex items-center justify-between text-[11px] text-slate-500">
-        <span>{min}</span>
-        <span>0</span>
-        <span>{max}</span>
-      </div>
-      <p className="text-[11px] text-slate-600">컷라인 {cutLines.join(", ")} SD는 운영 참고용 기준입니다.</p>
-    </div>
-  );
-}
-
-interface StatusChipsProps {
-  items: StatusChipItem[];
-}
-
-export function StatusChips({ items }: StatusChipsProps) {
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {items.map((item) =>
-        item.onClick ? (
-          <button
-            key={item.id}
-            type="button"
-            onClick={item.onClick}
-            aria-label={item.ariaLabel}
-            className={cn("rounded-md border px-2 py-0.5 text-[11px] font-semibold transition hover:opacity-80", toneClass(item.tone))}
-          >
-            {item.label}
-          </button>
-        ) : (
-          <span
-            key={item.id}
-            aria-label={item.ariaLabel}
-            className={cn("rounded-md border px-2 py-0.5 text-[11px] font-semibold", toneClass(item.tone))}
-          >
-            {item.label}
-          </span>
-        ),
-      )}
-    </div>
-  );
-}
-
-function clampValue(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function ClockLabelIcon() {
-  return <CheckCircle2 className="h-4 w-4 text-slate-600" />;
 }
 
 function InfoLine({ label, value }: { label: string; value: string }) {
@@ -1455,4 +1733,17 @@ function InfoLine({ label, value }: { label: string; value: string }) {
       <p className="text-xs font-semibold text-slate-700">{value}</p>
     </div>
   );
+}
+
+function StepStatusIcon({ status }: { status: StepStatus }) {
+  if (status === "DONE") {
+    return <CheckCircle2 className="h-4 w-4 text-emerald-600" />;
+  }
+  if (status === "MISSING") {
+    return <AlertTriangle className="h-4 w-4 text-red-600" />;
+  }
+  if (status === "INPUT_REQUIRED") {
+    return <CircleDashed className="h-4 w-4 text-orange-600" />;
+  }
+  return <Circle className="h-4 w-4 text-slate-500" />;
 }

@@ -30,6 +30,10 @@ import {
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
+import { CaseDetailPrograms } from "../programs/CaseDetailPrograms";
+import { SmsPanel } from "../sms/SmsPanel";
+import type { SmsTemplate } from "../sms/SmsPanel";
+import type { SmsHistoryItem } from "../sms/smsService";
 import {
   executeStage3Action,
   getStage3Case,
@@ -41,6 +45,58 @@ type UiNotice = {
   tone: "success" | "warning" | "error" | "info";
   message: string;
 };
+
+const STAGE3_SMS_TEMPLATES: SmsTemplate[] = [
+  {
+    id: "S3_CONTACT_BASE",
+    type: "CONTACT",
+    label: "3차 접촉(관리등록 안내)",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 인지건강 추적관리 안내드립니다. 정기 점검/상담을 통해 변화를 확인하고 필요한 지원을 연결합니다. 관리 일정 확인/등록: ${guideLink} / 문의: ${centerPhone}`,
+  },
+  {
+    id: "S3_CONTACT_GUARDIAN",
+    type: "CONTACT",
+    label: "3차 접촉(보호자 동반 옵션)",
+    body: ({ centerName, guideLink }) =>
+      `[치매안심센터:${centerName}] 추적관리는 보호자 동반/연락처 등록(선택)도 가능합니다. 등록/일정 확인: ${guideLink}`,
+  },
+  {
+    id: "S3_BOOKING_TRACK",
+    type: "BOOKING",
+    label: "3차 예약안내(정기 추적)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 추적관리 정기 점검 예약 안내드립니다. 희망 일정 선택: ${bookingLink}`,
+  },
+  {
+    id: "S3_BOOKING_REEVAL",
+    type: "BOOKING",
+    label: "3차 예약안내(재평가)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 최근 상태 확인을 위해 재평가(인지검사/상담) 안내드립니다. 예약: ${bookingLink}`,
+  },
+  {
+    id: "S3_BOOKING_EXTRA_EXAM",
+    type: "BOOKING",
+    label: "3차 예약안내(추가검사 권유)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 상담 결과에 따라 추가 검사가 도움이 될 수 있어 안내드립니다(예: 영상검사 등). 자세한 내용은 상담 후 결정됩니다. 상담/예약: ${bookingLink}`,
+  },
+  {
+    id: "S3_REMINDER_REGULAR",
+    type: "REMINDER",
+    label: "3차 리마인더(정기 알림)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 추적관리 일정이 다가왔습니다. 일정 확인/변경: ${bookingLink}`,
+  },
+  {
+    id: "S3_REMINDER_RETURN",
+    type: "REMINDER",
+    label: "3차 리마인더(장기 미참여 복귀)",
+    body: ({ centerName, bookingLink }) =>
+      `[치매안심센터:${centerName}] 추적관리가 일정 기간 진행되지 않았습니다. 필요 시 다시 등록/예약할 수 있습니다. ${bookingLink}`,
+  },
+];
 
 interface Stage3CaseDetailPageProps {
   caseId: string;
@@ -66,6 +122,12 @@ function toDday(target?: string): string {
   if (diff === 0) return "D-Day";
   if (diff > 0) return `D-${diff}`;
   return `D+${Math.abs(diff)}`;
+}
+
+function addDaysYmd(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function statusLabel(status: Stage3Case["status"]): string {
@@ -252,6 +314,62 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
     }
   };
 
+  /* ── SMS 발송 콜백 (SmsPanel 통합) ── */
+  const handleStage3SmsSent = (item: SmsHistoryItem) => {
+    const now = formatDateTime(new Date().toISOString());
+    setStage3((prev) => {
+      if (!prev) return prev;
+      const nextHistory = [
+        {
+          id: `${prev.caseId}-sms-${Date.now()}`,
+          at: item.at,
+          channel: "sms" as const,
+          result: item.status === "SENT" ? "success" as const : "fail" as const,
+          reasonTag: "부재중" as const,
+          note: `${item.templateLabel}${item.note ? ` / ${item.note}` : ""}`,
+        },
+        ...prev.communication.history,
+      ];
+      const nextAudit = [
+        {
+          at: now,
+          actor: { name: prev.owner.name, type: "human" as const },
+          message: `3차 문자 ${item.mode === "NOW" ? "발송" : "예약"}: ${item.templateLabel} (${item.status})`,
+          logId: `LOG-${Date.now()}`,
+          severity: "info" as const,
+        },
+        ...prev.audit,
+      ];
+      const shouldShiftCheckpoint = item.type === "BOOKING";
+      return {
+        ...prev,
+        communication: { ...prev.communication, history: nextHistory },
+        ops: { ...prev.ops, nextCheckpointAt: shouldShiftCheckpoint ? addDaysYmd(7) : prev.ops.nextCheckpointAt },
+        audit: nextAudit,
+      };
+    });
+    setNotice({
+      tone: item.status === "SENT" || item.status === "SCHEDULED" ? "success" : "error",
+      message: item.status === "SENT" ? "문자 발송이 완료되었습니다." : item.status === "SCHEDULED" ? "문자 예약이 등록되었습니다." : "문자 발송에 실패했습니다.",
+    });
+  };
+
+  const handleStage3Consultation = (note: string, type: string, templateLabel: string) => {
+    const now = formatDateTime(new Date().toISOString());
+    setStage3((prev) => {
+      if (!prev) return prev;
+      const entry = {
+        at: now,
+        actor: { name: prev.owner.name, type: "human" as const },
+        message: `상담 실행 기록: ${type} · ${templateLabel}${note ? ` / ${note}` : ""}`,
+        logId: `LOG-${Date.now()}`,
+        severity: "info" as const,
+      };
+      return { ...prev, audit: [entry, ...prev.audit] };
+    });
+    setNotice({ tone: "info", message: "상담 실행 기록이 저장되었습니다." });
+  };
+
   return (
     <div className="min-h-screen bg-[#f4f7fb] pb-6">
       {notice && <ToastBanner notice={notice} />}
@@ -264,7 +382,7 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
         primaryDisabled={!primaryAction || pendingActionId != null}
       />
 
-      <div className="mx-auto mt-4 grid max-w-[1440px] grid-cols-1 gap-4 px-4 xl:grid-cols-12 xl:px-6">
+      <div className="mx-auto mt-4 grid max-w-[1320px] grid-cols-1 gap-4 px-4 xl:grid-cols-12 xl:px-6">
         <NextBestActionDock
           className="xl:col-span-3"
           todayActions={todayActions}
@@ -309,6 +427,24 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
               )}
             </CardContent>
           </Card>
+
+          {/* ── 프로그램 제공(행정 실행) — Stage3 정밀관리 ── */}
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardHeader className="border-b border-slate-100 px-4 py-3">
+              <CardTitle className="text-sm font-bold text-slate-900">프로그램 제공(정밀관리)</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 py-4">
+              <CaseDetailPrograms
+                caseId={stage3.caseId}
+                stage={3}
+                resultLabel={stage3.risk.zone === "danger" ? "치매" : "MCI"}
+                mciSeverity={stage3.risk.zone === "danger" ? undefined : "중증"}
+                riskTags={stage3.risk.triggers.filter(t => t.satisfied).map(t => t.label)}
+                actorId="OP-001"
+                actorName={stage3.owner.name}
+              />
+            </CardContent>
+          </Card>
         </section>
 
         <section className="space-y-4 xl:col-span-3">
@@ -316,6 +452,18 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
             stage3={stage3}
             selectedFailTag={selectedFailTag}
             onSelectFailTag={setSelectedFailTag}
+          />
+          <SmsPanel
+            stageLabel="3차"
+            templates={STAGE3_SMS_TEMPLATES}
+            defaultVars={{
+              centerName: stage3.owner.center ?? "강남구 치매안심센터",
+            }}
+            caseId={stage3.caseId}
+            citizenPhone={stage3.communication.history?.[0]?.note ? "010-****-1234" : "010-****-1234"}
+            guardianPhone={undefined}
+            onSmsSent={handleStage3SmsSent}
+            onConsultation={handleStage3Consultation}
           />
           <ReferralPanel stage3={stage3} />
           <AuditTimeline
@@ -474,7 +622,7 @@ export function CaseIdentityBar({
 }: CaseIdentityBarProps) {
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur">
-      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-4 py-3 xl:px-6">
+      <div className="mx-auto flex max-w-[1320px] flex-wrap items-center justify-between gap-3 px-4 py-3 xl:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <Button variant="outline" size="icon" onClick={onBack} aria-label="목록으로 이동">
             <ArrowLeft className="h-4 w-4" />
@@ -482,7 +630,7 @@ export function CaseIdentityBar({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-base font-bold text-slate-900">{stage3.caseId}</h1>
-              <Badge className="border-violet-200 bg-violet-50 text-violet-800">Stage 3</Badge>
+              <Badge className="border-blue-200 bg-blue-50 text-blue-800">Stage 3</Badge>
               <Badge className={cn("border", zoneTone(stage3.risk.zone))}>{statusLabel(stage3.status)}</Badge>
             </div>
             <p className="truncate text-xs text-slate-600">

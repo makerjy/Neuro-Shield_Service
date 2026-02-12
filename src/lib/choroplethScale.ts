@@ -162,6 +162,11 @@ export const KPI_PALETTE_MAP: Record<string, keyof typeof COLOR_PALETTES> = {
   bottleneckRisk: 'red',
   dataReadiness: 'green',
   governanceSafety: 'heat',
+  regionalSla: 'red',
+  regionalQueueRisk: 'orange',
+  regionalRecontact: 'orange',
+  regionalDataReadiness: 'green',
+  regionalGovernance: 'purple',
 };
 
 /** KPI 키에 해당하는 팔레트 이름 반환 */
@@ -192,6 +197,11 @@ export const KPI_LABELS: Record<string, string> = {
   bottleneckRisk: '병목 위험',
   dataReadiness: '데이터 준비도',
   governanceSafety: '거버넌스 안전',
+  regionalSla: '처리 SLA',
+  regionalQueueRisk: '병목 큐',
+  regionalRecontact: '재접촉 필요',
+  regionalDataReadiness: '데이터 준비',
+  regionalGovernance: '거버넌스/로그 완전성',
 };
 
 export function getKpiLabel(kpiKey: string): string {

@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Download, BarChart3, HelpCircle, ChevronLeft, ChevronRight, Home, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -830,6 +831,66 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
+   AccordionSection — 3차 정보 접기/펼치기 공용 컴포넌트
+═══════════════════════════════════════════════════════════════════════════════ */
+function AccordionSection({
+  title, isOpen, onToggle, summary, children, className = '',
+}: {
+  title: string;
+  isOpen: boolean;
+  onToggle: () => void;
+  summary?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`bg-white border border-gray-200 rounded-lg overflow-hidden ${className}`}>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50 transition-colors"
+      >
+        <span className="text-[12px] font-semibold text-gray-700">{title}</span>
+        <div className="flex items-center gap-2">
+          {!isOpen && summary && (
+            <span className="text-[11px] text-gray-400 truncate max-w-[120px]">{summary}</span>
+          )}
+          {isOpen
+            ? <ChevronUp className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+            : <ChevronDown className="h-3.5 w-3.5 text-gray-400 shrink-0" />}
+        </div>
+      </button>
+      {isOpen && (
+        <div className="border-t border-gray-100 px-3 py-2">{children}</div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   FixedHeightCard — 고정 높이 + 내부 스크롤 카드 (우측 패널용)
+═══════════════════════════════════════════════════════════════════════════════ */
+function FixedHeightCard({
+  title, badge, height = 280, children, className = '',
+}: {
+  title: string;
+  badge?: React.ReactNode;
+  height?: number;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col ${className}`}
+      style={{ height: `${height}px` }}>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 shrink-0">
+        <span className="text-[12px] font-semibold text-gray-700">{title}</span>
+        {badge}
+      </div>
+      <div className="flex-1 overflow-y-auto px-3 py-2 min-h-0">{children}</div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
    중앙센터 운영감사형 KPI 카드 행 + 드릴다운 서브페이지
 ═══════════════════════════════════════════════════════════════════════════════ */
 
@@ -859,12 +920,71 @@ function MiniSparkline({ data, color, width = 80, height = 28 }: { data: number[
   );
 }
 
+/* ── KPI Hover Tooltip (Portal 기반, 200ms 딜레이, 키보드 접근 가능) ── */
+const WINDOW_LABELS: Record<CentralTimeWindow, string> = {
+  LAST_24H: '24h', LAST_7D: '7일', LAST_30D: '30일', LAST_90D: '90일',
+};
+
+function KpiTooltip({ lines, color, timeWindow, anchorRef, visible }: {
+  lines: [string, string, string];
+  color: string;
+  timeWindow: CentralTimeWindow;
+  anchorRef: React.RefObject<HTMLElement | null>;
+  visible: boolean;
+}) {
+  const tipRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!visible || !anchorRef.current) { setPos(null); return; }
+    const rect = anchorRef.current.getBoundingClientRect();
+    const tipW = 300;
+    const tipH = 90;
+    let top = rect.bottom + 6;
+    let left = rect.left + rect.width / 2 - tipW / 2;
+    // 뷰포트 보정
+    if (left < 8) left = 8;
+    if (left + tipW > window.innerWidth - 8) left = window.innerWidth - tipW - 8;
+    if (top + tipH > window.innerHeight - 8) top = rect.top - tipH - 6;
+    setPos({ top, left });
+  }, [visible, anchorRef]);
+
+  if (!visible || !pos) return null;
+  const resolvedLines: [string, string, string] = [
+    lines[0],
+    lines[1].replace('{period}', `선택 기간(${WINDOW_LABELS[timeWindow]})`),
+    lines[2],
+  ];
+  return createPortal(
+    <div
+      ref={tipRef}
+      role="tooltip"
+      className="fixed z-[9999] rounded-lg shadow-lg border border-gray-200 bg-white text-left pointer-events-none"
+      style={{ top: pos.top, left: pos.left, maxWidth: 320, minWidth: 260 }}
+    >
+      {/* 색상 상단 액센트 라인 */}
+      <div className="h-[3px] rounded-t-lg" style={{ backgroundColor: color }} />
+      <div className="px-3 py-2.5 space-y-1">
+        {resolvedLines.map((line, i) => (
+          <p key={i} className={`text-[11px] leading-[1.5] ${i === 0 ? 'font-semibold text-gray-800' : i === 1 ? 'text-gray-500' : 'text-gray-600'}`}>
+            {line}
+          </p>
+        ))}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 /* ── Central KPI Card 단일 카드 ── */
-function CentralKpiCard({ kpi, def, isActive, onClick }: {
+function CentralKpiCard({ kpi, def, isActive, onClick, tooltipLines, tooltipColor, timeWindow }: {
   kpi: CentralKpiValue;
   def: ReturnType<typeof getCentralKpiList>[number];
   isActive: boolean;
   onClick: () => void;
+  tooltipLines: [string, string, string];
+  tooltipColor: string;
+  timeWindow: CentralTimeWindow;
 }) {
   const colors = CENTRAL_KPI_COLORS[def.id];
   const deltaColor = def.higherBetter
@@ -872,9 +992,25 @@ function CentralKpiCard({ kpi, def, isActive, onClick }: {
     : kpi.delta7d <= 0 ? 'text-green-600' : 'text-red-600';
   const meetsTarget = def.higherBetter ? kpi.value >= def.target : kpi.value <= def.target;
 
+  // Tooltip 200ms 딜레이, 키보드 접근성
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [tipOpen, setTipOpen] = useState(false);
+  const delayRef = useRef<ReturnType<typeof setTimeout>>();
+  const showTip = useCallback(() => { delayRef.current = setTimeout(() => setTipOpen(true), 200); }, []);
+  const hideTip = useCallback(() => { clearTimeout(delayRef.current); setTipOpen(false); }, []);
+  useEffect(() => () => clearTimeout(delayRef.current), []);
+
   return (
+    <>
     <button
+      ref={btnRef}
       onClick={onClick}
+      onMouseEnter={showTip}
+      onMouseLeave={hideTip}
+      onFocus={showTip}
+      onBlur={hideTip}
+      onKeyDown={e => { if (e.key === 'Escape') hideTip(); }}
+      aria-describedby={tipOpen ? `kpi-tip-${def.id}` : undefined}
       className={`relative flex flex-col gap-1.5 px-3 py-2.5 rounded-xl border-2 transition-all min-w-[170px] text-left ${
         isActive
           ? `${colors.border} ${colors.bg} shadow-md ring-2 ring-offset-1 ring-${colors.border.replace('border-', '')}/30`
@@ -913,6 +1049,8 @@ function CentralKpiCard({ kpi, def, isActive, onClick }: {
         {kpi.numerator.toLocaleString()} / {kpi.denominator.toLocaleString()}
       </div>
     </button>
+    <KpiTooltip lines={tooltipLines} color={tooltipColor} timeWindow={timeWindow} anchorRef={btnRef} visible={tipOpen} />
+    </>
   );
 }
 
@@ -1092,6 +1230,26 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   const [visualizationMode, setVisualizationMode] = useState<'geomap' | 'heatmap'>('geomap');
   const [activeDonutIndex, setActiveDonutIndex] = useState<number | null>(null);
   const [showKpiSummaryTable, setShowKpiSummaryTable] = useState(false);
+
+  // ── 정보 위계 제어 상태 (1차/2차/3차) ──
+  const [leftAccordion, setLeftAccordion] = useState<{ opsSummary: boolean; ageRisk: boolean; kpiTable: boolean }>({
+    opsSummary: false,
+    ageRisk: false,
+    kpiTable: false,
+  });
+  const toggleLeftAccordion = useCallback((key: keyof typeof leftAccordion) => {
+    setLeftAccordion(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+  const [showBreakdownMore, setShowBreakdownMore] = useState(false);
+  const [showCauseMore, setShowCauseMore] = useState(false);
+  const [rightAccordion, setRightAccordion] = useState<{ slaMatrix: boolean; stageDistribution: boolean }>({
+    slaMatrix: false,
+    stageDistribution: false,
+  });
+  const toggleRightAccordion = useCallback((key: keyof typeof rightAccordion) => {
+    setRightAccordion(prev => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
   // 지도/히트맵 KPI는 상단 KPI 선택과 동일하게 사용
   const selectedMapKpiId = selectedKpiId;
   const mapViewMode = visualizationMode;
@@ -1672,6 +1830,9 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                   onClick={() => {
                     setActiveCentralKpi(def.id);
                   }}
+                  tooltipLines={KPI_THEMES[KPI_ID_TO_KEY[def.id]].tooltipLines}
+                  tooltipColor={KPI_THEMES[KPI_ID_TO_KEY[def.id]].primaryColor}
+                  timeWindow={centralWindow}
                 />
               );
             })}
@@ -1693,10 +1854,16 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             ))}
           </div>
 
-          {/* Drilldown 토글 버튼 */}
+          {/* Drilldown 토글 버튼 → 드릴다운 서브페이지 + 3차 정보 섹션 동시 토글 */}
           <div className="w-px h-10 bg-gray-200 shrink-0" />
           <button
-            onClick={() => setShowDrilldown(!showDrilldown)}
+            onClick={() => {
+              const next = !showDrilldown;
+              setShowDrilldown(next);
+              // 3차 정보 섹션도 함께 열기/닫기
+              setRightAccordion({ slaMatrix: next, stageDistribution: next });
+              setLeftAccordion(prev => ({ ...prev, opsSummary: next, ageRisk: next, kpiTable: next }));
+            }}
             className={`px-3 py-1.5 text-[11px] font-medium rounded-md transition flex items-center gap-1.5 shrink-0 ${
               showDrilldown ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
@@ -1812,7 +1979,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
       }`} style={layoutMode === 'desktop' ? { gridTemplateColumns: '1.2fr 2.2fr 2.6fr', minHeight: 'calc(100vh - 140px)', alignItems: 'stretch' } : undefined}>
         
         {/* ═══════════════════════════════════════════════════════
-            LEFT COLUMN - KPI 요약 + 리스크 Top + 연령대별 차트
+            LEFT COLUMN - 정보 위계: 1차(KPI요약+Top5) → 3차(운영요약, 연령대, KPI테이블)
         ═══════════════════════════════════════════════════════ */}
         <div className={`flex flex-col gap-2 ${
           layoutMode === 'desktop' 
@@ -1823,16 +1990,16 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
         }`}>
           
           {/* 현재 드릴 레벨 표시 */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-center">
-            <span className="text-xs text-blue-700 font-medium">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-1.5 text-center">
+            <span className="text-[11px] text-blue-700 font-medium">
               {getDrillLevelLabel(drillLevel)} 보기
             </span>
             {selectedRegion && (
-              <span className="ml-2 text-xs text-blue-600">({selectedRegion.name})</span>
+              <span className="ml-1.5 text-[11px] text-blue-600">({selectedRegion.name})</span>
             )}
           </div>
           
-          {/* ── 선택 KPI 요약 카드 ── */}
+          {/* ── 1차: 선택 KPI 요약 카드 ── */}
           <div className="bg-white border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold text-gray-700">선택 KPI 요약</span>
@@ -1889,45 +2056,134 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             )}
           </div>
 
-          {/* ── 리스크 Top 5 ── */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm">
+          {/* ── 1차: 리스크 Top 5 — 방향성 반영 리스트 행 + 미니바 ── */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-semibold text-gray-700">리스크 Top 5</span>
+              <span className="text-sm font-semibold text-gray-700">
+                {activeTheme.legend.direction === 'higherWorse' ? '위험' : '취약'} Top 5
+              </span>
               <span className="text-[11px] px-1.5 py-0.5 rounded font-medium"
                 style={{ backgroundColor: `${activeTheme.primaryColor}15`, color: activeTheme.primaryColor }}>
                 {activeTheme.shortLabel}
               </span>
             </div>
-            <div className="space-y-1">
-              {(currentBundle?.worstRegions ?? []).slice(0, 5).map((r, idx) => (
-                <button
-                  key={r.regionCode}
-                  onClick={() => {
-                    const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
-                    drillDown({ code: r.regionCode, name: r.regionName, level: nextLevel });
-                  }}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors text-left"
-                >
-                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-bold text-white ${
-                    idx === 0 ? 'bg-red-500' : idx === 1 ? 'bg-orange-500' : 'bg-amber-400'
-                  }`}>{idx + 1}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium text-gray-800 truncate">{r.regionName}</div>
+            <div className="space-y-0.5">
+              {(() => {
+                const dir = activeTheme.legend.direction;
+                // 방향성 정렬: higherWorse → 내림차순(높은값=최악), higherBetter → 오름차순(낮은값=최악)
+                const sorted = [...(currentBundle?.worstRegions ?? [])].sort((a, b) =>
+                  dir === 'higherWorse' ? b.value - a.value : a.value - b.value
+                ).slice(0, 5);
+                if (sorted.length === 0) return null;
+                const values = sorted.map(r => r.value);
+                const minV = Math.min(...values);
+                const maxV = Math.max(...values);
+                const range = maxV - minV || 1;
+                return sorted.map((r, idx) => (
+                  <div
+                    key={r.regionCode}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
+                      drillDown({ code: r.regionCode, name: r.regionName, level: nextLevel });
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
+                        drillDown({ code: r.regionCode, name: r.regionName, level: nextLevel });
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 transition-colors cursor-pointer select-none"
+                  >
+                    {/* 순위 번호 */}
+                    <span className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+                      style={{ backgroundColor: idx === 0 ? activeTheme.primaryColor : idx === 1 ? `${activeTheme.primaryColor}cc` : `${activeTheme.primaryColor}88` }}
+                    >{idx + 1}</span>
+                    {/* 지역명 */}
+                    <span className="text-[12px] text-gray-800 truncate min-w-[52px] shrink-0">
+                      {r.regionName.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()}
+                    </span>
+                    {/* 미니바 (상대 비율 기반) */}
+                    <div className="flex-1 h-[6px] bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all" style={{
+                        width: `${Math.max(10, ((dir === 'higherWorse' ? r.value - minV : maxV - r.value) / range) * 100)}%`,
+                        backgroundColor: activeTheme.primaryColor,
+                        opacity: 0.55 + (0.35 * (1 - idx / 5)),
+                      }} />
+                    </div>
+                    {/* 값 */}
+                    <span className="text-[12px] font-bold tabular-nums text-right min-w-[42px] shrink-0" style={{ color: activeTheme.primaryColor }}>
+                      {activeTheme.valueFormatter(r.value)}
+                    </span>
                   </div>
-                  <span className="text-[12px] font-bold" style={{ color: activeTheme.primaryColor }}>
-                    {activeTheme.valueFormatter(r.value)}
-                  </span>
-                </button>
-              ))}
+                ));
+              })()}
               {(!currentBundle || currentBundle.worstRegions.length === 0) && (
                 <div className="text-xs text-gray-400 text-center py-4 animate-pulse">로딩 중…</div>
               )}
             </div>
           </div>
 
-          {/* 연령대별 미처리/지연 리스크(%) */}
-          <div className="bg-white border border-gray-200 rounded-lg p-2">
-            <div className="text-[12px] font-semibold text-gray-700 mb-0.5">연령대별 미처리/지연 리스크(%)</div>
+          {/* ── 3차: 운영 요약 (AccordionSection) ── */}
+          <AccordionSection
+            title="운영 요약"
+            isOpen={leftAccordion.opsSummary}
+            onToggle={() => toggleLeftAccordion('opsSummary')}
+            summary={`${MOCK_POLICY_CHANGES.filter(c => c.status === 'deployed').length}건 배포`}
+          >
+            <div className="space-y-1.5">
+              <button
+                onClick={() => onNavigate?.('model-governance', {})}
+                className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-blue-50 transition-colors text-left"
+              >
+                <Activity className="h-4 w-4 text-blue-500 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium text-gray-900">최근 정책 변경</div>
+                  <div className="text-[11px] text-gray-500 truncate">
+                    {MOCK_POLICY_CHANGES.filter(c => c.status === 'deployed').length}건 배포 · {MOCK_POLICY_CHANGES.filter(c => c.status === 'pending').length}건 대기
+                  </div>
+                </div>
+                <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
+              </button>
+              <button
+                onClick={() => onNavigate?.('compliance-audit', {})}
+                className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-orange-50 transition-colors text-left"
+              >
+                <Shield className="h-4 w-4 text-orange-500 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium text-gray-900">규정 준수 현황</div>
+                  <div className="text-[11px] text-gray-500">위반 0건 · 체크리스트 4/4 준수</div>
+                </div>
+                <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
+              </button>
+              <button
+                onClick={() => onNavigate?.('quality-monitoring', {})}
+                className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-purple-50 transition-colors text-left"
+              >
+                <Database className="h-4 w-4 text-purple-500 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium text-gray-900">데이터 & 모델 품질</div>
+                  <div className="text-[11px] text-gray-500">
+                    경고 {MOCK_QUALITY_ALERTS.filter(a => a.severity !== 'info').length}건
+                    {MOCK_QUALITY_ALERTS.filter(a => a.severity === 'critical').length > 0 && (
+                      <span className="ml-1 text-red-600 font-medium">· 심각 {MOCK_QUALITY_ALERTS.filter(a => a.severity === 'critical').length}건</span>
+                    )}
+                  </div>
+                </div>
+                <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
+              </button>
+            </div>
+          </AccordionSection>
+
+          {/* ── 3차: 연령대별 미처리/지연 리스크 (AccordionSection) ── */}
+          <AccordionSection
+            title="연령대별 미처리/지연 리스크"
+            isOpen={leftAccordion.ageRisk}
+            onToggle={() => toggleLeftAccordion('ageRisk')}
+            summary="5그룹 × 2지표"
+          >
             <div style={{ height: '190px' }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={ageStatusData.map(d => {
@@ -1961,109 +2217,42 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
+          </AccordionSection>
 
-          {/* ── KPI 요약 테이블 - 토글로 숨김 처리 (기본: 숨김) ── */}
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <button
-              onClick={() => setShowKpiSummaryTable(!showKpiSummaryTable)}
-              className="w-full flex items-center justify-between px-2 py-2 hover:bg-gray-50 transition-colors"
-            >
-              <span className="text-[12px] font-medium text-gray-700">KPI 요약 테이블</span>
-              <div className="flex items-center gap-1.5">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); /* Excel 다운로드 */ }}
-                  className="px-1.5 py-0.5 text-[11px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100"
-                >
-                  Excel
-                </button>
-                {showKpiSummaryTable ? (
-                  <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
-                ) : (
-                  <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
-                )}
-              </div>
-            </button>
-            
-            {showKpiSummaryTable && (
-              <div className="px-2 pb-2 border-t border-gray-100">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-[12px]">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="px-1.5 py-1 text-left font-medium text-gray-600">KPI</th>
-                        <th className="px-1.5 py-1 text-right font-medium text-gray-600">평균</th>
-                        <th className="px-1.5 py-1 text-right font-medium text-gray-600">최저</th>
-                        <th className="px-1.5 py-1 text-right font-medium text-gray-600">최고</th>
+          {/* ── 3차: KPI 요약 테이블 (AccordionSection) ── */}
+          <AccordionSection
+            title="KPI 요약 테이블"
+            isOpen={leftAccordion.kpiTable}
+            onToggle={() => toggleLeftAccordion('kpiTable')}
+            summary={`${bulletKPIs.length}개 지표`}
+          >
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="px-1.5 py-1 text-left font-medium text-gray-600">KPI</th>
+                    <th className="px-1.5 py-1 text-right font-medium text-gray-600">평균</th>
+                    <th className="px-1.5 py-1 text-right font-medium text-gray-600">최저</th>
+                    <th className="px-1.5 py-1 text-right font-medium text-gray-600">최고</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bulletKPIs.map(kpi => {
+                    const data = kpiDataMap[kpi.id] as TimeSeriesKPIData | null;
+                    if (!data) return null;
+                    return (
+                      <tr key={kpi.id} className="border-b border-gray-100 hover:bg-blue-50/30">
+                        <td className="px-1.5 py-1 truncate max-w-[80px]">{kpi.name}</td>
+                        <td className="px-1.5 py-1 text-right whitespace-nowrap">{data.current}{data.unit}</td>
+                        <td className="px-1.5 py-1 text-right text-red-600 whitespace-nowrap">{(data.current * 0.95).toFixed(1)}{data.unit}</td>
+                        <td className="px-1.5 py-1 text-right text-blue-600 whitespace-nowrap">{(data.current * 1.03).toFixed(1)}{data.unit}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {bulletKPIs.map(kpi => {
-                        const data = kpiDataMap[kpi.id] as TimeSeriesKPIData | null;
-                        if (!data) return null;
-                        return (
-                          <tr key={kpi.id} className="border-b border-gray-100 hover:bg-blue-50/30">
-                            <td className="px-1.5 py-1 truncate max-w-[80px]">{kpi.name}</td>
-                            <td className="px-1.5 py-1 text-right whitespace-nowrap">{data.current}{data.unit}</td>
-                            <td className="px-1.5 py-1 text-right text-red-600 whitespace-nowrap">{(data.current * 0.95).toFixed(1)}{data.unit}</td>
-                            <td className="px-1.5 py-1 text-right text-blue-600 whitespace-nowrap">{(data.current * 1.03).toFixed(1)}{data.unit}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ── 운영 요약 (탭 엔트리 포인트) ── */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
-            <span className="text-sm font-semibold text-gray-700">운영 요약</span>
-            {/* 정책 변경 */}
-            <button
-              onClick={() => onNavigate?.('model-governance', {})}
-              className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-blue-50 transition-colors text-left"
-            >
-              <Activity className="h-4 w-4 text-blue-500 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-medium text-gray-900">최근 정책 변경</div>
-                <div className="text-[12px] text-gray-500 truncate">
-                  {MOCK_POLICY_CHANGES.filter(c => c.status === 'deployed').length}건 배포 · {MOCK_POLICY_CHANGES.filter(c => c.status === 'pending').length}건 대기
-                </div>
-              </div>
-              <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
-            </button>
-            {/* 감사 */}
-            <button
-              onClick={() => onNavigate?.('compliance-audit', {})}
-              className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-orange-50 transition-colors text-left"
-            >
-              <Shield className="h-4 w-4 text-orange-500 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-medium text-gray-900">규정 준수 현황</div>
-                <div className="text-[12px] text-gray-500">위반 0건 · 체크리스트 4/4 준수</div>
-              </div>
-              <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
-            </button>
-            {/* 품질 */}
-            <button
-              onClick={() => onNavigate?.('quality-monitoring', {})}
-              className="w-full flex items-center gap-2 p-2 rounded-md hover:bg-purple-50 transition-colors text-left"
-            >
-              <Database className="h-4 w-4 text-purple-500 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] font-medium text-gray-900">데이터 & 모델 품질</div>
-                <div className="text-[12px] text-gray-500">
-                  경고 {MOCK_QUALITY_ALERTS.filter(a => a.severity !== 'info').length}건
-                  {MOCK_QUALITY_ALERTS.filter(a => a.severity === 'critical').length > 0 && (
-                    <span className="ml-1 text-red-600 font-medium">· 심각 {MOCK_QUALITY_ALERTS.filter(a => a.severity === 'critical').length}건</span>
-                  )}
-                </div>
-              </div>
-              <ExternalLinkIcon className="h-3 w-3 text-gray-400 shrink-0" />
-            </button>
-          </div>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </AccordionSection>
         </div>
 
         {/* ═══════════════════════════════════════════════════════
@@ -2075,72 +2264,41 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             : 'w-full shrink-0'
         }`}>
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col flex-1">
-            {/* ── 중앙 패널 헤더: 뒤로/제목 + 지도/히트맵 토글 + 기간 토글 ── */}
-            <div className="px-15 py-3.5 border-b border-gray-200 bg-white rounded-t-lg">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
-                  {drillLevel !== 'nation' && (
-                    <button
-                      onClick={drillUp}
-                      className="flex items-center gap-1 h-8 px-3 text-sm text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors font-medium"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                      <span>뒤로</span>
-                    </button>
-                  )}
-                  <span className="text-sm font-semibold text-gray-800">
-                    {mapViewMode === 'geomap' ? '지도' : '히트맵'}
-                  </span>
-                  <span className="h-6 inline-flex items-center gap-1 px-2 bg-emerald-50 text-emerald-700 text-[12px] rounded font-medium border border-emerald-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    {analyticsPeriodLabel} · 기준연도 2026
-                  </span>
-                  <span className="h-6 inline-flex items-center px-2 text-white text-[12px] rounded font-semibold"
-                    style={{ backgroundColor: activeTheme.primaryColor }}>
-                    {activeTheme.shortLabel}
-                  </span>
-                  <span className="h-6 inline-flex items-center px-2 bg-red-500 text-white text-[12px] rounded font-semibold">
-                    {getDrillLevelLabel(drillLevel)}
-                  </span>
-                  {selectedRegion && (
-                    <span className="text-xs text-gray-600 font-medium">- {selectedRegion.name}</span>
-                  )}
+            {/* ── 중앙 패널 헤더: 1줄 라벨 + 2행 컨트롤 ── */}
+            <div className="px-3 py-2 border-b border-gray-200 bg-white rounded-t-lg space-y-1.5">
+              {/* 1줄 라벨: 기간 · 연도 · KPI · 범위 */}
+              <div className="flex items-center gap-1.5">
+                {drillLevel !== 'nation' && (
+                  <button onClick={drillUp}
+                    className="flex items-center gap-0.5 px-2 py-1 text-xs text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors font-medium shrink-0">
+                    <ChevronLeft className="h-3.5 w-3.5" />뒤로
+                  </button>
+                )}
+                <span className="text-[12px] text-gray-600">
+                  {analyticsPeriodLabel} · 2026 · <span className="font-semibold" style={{ color: activeTheme.primaryColor }}>{activeTheme.shortLabel}</span> · {getDrillLevelLabel(drillLevel)}
+                  {selectedRegion && <span className="text-gray-500"> ({selectedRegion.name})</span>}
+                </span>
+              </div>
+              {/* 2행 컨트롤 그리드 */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* 지도/히트맵 토글 */}
+                <div className="flex rounded-md border border-gray-200 overflow-hidden">
+                  <button onClick={() => setVisualizationMode('geomap')}
+                    className={`px-2.5 py-1 text-[11px] font-medium transition ${visualizationMode === 'geomap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'}`}
+                  >지오맵</button>
+                  <button onClick={() => setVisualizationMode('heatmap')}
+                    className={`px-2.5 py-1 text-[11px] font-medium transition border-l border-gray-200 ${visualizationMode === 'heatmap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'}`}
+                  >히트맵</button>
                 </div>
-
-                <div className="flex items-center gap-2">
-                  {/* 지도 / 히트맵 토글 */}
-                  <div className="flex rounded-md border border-gray-200 overflow-hidden">
-                    <button
-                      onClick={() => setVisualizationMode('geomap')}
-                      className={`px-3 py-1.5 text-xs font-medium transition ${
-                        visualizationMode === 'geomap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
-                      }`}
-                    >지오맵</button>
-                    <button
-                      onClick={() => setVisualizationMode('heatmap')}
-                      className={`px-3 py-1.5 text-xs font-medium transition border-l border-gray-200 ${
-                        visualizationMode === 'heatmap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
-                      }`}
-                    >히트맵</button>
-                  </div>
-                  {/* 기간 토글 */}
-                  <div className="flex items-center gap-0.5">
-                    {(['weekly', 'monthly', 'quarterly', 'yearly_cum'] as const).map(p => (
-                      <button
-                        key={p}
-                        onClick={() => setPeriodType(p)}
-                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-                          periodType === p
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >
-                        {p === 'weekly' ? '주간' : p === 'monthly' ? '월간' : p === 'quarterly' ? '분기' : '연간(누적)'}
-                      </button>
-                    ))}
-                  </div>
-                  <button className="h-7 w-7 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors"><Download className="h-3.5 w-3.5 text-gray-500" /></button>
+                {/* 기간 토글 */}
+                <div className="flex items-center gap-0.5">
+                  {(['weekly', 'monthly', 'quarterly', 'yearly_cum'] as const).map(p => (
+                    <button key={p} onClick={() => setPeriodType(p)}
+                      className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition ${periodType === p ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                    >{p === 'weekly' ? '주간' : p === 'monthly' ? '월간' : p === 'quarterly' ? '분기' : '연간(누적)'}</button>
+                  ))}
                 </div>
+                <button className="h-6 w-6 flex items-center justify-center hover:bg-gray-100 rounded transition-colors ml-auto shrink-0"><Download className="h-3 w-3 text-gray-500" /></button>
               </div>
             </div>
 
@@ -2228,8 +2386,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
         </div>
 
         {/* ═══════════════════════════════════════════════════════
-            RIGHT COLUMN - KPI 사전 기반 자동 렌더링
-            Desktop: 25% 너비
+            RIGHT COLUMN - 1차: 요약+분해+원인 / 2차: 추이 / 3차: SLA·Stage
         ═══════════════════════════════════════════════════════ */}
         <div className={`flex flex-col gap-2 ${
           layoutMode === 'desktop' 
@@ -2239,116 +2396,127 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             : 'w-full shrink-0'
         }`}>
           
-          {/* ═══ KPI 분석 요약 텍스트 ═══ */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: activeTheme.primaryColor }} />
-              <span className="text-sm font-semibold text-gray-700">{activeTheme.label} 분석</span>
+          {/* ═══ 1차: KPI 분석 요약 (1줄, 말줄임+tooltip) ═══ */}
+          <div className="bg-white border border-gray-200 rounded-lg px-3 py-2">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: activeTheme.primaryColor }} />
+              <span className="text-[12px] font-semibold text-gray-700 shrink-0">{activeTheme.shortLabel}</span>
+              <p className="text-[11px] text-gray-500 truncate flex-1" title={activeTheme.analysisSummary}>{activeTheme.analysisSummary}</p>
             </div>
-            <p className="text-[12px] text-gray-600 leading-relaxed">{activeTheme.analysisSummary}</p>
           </div>
 
-          {/* ═══ 분해 차트 (KPI별 donut/stacked/bar) ═══ */}
+          {/* ═══ 1차: 구성 분해 + 원인 분포 — 동일 높이 FixedHeightCard ═══ */}
           {currentBundle && (
-            <div className="bg-white border border-gray-200 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-gray-700">구성 분해</span>
-                <span className="text-[11px] px-1.5 py-0.5 rounded font-medium"
-                  style={{ backgroundColor: `${activeTheme.primaryColor}15`, color: activeTheme.primaryColor }}>
-                  {currentBundle.breakdownType === 'donut' ? '도넛' : currentBundle.breakdownType === 'stacked' ? '스택바' : '바'}
-                </span>
-              </div>
-              {currentBundle.breakdownType === 'donut' ? (
-                <div className="relative" style={{ height: '200px' }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={currentBundle.breakdown} cx="50%" cy="50%" innerRadius={45} outerRadius={75}
-                        dataKey="value" startAngle={90} endAngle={-270} paddingAngle={2} strokeWidth={0}
-                        label={renderDonutLabel} labelLine={false}>
-                        {currentBundle.breakdown.map((entry, idx) => (
-                          <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(v: number) => [v.toLocaleString(), '']}
-                        contentStyle={{ fontSize: '12px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  {/* 중앙 총합 */}
-                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                    <div className="text-[11px] text-gray-500">총합</div>
-                    <div className="text-sm font-bold text-gray-800">
-                      {currentBundle.breakdown.reduce((s, d) => s + d.value, 0).toLocaleString()}
+            <div className="grid grid-cols-2 gap-2">
+              {/* 구성 분해 */}
+              <FixedHeightCard
+                title="구성 분해"
+                height={300}
+                badge={
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
+                    style={{ backgroundColor: `${activeTheme.primaryColor}15`, color: activeTheme.primaryColor }}>
+                    {currentBundle.breakdownType === 'donut' ? '도넛' : '바'}
+                  </span>
+                }
+              >
+                {currentBundle.breakdownType === 'donut' ? (
+                  <div className="relative" style={{ height: '160px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={currentBundle.breakdown} cx="50%" cy="50%" innerRadius={35} outerRadius={60}
+                          dataKey="value" startAngle={90} endAngle={-270} paddingAngle={2} strokeWidth={0}
+                          label={renderDonutLabel} labelLine={false}>
+                          {currentBundle.breakdown.map((entry, idx) => (
+                            <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: number) => [v.toLocaleString(), '']}
+                          contentStyle={{ fontSize: '11px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <div className="text-[10px] text-gray-500">총합</div>
+                      <div className="text-[12px] font-bold text-gray-800">
+                        {currentBundle.breakdown.reduce((s, d) => s + d.value, 0).toLocaleString()}
+                      </div>
                     </div>
                   </div>
+                ) : (
+                  <div style={{ height: '160px' }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={currentBundle.breakdown} margin={{ top: 4, right: 6, left: -14, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                        <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#4b5563' }} tickLine={false} />
+                        <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} tickLine={false} axisLine={false} width={30} />
+                        <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '8px' }} />
+                        <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+                          {currentBundle.breakdown.map((entry, idx) => (
+                            <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+                {/* 범례: 기본 3개, 더보기 */}
+                <div className="space-y-0.5 mt-1 pt-1 border-t border-gray-100">
+                  {currentBundle.breakdown.slice(0, showBreakdownMore ? currentBundle.breakdown.length : 3).map((d, i) => (
+                    <div key={i} className="flex items-center gap-1 text-[10px] text-gray-600">
+                      <span className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: d.color || activeTheme.palette[i % activeTheme.palette.length] }} />
+                      <span className="truncate">{d.name}</span>
+                      <span className="font-semibold text-gray-800 ml-auto tabular-nums">{d.value.toLocaleString()}</span>
+                    </div>
+                  ))}
+                  {currentBundle.breakdown.length > 3 && (
+                    <button onClick={() => setShowBreakdownMore(!showBreakdownMore)}
+                      className="text-[10px] text-blue-500 hover:text-blue-700 w-full text-center pt-0.5">
+                      {showBreakdownMore ? '접기' : `+${currentBundle.breakdown.length - 3}개 더보기`}
+                    </button>
+                  )}
                 </div>
-              ) : (
-                <div style={{ height: '200px' }}>
+              </FixedHeightCard>
+
+              {/* 원인 분포 */}
+              <FixedHeightCard title="원인 분포" height={300}>
+                <div style={{ height: '180px' }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={currentBundle.breakdown} margin={{ top: 8, right: 10, left: -10, bottom: 4 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                      <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#4b5563' }} tickLine={false} />
-                      <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={false} width={38} />
-                      <Tooltip contentStyle={{ fontSize: '12px', borderRadius: '8px' }} />
-                      <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                        {currentBundle.breakdown.map((entry, idx) => (
-                          <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
+                    <BarChart data={currentBundle.cause.slice(0, showCauseMore ? currentBundle.cause.length : 3)} layout="vertical" margin={{ top: 4, right: 24, left: 4, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
+                      <XAxis type="number" tick={{ fontSize: 10, fill: '#6b7280' }} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#4b5563' }} width={60} />
+                      <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '8px' }} />
+                      <Bar dataKey="value" radius={[0, 3, 3, 0]} fill={activeTheme.primaryColor}
+                        label={{ position: 'right', fontSize: 10, fill: '#374151', formatter: (v: number) => v.toLocaleString() }}>
+                        {currentBundle.cause.slice(0, showCauseMore ? currentBundle.cause.length : 3).map((_, idx) => (
+                          <Cell key={idx} fill={activeTheme.palette[Math.min(idx + 1, activeTheme.palette.length - 2)]} />
                         ))}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-              )}
-              {/* 범례 */}
-              <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-gray-100">
-                {currentBundle.breakdown.map((d, i) => (
-                  <div key={i} className="flex items-center gap-1 text-[11px] text-gray-600">
-                    <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: d.color || activeTheme.palette[i % activeTheme.palette.length] }} />
-                    <span>{d.name}</span>
-                    <span className="font-semibold text-gray-800">{d.value.toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
+                {currentBundle.cause.length > 3 && (
+                  <button onClick={() => setShowCauseMore(!showCauseMore)}
+                    className="text-[10px] text-blue-500 hover:text-blue-700 w-full text-center pt-1">
+                    {showCauseMore ? '접기' : `+${currentBundle.cause.length - 3}개 더보기`}
+                  </button>
+                )}
+              </FixedHeightCard>
             </div>
           )}
 
-          {/* ═══ 원인 분포 차트 ═══ */}
+          {/* ═══ 2차: KPI 추이 차트 (고정 높이) ═══ */}
           {currentBundle && (
             <div className="bg-white border border-gray-200 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-gray-700">원인 분포</span>
-              </div>
-              <div style={{ height: '200px' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={currentBundle.cause} layout="vertical" margin={{ top: 4, right: 30, left: 10, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
-                    <XAxis type="number" tick={{ fontSize: 11, fill: '#6b7280' }} />
-                    <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#4b5563' }} width={80} />
-                    <Tooltip contentStyle={{ fontSize: '12px', borderRadius: '8px' }} />
-                    <Bar dataKey="value" radius={[0, 4, 4, 0]} fill={activeTheme.primaryColor}
-                      label={{ position: 'right', fontSize: 11, fill: '#374151', formatter: (v: number) => v.toLocaleString() }}>
-                      {currentBundle.cause.map((_, idx) => (
-                        <Cell key={idx} fill={activeTheme.palette[Math.min(idx + 1, activeTheme.palette.length - 2)]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          {/* ═══ KPI 추이 차트 (단일 KPI) ═══ */}
-          {currentBundle && (
-            <div className="bg-white border border-gray-200 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: activeTheme.primaryColor }} />
-                  <span className="text-sm font-semibold text-gray-700">{activeTheme.shortLabel} 추이</span>
+                  <span className="text-[12px] font-semibold text-gray-700">{activeTheme.shortLabel} 추이</span>
                 </div>
-                <span className="text-[11px] text-gray-400">{analyticsPeriodLabel}</span>
+                <span className="text-[10px] text-gray-400">{analyticsPeriodLabel}</span>
               </div>
-              <div style={{ height: '200px' }}>
+              <div style={{ height: '160px' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={currentBundle.trend} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
+                  <ComposedChart data={currentBundle.trend} margin={{ top: 6, right: 10, left: -10, bottom: 4 }}>
                     <defs>
                       <linearGradient id="kpiTrendGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={activeTheme.primaryColor} stopOpacity={0.25} />
@@ -2356,46 +2524,51 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                    <XAxis dataKey="period" tick={{ fontSize: 12, fill: '#6b7280' }} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={36}
+                    <XAxis dataKey="period" tick={{ fontSize: 10, fill: '#6b7280' }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={32}
                       tickFormatter={(v) => activeTheme.valueFormatter(v)} />
                     <Tooltip
-                      contentStyle={{ fontSize: '12px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}
+                      contentStyle={{ fontSize: '11px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}
                       formatter={(v: number) => [activeTheme.valueFormatter(v), activeTheme.shortLabel]}
                     />
                     {activeTheme.target != null && (
                       <ReferenceLine y={activeTheme.target} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1.5}
-                        label={{ value: `목표 ${activeTheme.valueFormatter(activeTheme.target)}`, fontSize: 11, fill: '#ef4444', position: 'right' }} />
+                        label={{ value: `목표 ${activeTheme.valueFormatter(activeTheme.target)}`, fontSize: 10, fill: '#ef4444', position: 'right' }} />
                     )}
                     <Area type="monotone" dataKey="value" fill="url(#kpiTrendGrad)" stroke="none" />
-                    <Line type="monotone" dataKey="value" stroke={activeTheme.primaryColor} strokeWidth={2.5}
-                      dot={false} activeDot={{ r: 5, fill: activeTheme.primaryColor, stroke: '#fff', strokeWidth: 2 }} />
+                    <Line type="monotone" dataKey="value" stroke={activeTheme.primaryColor} strokeWidth={2}
+                      dot={false} activeDot={{ r: 4, fill: activeTheme.primaryColor, stroke: '#fff', strokeWidth: 2 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
             </div>
           )}
 
-          {/* ═══ SLA × 데이터 충족률 리스크 매트릭스 (ScatterChart) — 유지 ═══ */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-semibold text-gray-700">SLA × 데이터 충족률 리스크 매트릭스</span>
-              <div className="flex items-center gap-2 text-[12px] text-gray-500">
-                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-green-500" />양호</span>
-                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-amber-400" />주의</span>
-                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-red-500" />위험</span>
-              </div>
+          {/* ═══ 3차: SLA × 데이터 충족률 리스크 매트릭스 (AccordionSection) ═══ */}
+          <AccordionSection
+            title="SLA × 데이터 충족률 매트릭스"
+            isOpen={rightAccordion.slaMatrix}
+            onToggle={() => toggleRightAccordion('slaMatrix')}
+            summary={(() => {
+              const danger = riskMatrixData.filter(e => e.slaRate < SLA_THRESHOLD && e.dataRate < DATA_THRESHOLD).length;
+              return `위험 ${danger}개 지역`;
+            })()}
+          >
+            <div className="flex items-center justify-end gap-2 text-[10px] text-gray-500 mb-1">
+              <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-green-500" />양호</span>
+              <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-amber-400" />주의</span>
+              <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-red-500" />위험</span>
             </div>
             {riskMatrixData.length > 0 ? (
-              <div style={{ height: '250px' }}>
+              <div style={{ height: '220px' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart margin={{ top: 10, right: 15, left: -5, bottom: 5 }}>
+                  <ScatterChart margin={{ top: 8, right: 12, left: -8, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis type="number" dataKey="dataRate" name="데이터 충족률" unit="%"
-                      domain={[70, 100]} tick={{ fontSize: 14 }} label={{ value: '데이터 충족률(%)', position: 'insideBottom', offset: -2, fontSize: 13, fill: '#6b7280' }} />
+                      domain={[70, 100]} tick={{ fontSize: 11 }} label={{ value: '데이터 충족률(%)', position: 'insideBottom', offset: -2, fontSize: 11, fill: '#6b7280' }} />
                     <YAxis type="number" dataKey="slaRate" name="SLA 준수율" unit="%"
-                      domain={[70, 100]} tick={{ fontSize: 14 }} label={{ value: 'SLA(%)', angle: -90, position: 'insideLeft', offset: 15, fontSize: 13, fill: '#6b7280' }} />
-                    <ZAxis type="number" dataKey="totalCases" range={[40, 300]} name="케이스 수" />
+                      domain={[70, 100]} tick={{ fontSize: 11 }} label={{ value: 'SLA(%)', angle: -90, position: 'insideLeft', offset: 12, fontSize: 11, fill: '#6b7280' }} />
+                    <ZAxis type="number" dataKey="totalCases" range={[30, 250]} name="케이스 수" />
                     <ReferenceLine x={DATA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
                     <ReferenceLine y={SLA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
                     <Tooltip content={({ active, payload }) => {
@@ -2426,22 +2599,24 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                 </ResponsiveContainer>
               </div>
             ) : (
-              <div className="h-[200px] flex items-center justify-center text-xs text-gray-400">데이터 부족</div>
+              <div className="h-[160px] flex items-center justify-center text-xs text-gray-400">데이터 부족</div>
             )}
-          </div>
+          </AccordionSection>
 
-          {/* ═══ 처리 단계 분포 스택형 바 ═══ */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-semibold text-gray-700">처리 단계 분포 (지역별)</span>
-            </div>
+          {/* ═══ 3차: 처리 단계 분포 (AccordionSection) ═══ */}
+          <AccordionSection
+            title="처리 단계 분포 (지역별)"
+            isOpen={rightAccordion.stageDistribution}
+            onToggle={() => toggleRightAccordion('stageDistribution')}
+            summary={`${stageByRegionData.length}개 지역`}
+          >
             {stageByRegionData.length > 0 ? (
-              <div style={{ height: '270px' }}>
+              <div style={{ height: '240px' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stageByRegionData} margin={{ top: 5, right: 10, left: -10, bottom: 25 }}>
+                  <BarChart data={stageByRegionData} margin={{ top: 5, right: 8, left: -12, bottom: 22 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                    <XAxis dataKey="regionName" tick={{ fontSize: 13, fill: '#4b5563' }} interval={0} angle={-35} textAnchor="end" />
-                    <YAxis tick={{ fontSize: 13, fill: '#6b7280' }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} />
+                    <XAxis dataKey="regionName" tick={{ fontSize: 11, fill: '#4b5563' }} interval={0} angle={-35} textAnchor="end" />
+                    <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} />
                     <Tooltip content={({ active, payload, label }) => {
                       if (!active || !payload?.length) return null;
                       const total = payload.reduce((s, p) => s + (Number(p.value) || 0), 0);
@@ -2458,7 +2633,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                         </div>
                       );
                     }} />
-                    <Legend formatter={(value: string) => STAGE_LABELS[value] || value} wrapperStyle={{ fontSize: '13px' }} />
+                    <Legend formatter={(value: string) => STAGE_LABELS[value] || value} wrapperStyle={{ fontSize: '11px' }} />
                     {STAGE_KEYS.map(key => (
                       <Bar key={key} dataKey={key} stackId="stage" fill={STAGE_COLORS_MAP[key]} />
                     ))}
@@ -2466,11 +2641,9 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                 </ResponsiveContainer>
               </div>
             ) : (
-              <div className="h-[220px] flex items-center justify-center text-xs text-gray-400">데이터 부족</div>
+              <div className="h-[180px] flex items-center justify-center text-xs text-gray-400">데이터 부족</div>
             )}
-          </div>
-
-          {/* KPI 통합 추이 및 추가 위젯은 상단 KPI별 분해/원인/추이로 대체됨 */}
+          </AccordionSection>
 
         </div>
         

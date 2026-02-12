@@ -17,7 +17,12 @@ export const GEO_INDICATORS: GeoIndicator[] = [
   { id: 'screening_coverage', label: '1차 선별 완료율', unit: '%', scale: [50, 95] },
   { id: 'dropout', label: '추적 이탈 비율', unit: '%', scale: [3, 25] },
   { id: 'waitlist_pressure', label: '대기/병목 지수', unit: '점', scale: [30, 95] },
-  { id: 'accessibility_score', label: '접근성 점수', unit: '점', scale: [40, 98] }
+  { id: 'accessibility_score', label: '접근성 점수', unit: '점', scale: [40, 98] },
+  { id: 'regional_sla_violation', label: '시군구별 SLA 위반율', unit: '%', scale: [2, 34] },
+  { id: 'regional_queue_risk', label: '시군구별 병목 점수', unit: '점', scale: [15, 95] },
+  { id: 'regional_recontact_rate', label: '시군구별 재접촉 필요율', unit: '%', scale: [4, 38] },
+  { id: 'regional_data_readiness', label: '시군구별 데이터 충족률', unit: '%', scale: [62, 99] },
+  { id: 'regional_governance_missing', label: '시군구별 로그 누락률', unit: '%', scale: [1, 28] }
 ];
 
 export function getGeoIndicator(id: string): GeoIndicator {

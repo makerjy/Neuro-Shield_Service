@@ -1,0 +1,95 @@
+name: ${SERVICE_NAME:-neuro-shield}
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web/Dockerfile
+      args:
+        BASE_PATH: ${BASE_PATH:-/neuro-shield/}
+    container_name: ${SERVICE_NAME:-neuro-shield}-web
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      BASE_PATH: ${BASE_PATH:-/neuro-shield/}
+    ports:
+      - "${WEB_HOST_PORT:-8080}:80"
+    restart: unless-stopped
+
+  sms:
+    build:
+      context: .
+      dockerfile: deploy/sms/Dockerfile
+    container_name: ${SERVICE_NAME:-neuro-shield}-sms
+    environment:
+      PORT: "4120"
+      SERVER_SECRET: ${SMS_SERVER_SECRET:-change-me}
+      MAIN_APP_BASE_URL: ${MAIN_APP_BASE_URL:-http://localhost:5173/neuro-shield/}
+      SOLA_API_BASE: ${SOLA_API_BASE:-https://api.solapi.com}
+      SOLA_API_KEY: ${SOLA_API_KEY:-}
+      SOLA_API_SECRET_KEY: ${SOLA_API_SECRET_KEY:-}
+      SOLA_FROM: ${SOLA_FROM:-}
+      TEST_SMS_TO: ${TEST_SMS_TO:-}
+      DEV_BYPASS_RATE_LIMIT: ${DEV_BYPASS_RATE_LIMIT:-true}
+      DEV_BYPASS_AUTH: ${DEV_BYPASS_AUTH:-true}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4120/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/api/Dockerfile
+    container_name: ${SERVICE_NAME:-neuro-shield}-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://dbuser:dbpass@db:5432/neuro}
+      BACKEND_ENTRY: ${BACKEND_ENTRY:-server_fastapi.app:app}
+      USE_MODEL: ${USE_MODEL:-false}
+      MODEL_PATH: ${MODEL_PATH:-./models/model.pkl}
+      MODEL_GEN_PATH: ${MODEL_GEN_PATH:-./models/model_gen.pkl}
+      MODEL_SCALER_PATH: ${MODEL_SCALER_PATH:-./models/model_scaler.pkl}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      DEMO_RISK_SCALE: ${DEMO_RISK_SCALE:-1.0}
+      DEMO_RISK_MAX: ${DEMO_RISK_MAX:-100}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    container_name: ${SERVICE_NAME:-neuro-shield}-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-neuro}
+      POSTGRES_USER: ${DB_USER:-dbuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dbpass}
+    ports:
+      - "${DB_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dbuser} -d ${DB_NAME:-neuro}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    name: ${SERVICE_NAME:-neuro-shield}-postgres-data

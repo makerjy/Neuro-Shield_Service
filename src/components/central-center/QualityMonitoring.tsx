@@ -1,19 +1,16 @@
-import React, { useState, useMemo } from 'react';
-import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
+import React, { useMemo, useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import {
-  AlertTriangle, CheckCircle, TrendingDown,
-  Activity, MapPin, Zap, Database, Brain,
-  ChevronDown, ChevronUp, Info,
+  AlertTriangle,
+  ArrowRightLeft,
+  Brain,
+  ChevronDown,
+  ChevronUp,
+  Database,
+  ShieldCheck,
+  Workflow,
 } from 'lucide-react';
-import {
-  XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, Cell,
-} from 'recharts';
 import type { TabContext } from '../../lib/useTabContext';
-import {
-  MOCK_DRIVER_ANALYSIS, MOCK_QUALITY_ALERTS,
-  type QualityAlert,
-} from '../../mocks/mockCentralOps';
 
 /* ─── Props ─── */
 interface QualityMonitoringProps {
@@ -21,131 +18,336 @@ interface QualityMonitoringProps {
   onNavigate?: (page: string, ctx?: Partial<TabContext>) => void;
 }
 
-/* ─── 모델 성능 + 조치 권고 통합 mock ─── */
-type ActionStatus = 'normal' | 'caution' | 'action';
+type StageId = 'stage1' | 'stage2' | 'stage3';
+type StageStatus = 'normal' | 'caution' | 'warning';
+type SignalStatus = 'good' | 'watch' | 'risk';
+type AlertCauseType = '데이터' | '모델' | '연계';
+type AlertActionStatus = '관찰' | '조치 필요' | '조치 완료';
 
-const modelPerformance: {
-  model: string; accuracy: number; f1Score: number; delta: string;
-  drift: boolean; impactKpi: string; actionStatus: ActionStatus; actionLabel: string;
-}[] = [
+interface StageMetric {
+  label: string;
+  value: string;
+  target: string;
+  signal: SignalStatus;
+  note: string;
+}
+
+interface StageQualitySection {
+  id: StageId;
+  name: string;
+  title: string;
+  responsibility: string;
+  status: StageStatus;
+  kpiLinks: string[];
+  metrics: StageMetric[];
+}
+
+interface QualityAlertRow {
+  id: string;
+  occurredAt: string;
+  stage: StageId;
+  causeType: AlertCauseType;
+  impactKpi: string;
+  status: AlertActionStatus;
+}
+
+const STAGE_SECTIONS: StageQualitySection[] = [
   {
-    model: 'L1/L2 분류 모델', accuracy: 94.2, f1Score: 93.9,
-    delta: '+0.3', drift: false, impactKpi: 'SLA 준수율',
-    actionStatus: 'normal', actionLabel: '정상 · 관찰',
+    id: 'stage1',
+    name: 'Stage1',
+    title: '입력 데이터 & 신호 품질',
+    responsibility: '데이터 수집/정합 책임',
+    status: 'caution',
+    kpiLinks: ['신호품질', '데이터 준비도'],
+    metrics: [
+      {
+        label: '필수 필드 충족률',
+        value: '96.8%',
+        target: '목표 97% 이상',
+        signal: 'watch',
+        note: '경기도/부산에서 선택 필드 누락 반복',
+      },
+      {
+        label: '지연/결측 발생률',
+        value: '4.9%',
+        target: '목표 3% 이하',
+        signal: 'risk',
+        note: '24시간 초과 입력 비중 상승',
+      },
+      {
+        label: '분포 이탈 여부',
+        value: '2개 변수 이탈',
+        target: '0개 유지',
+        signal: 'watch',
+        note: '고령 단독가구 비율 입력 분포 이동',
+      },
+    ],
   },
   {
-    model: 'L3 위험 예측 모델', accuracy: 89.5, f1Score: 89.2,
-    delta: '-2.4', drift: true, impactKpi: '위험 탐지율',
-    actionStatus: 'action', actionLabel: '조치 필요 · 재학습 권고',
+    id: 'stage2',
+    name: 'Stage2',
+    title: 'ANN 입력/출력 안정성',
+    responsibility: '특징 생성/추론 파이프라인 책임',
+    status: 'warning',
+    kpiLinks: ['병목', '데이터 준비도'],
+    metrics: [
+      {
+        label: 'Feature 벡터 분포 안정성',
+        value: 'JS Divergence 0.11',
+        target: '기준 0.10 이하',
+        signal: 'risk',
+        note: '최근 7일 연속 기준 상회',
+      },
+      {
+        label: 'Class 편향 지표',
+        value: '최대 편향 6.3%p',
+        target: '기준 5.0%p 이하',
+        signal: 'watch',
+        note: 'L2 경계 구간 과소 분류 경향',
+      },
+      {
+        label: 'Confidence 분산 추이',
+        value: '+17%',
+        target: '변동률 ±10% 이내',
+        signal: 'risk',
+        note: '예측 점수 일관성 저하',
+      },
+    ],
   },
   {
-    model: '재접촉 우선순위 모델', accuracy: 91.8, f1Score: 91.6,
-    delta: '-0.5', drift: false, impactKpi: '접촉 성공률',
-    actionStatus: 'caution', actionLabel: '주의 · 모니터링 강화',
+    id: 'stage3',
+    name: 'Stage3',
+    title: 'CNN 입력/출력 안정성',
+    responsibility: '고위험 추론/보호장치 책임',
+    status: 'caution',
+    kpiLinks: ['거버넌스', '데이터 품질'],
+    metrics: [
+      {
+        label: '임베딩 분포 변화',
+        value: 'Drift Score 0.21',
+        target: '기준 0.20 이하',
+        signal: 'watch',
+        note: '신규 케이스군 유입으로 분포 확장',
+      },
+      {
+        label: 'Class 불확실성 증가 여부',
+        value: '엔트로피 +0.08',
+        target: '기준 +0.05 이하',
+        signal: 'watch',
+        note: '불확실 케이스 재검토 필요',
+      },
+      {
+        label: 'Guardrail Flag 발생률',
+        value: '2.2%',
+        target: '기준 2.0% 이하',
+        signal: 'risk',
+        note: '민감군 fallback 경로 호출 증가',
+      },
+    ],
   },
 ];
 
-/* ─── helpers ─── */
-const DRIVER_ICON: Record<string, React.ReactNode> = {
-  ops_bottleneck: <Zap className="h-5 w-5 text-orange-500" />,
-  data_quality:   <Database className="h-5 w-5 text-blue-500" />,
-  contact_strategy: <Activity className="h-5 w-5 text-green-500" />,
-  model_fitness:  <Brain className="h-5 w-5 text-purple-500" />,
+const QUALITY_ALERT_ROWS: QualityAlertRow[] = [
+  {
+    id: 'qa-stage1-20260211',
+    occurredAt: '2026-02-11 08:55',
+    stage: 'stage1',
+    causeType: '데이터',
+    impactKpi: '데이터 준비도',
+    status: '조치 필요',
+  },
+  {
+    id: 'qa-stage2-20260211',
+    occurredAt: '2026-02-11 10:20',
+    stage: 'stage2',
+    causeType: '모델',
+    impactKpi: '병목',
+    status: '조치 필요',
+  },
+  {
+    id: 'qa-stage3-20260210',
+    occurredAt: '2026-02-10 16:40',
+    stage: 'stage3',
+    causeType: '모델',
+    impactKpi: '거버넌스',
+    status: '관찰',
+  },
+  {
+    id: 'qa-link-20260210',
+    occurredAt: '2026-02-10 11:05',
+    stage: 'stage2',
+    causeType: '연계',
+    impactKpi: '데이터 준비도',
+    status: '관찰',
+  },
+  {
+    id: 'qa-stage1-20260209',
+    occurredAt: '2026-02-09 09:30',
+    stage: 'stage1',
+    causeType: '데이터',
+    impactKpi: '신호품질',
+    status: '조치 완료',
+  },
+];
+
+const STAGE_STATUS_STYLE: Record<StageStatus, string> = {
+  normal: 'bg-green-100 text-green-700',
+  caution: 'bg-amber-100 text-amber-700',
+  warning: 'bg-red-100 text-red-700',
 };
 
-const DRIVER_COLOR: Record<string, string> = {
-  ops_bottleneck: '#f97316', data_quality: '#3b82f6',
-  contact_strategy: '#22c55e', model_fitness: '#a855f7',
+const STAGE_STATUS_LABEL: Record<StageStatus, string> = {
+  normal: '정상',
+  caution: '주의',
+  warning: '경고',
 };
 
-const sevBg = (s: QualityAlert['severity']) =>
-  s === 'critical' ? 'border-red-200 bg-red-50' :
-  s === 'warning'  ? 'border-orange-200 bg-orange-50' :
-  'border-blue-200 bg-blue-50';
-
-const sevLabel = (s: QualityAlert['severity']) =>
-  s === 'critical' ? '심각' : s === 'warning' ? '주의' : '정보';
-
-const ACTION_STYLE: Record<ActionStatus, string> = {
-  normal:  'bg-green-50 text-green-700 border-green-200',
-  caution: 'bg-amber-50  text-amber-700  border-amber-200',
-  action:  'bg-red-50   text-red-700   border-red-200',
+const METRIC_SIGNAL_STYLE: Record<SignalStatus, string> = {
+  good: 'bg-green-50 text-green-700 border-green-200',
+  watch: 'bg-amber-50 text-amber-700 border-amber-200',
+  risk: 'bg-red-50 text-red-700 border-red-200',
 };
 
-/* ═══════════════════════════════════════════════
-   Single Quality Decision View
-   ═══════════════════════════════════════════════ */
+const ALERT_STATUS_STYLE: Record<AlertActionStatus, string> = {
+  관찰: 'bg-blue-50 text-blue-700 border-blue-200',
+  '조치 필요': 'bg-red-50 text-red-700 border-red-200',
+  '조치 완료': 'bg-green-50 text-green-700 border-green-200',
+};
+
+const ALERT_CAUSE_STYLE: Record<AlertCauseType, string> = {
+  데이터: 'bg-sky-50 text-sky-700 border-sky-200',
+  모델: 'bg-violet-50 text-violet-700 border-violet-200',
+  연계: 'bg-orange-50 text-orange-700 border-orange-200',
+};
+
+function mapDriverToStage(driver?: TabContext['driver']): StageId {
+  if (driver === 'data_quality') return 'stage1';
+  if (driver === 'model_fitness') return 'stage3';
+  return 'stage2';
+}
+
+function stageDisplay(stage: StageId): string {
+  if (stage === 'stage1') return 'Stage1';
+  if (stage === 'stage2') return 'Stage2';
+  return 'Stage3';
+}
+
 export function QualityMonitoring({ context, onNavigate }: QualityMonitoringProps) {
-  /* ── state ── */
-  const sortedDrivers = useMemo(
-    () => [...MOCK_DRIVER_ANALYSIS].sort((a, b) => b.contributionPct - a.contributionPct),
+  const initialStage = useMemo(() => mapDriverToStage(context?.driver), [context?.driver]);
+  const [openedStages, setOpenedStages] = useState<StageId[]>([initialStage]);
+
+  const overallDataReadiness = 95.1;
+  const activeAlerts = QUALITY_ALERT_ROWS.filter((row) => row.status !== '조치 완료').length;
+  const issueByCause = useMemo(
+    () =>
+      QUALITY_ALERT_ROWS.reduce(
+        (acc, row) => {
+          if (row.status !== '조치 완료') acc[row.causeType] += 1;
+          return acc;
+        },
+        { 데이터: 0, 모델: 0, 연계: 0 } as Record<AlertCauseType, number>,
+      ),
     [],
   );
-  const [selectedDriver, setSelectedDriver] = useState<string>(
-    context?.driver || sortedDrivers[0]?.key || 'ops_bottleneck',
-  );
-  const [showAlerts, setShowAlerts] = useState(false);
 
-  const driverDetail = useMemo(
-    () => MOCK_DRIVER_ANALYSIS.find((d) => d.key === selectedDriver) ?? sortedDrivers[0],
-    [selectedDriver, sortedDrivers],
-  );
+  const stageStatusMap = useMemo(() => {
+    return STAGE_SECTIONS.reduce(
+      (acc, stage) => {
+        acc[stage.id] = stage.status;
+        return acc;
+      },
+      {} as Record<StageId, StageStatus>,
+    );
+  }, []);
 
-  const driverChartData = sortedDrivers.map((d) => ({
-    name: d.label, contribution: d.contributionPct, key: d.key,
-  }));
+  const toggleStage = (stageId: StageId) => {
+    setOpenedStages((prev) =>
+      prev.includes(stageId) ? prev.filter((id) => id !== stageId) : [...prev, stageId],
+    );
+  };
 
-  /* ── derived counts ── */
-  const activeAlerts   = MOCK_QUALITY_ALERTS.filter((a) => !a.resolved);
-  const criticalCount  = MOCK_QUALITY_ALERTS.filter((a) => a.severity === 'critical').length;
-  const warningCount   = MOCK_QUALITY_ALERTS.filter((a) => a.severity === 'warning').length;
-  const actionModels   = modelPerformance.filter((m) => m.actionStatus === 'action').length;
-  const cautionModels  = modelPerformance.filter((m) => m.actionStatus === 'caution').length;
-  const flaggedMetrics = driverDetail.indicators.filter((i) => i.status !== 'green');
-  const relatedAlerts  = MOCK_QUALITY_ALERTS.filter(
-    (a) => a.relatedDriver === driverDetail.key && !a.resolved,
-  );
+  void onNavigate;
 
   return (
     <div className="space-y-5 p-1">
-      {/* ── Header ── */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">데이터 & 모델 품질</h1>
         <p className="text-xs text-gray-500 mt-0.5">
-          품질 현황 · Driver 영향 분석 · 모델 성능 및 조치 권고를 한눈에 파악합니다.
+          Stage별 품질 책임을 분리해 데이터 문제/모델 문제/연계 문제를 즉시 구분합니다.
         </p>
       </div>
 
-      {/* ═══ [A] Quality Overview KPI Strip ═══ */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
         {[
           {
-            label: 'KPI 평균 변화율', value: '-1.8%p', sub: '전주 대비',
-            icon: <TrendingDown className="h-5 w-5" />,
-            color: 'text-orange-600', bg: 'bg-orange-50',
-          },
-          {
-            label: '데이터 품질 이슈',
-            value: `${criticalCount + warningCount}건`,
-            sub: `심각 ${criticalCount} · 주의 ${warningCount}`,
+            label: '전체 데이터 준비도',
+            value: `${overallDataReadiness.toFixed(1)}%`,
+            sub: '전국 평균',
             icon: <Database className="h-5 w-5" />,
-            color: criticalCount > 0 ? 'text-red-600' : 'text-amber-600',
-            bg: criticalCount > 0 ? 'bg-red-50' : 'bg-amber-50',
+            color: overallDataReadiness >= 96 ? 'text-green-600' : 'text-amber-600',
+            bg: overallDataReadiness >= 96 ? 'bg-green-50' : 'bg-amber-50',
           },
           {
-            label: '운영 병목 경고',
-            value: `${sortedDrivers.filter((d) => d.severity === 'critical').length}건`,
-            sub: `최고 기여: ${sortedDrivers[0]?.label} (${sortedDrivers[0]?.contributionPct}%)`,
-            icon: <Zap className="h-5 w-5" />,
-            color: 'text-orange-600', bg: 'bg-orange-50',
+            label: 'Stage1 안정성',
+            value: STAGE_STATUS_LABEL[stageStatusMap.stage1],
+            sub: '입력 데이터 & 신호',
+            icon: <Workflow className="h-5 w-5" />,
+            color:
+              stageStatusMap.stage1 === 'warning'
+                ? 'text-red-600'
+                : stageStatusMap.stage1 === 'caution'
+                  ? 'text-amber-600'
+                  : 'text-green-600',
+            bg:
+              stageStatusMap.stage1 === 'warning'
+                ? 'bg-red-50'
+                : stageStatusMap.stage1 === 'caution'
+                  ? 'bg-amber-50'
+                  : 'bg-green-50',
           },
           {
-            label: '모델 성능 경고',
-            value: `${actionModels + cautionModels}건`,
-            sub: `조치 ${actionModels} · 주의 ${cautionModels}`,
+            label: 'Stage2 안정성',
+            value: STAGE_STATUS_LABEL[stageStatusMap.stage2],
+            sub: 'ANN 입력/출력',
             icon: <Brain className="h-5 w-5" />,
-            color: actionModels > 0 ? 'text-red-600' : 'text-green-600',
-            bg: actionModels > 0 ? 'bg-red-50' : 'bg-green-50',
+            color:
+              stageStatusMap.stage2 === 'warning'
+                ? 'text-red-600'
+                : stageStatusMap.stage2 === 'caution'
+                  ? 'text-amber-600'
+                  : 'text-green-600',
+            bg:
+              stageStatusMap.stage2 === 'warning'
+                ? 'bg-red-50'
+                : stageStatusMap.stage2 === 'caution'
+                  ? 'bg-amber-50'
+                  : 'bg-green-50',
+          },
+          {
+            label: 'Stage3 안정성',
+            value: STAGE_STATUS_LABEL[stageStatusMap.stage3],
+            sub: 'CNN 입력/출력',
+            icon: <ShieldCheck className="h-5 w-5" />,
+            color:
+              stageStatusMap.stage3 === 'warning'
+                ? 'text-red-600'
+                : stageStatusMap.stage3 === 'caution'
+                  ? 'text-amber-600'
+                  : 'text-green-600',
+            bg:
+              stageStatusMap.stage3 === 'warning'
+                ? 'bg-red-50'
+                : stageStatusMap.stage3 === 'caution'
+                  ? 'bg-amber-50'
+                  : 'bg-green-50',
+          },
+          {
+            label: '활성 품질 경보',
+            value: `${activeAlerts}건`,
+            sub: '조치 완료 제외',
+            icon: <AlertTriangle className="h-5 w-5" />,
+            color: activeAlerts > 2 ? 'text-red-600' : 'text-amber-600',
+            bg: activeAlerts > 2 ? 'bg-red-50' : 'bg-amber-50',
           },
         ].map((kpi, i) => (
           <Card key={i} className="border-0 shadow-sm">
@@ -163,314 +365,155 @@ export function QualityMonitoring({ context, onNavigate }: QualityMonitoringProp
         ))}
       </div>
 
-      {/* ═══ [B] Driver Impact + Auto-Summary ═══ */}
-      <div className="grid grid-cols-12 gap-4">
-        {/* Left: BarChart + Driver list */}
-        <div className="col-span-5 space-y-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Activity className="h-4 w-4 text-blue-600" />
-                KPI 하락 Driver 기여도
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={driverChartData} layout="vertical" margin={{ left: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" domain={[0, 50]} unit="%" />
-                  <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(v: number) => `${v}%`} />
-                  <Bar
-                    dataKey="contribution"
-                    radius={[0, 4, 4, 0]}
-                    cursor="pointer"
-                    onClick={(_: unknown, idx: number) => setSelectedDriver(driverChartData[idx].key)}
-                  >
-                    {driverChartData.map((d, i) => (
-                      <Cell
-                        key={i}
-                        fill={DRIVER_COLOR[d.key] || '#6b7280'}
-                        opacity={selectedDriver === d.key ? 1 : 0.45}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          {/* Driver card list */}
-          <div className="space-y-2">
-            {sortedDrivers.map((d, idx) => (
-              <button
-                key={d.key}
-                onClick={() => setSelectedDriver(d.key)}
-                className={`w-full text-left p-3 rounded-lg border transition-all ${
-                  selectedDriver === d.key
-                    ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-200'
-                    : 'border-gray-200 bg-white hover:bg-gray-50'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  {idx < 2 && (
-                    <span className="text-[10px] font-bold text-white bg-red-500 rounded px-1">
-                      TOP{idx + 1}
-                    </span>
-                  )}
-                  {DRIVER_ICON[d.key]}
-                  <span className="font-medium text-sm text-gray-900">{d.label}</span>
-                  <span
-                    className="ml-auto text-sm font-bold"
-                    style={{ color: DRIVER_COLOR[d.key] }}
-                  >
-                    {d.contributionPct}%
-                  </span>
-                </div>
-                <p className="text-xs text-gray-500 mt-1 line-clamp-1">{d.description}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Right: Auto-Summary panel (항상 표시) */}
-        <div className="col-span-7">
-          <Card className="h-full flex flex-col">
-            <CardHeader className="pb-2 border-b">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {DRIVER_ICON[driverDetail.key]}
-                  <div>
-                    <CardTitle className="text-lg">{driverDetail.label}</CardTitle>
-                    <p className="text-xs text-gray-500">{driverDetail.description}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div
-                    className="text-2xl font-bold"
-                    style={{ color: DRIVER_COLOR[driverDetail.key] }}
-                  >
-                    {driverDetail.contributionPct}%
-                  </div>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                    driverDetail.severity === 'critical' ? 'bg-red-100 text-red-700' :
-                    driverDetail.severity === 'warning'  ? 'bg-amber-100 text-amber-700' :
-                    'bg-green-100 text-green-700'
-                  }`}>
-                    {driverDetail.severity === 'critical' ? '심각' :
-                     driverDetail.severity === 'warning'  ? '주의' : '양호'}
-                  </span>
-                </div>
-              </div>
-            </CardHeader>
-
-            <CardContent className="p-4 space-y-4 flex-1 overflow-y-auto">
-              {/* Auto-generated summary */}
-              <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="flex items-start gap-2">
-                  <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
-                  <p className="text-sm text-gray-700 leading-relaxed">
-                    <strong>{driverDetail.label}</strong>은(는) 현재 KPI 하락의{' '}
-                    <strong className="text-red-600">{driverDetail.contributionPct}%</strong>를
-                    차지하는{' '}
-                    {sortedDrivers[0]?.key === driverDetail.key ? '최상위 원인' : '주요 원인'}입니다.{' '}
-                    {flaggedMetrics.length > 0
-                      ? <>
-                          {flaggedMetrics.map((m) => m.label).join(', ')} 지표가 기준 미달이며,{' '}
-                          특히 <strong>{driverDetail.topRegions[0]?.name}</strong> 지역이 가장
-                          심각합니다.
-                        </>
-                      : '모든 지표가 기준 이내이나 지속적인 모니터링이 필요합니다.'}
-                  </p>
-                </div>
-              </div>
-
-              {/* Flagged metrics */}
-              <div>
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  ⚠ 세부 지표 현황
-                </h4>
-                <div className="grid grid-cols-2 gap-2">
-                  {driverDetail.indicators.map((ind, i) => (
-                    <div
-                      key={i}
-                      className={`p-2.5 rounded-lg border ${
-                        ind.status === 'red'    ? 'border-red-200 bg-red-50' :
-                        ind.status === 'yellow' ? 'border-amber-200 bg-amber-50' :
-                        'border-green-200 bg-green-50'
-                      }`}
-                    >
-                      <div className="text-[11px] text-gray-500">{ind.label}</div>
-                      <div className="flex items-end justify-between mt-0.5">
-                        <span className="text-base font-bold text-gray-900">
-                          {ind.value}
-                          {ind.unit}
-                        </span>
-                        <span className={`text-[10px] font-medium ${
-                          ind.status === 'red'    ? 'text-red-600' :
-                          ind.status === 'yellow' ? 'text-amber-600' :
-                          'text-green-600'
-                        }`}>
-                          기준 {ind.threshold}{ind.unit}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Affected regions */}
-              <div>
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  <MapPin className="h-3 w-3 inline mr-1" />영향 상위 지역
-                </h4>
-                <div className="space-y-1.5">
-                  {driverDetail.topRegions.map((r, i) => (
-                    <div key={i} className="flex items-center gap-2 text-sm">
-                      <span className="w-5 text-xs font-bold text-gray-400">{i + 1}</span>
-                      <span className="font-medium text-gray-800 w-24">{r.name}</span>
-                      <div className="flex-1 bg-gray-100 rounded-full h-1.5">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${Math.min(100 - r.score, 100)}%`,
-                            backgroundColor: DRIVER_COLOR[driverDetail.key],
-                          }}
-                        />
-                      </div>
-                      <span className="text-xs text-gray-500 w-36 text-right truncate">
-                        {r.detail}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Related alerts */}
-              {relatedAlerts.length > 0 && (
-                <div>
-                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                    🔔 관련 경보
-                  </h4>
-                  <div className="space-y-1.5">
-                    {relatedAlerts.map((a) => (
-                      <div key={a.id} className={`p-2 rounded border text-xs ${sevBg(a.severity)}`}>
-                        <span className="font-medium text-gray-900">{a.title}</span>
-                        <span className="text-gray-500 ml-2">· {a.region}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      {/* ═══ [C] Model Performance + Action Recommendation ═══ */}
       <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Brain className="h-4 w-4 text-purple-600" />
-              모델 성능 및 조치 권고
-            </CardTitle>
-            <span className="text-xs text-gray-400">최근 평가: 2026-01-20</span>
-          </div>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <ArrowRightLeft className="h-4 w-4 text-slate-600" />
+            5초 분류 가이드
+          </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50/60">
-                  <th className="text-left  py-2.5 px-3 text-xs font-semibold text-gray-600">모델명</th>
-                  <th className="text-right py-2.5 px-3 text-xs font-semibold text-gray-600">F1 점수</th>
-                  <th className="text-right py-2.5 px-3 text-xs font-semibold text-gray-600">정확도</th>
-                  <th className="text-center py-2.5 px-3 text-xs font-semibold text-gray-600">성능 변화(Δ)</th>
-                  <th className="text-center py-2.5 px-3 text-xs font-semibold text-gray-600">드리프트</th>
-                  <th className="text-left  py-2.5 px-3 text-xs font-semibold text-gray-600">영향 KPI</th>
-                  <th className="text-center py-2.5 px-3 text-xs font-semibold text-gray-600">조치 권고</th>
-                </tr>
-              </thead>
-              <tbody>
-                {modelPerformance.map((m, idx) => (
-                  <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50/50">
-                    <td className="py-3 px-3 text-sm font-medium text-gray-900">{m.model}</td>
-                    <td className="py-3 px-3 text-sm text-right text-gray-900">{m.f1Score}%</td>
-                    <td className="py-3 px-3 text-sm text-right text-gray-900">{m.accuracy}%</td>
-                    <td className="py-3 px-3 text-center">
-                      <span className={`text-sm font-medium ${
-                        m.delta.startsWith('+') ? 'text-green-600' : 'text-red-600'
-                      }`}>
-                        {m.delta}%p
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-center">
-                      {m.drift ? (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-700">
-                          감지됨
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">
-                          없음
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-3 text-sm text-gray-700">{m.impactKpi}</td>
-                    <td className="py-3 px-3 text-center">
-                      <span className={`inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium border ${ACTION_STYLE[m.actionStatus]}`}>
-                        {m.actionLabel}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <CardContent className="pt-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium bg-sky-50 text-sky-700 border-sky-200">
+              데이터 원인 {issueByCause.데이터}건
+            </span>
+            <span className="inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium bg-violet-50 text-violet-700 border-violet-200">
+              모델 원인 {issueByCause.모델}건
+            </span>
+            <span className="inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium bg-orange-50 text-orange-700 border-orange-200">
+              연계 원인 {issueByCause.연계}건
+            </span>
+            <span className="text-xs text-gray-500">
+              경고 Stage: {STAGE_SECTIONS.filter((stage) => stage.status === 'warning').map((stage) => stage.name).join(', ') || '없음'}
+            </span>
           </div>
         </CardContent>
       </Card>
 
-      {/* ═══ [D] Quality Alerts — collapsible ═══ */}
-      <Card>
-        <button
-          onClick={() => setShowAlerts(!showAlerts)}
-          className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors rounded-lg"
-        >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-            <span className="text-sm font-semibold text-gray-900">품질 경보</span>
-            <span className="text-xs px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
-              {activeAlerts.length}건 활성
-            </span>
-          </div>
-          {showAlerts
-            ? <ChevronUp className="h-4 w-4 text-gray-400" />
-            : <ChevronDown className="h-4 w-4 text-gray-400" />}
-        </button>
-
-        {showAlerts && (
-          <CardContent className="pt-0 space-y-2">
-            {MOCK_QUALITY_ALERTS.map((a) => (
-              <div key={a.id} className={`p-3 rounded-lg border ${sevBg(a.severity)}`}>
-                <div className="flex items-start justify-between">
+      <div className="space-y-3">
+        {STAGE_SECTIONS.map((stage) => {
+          const isOpen = openedStages.includes(stage.id);
+          return (
+            <Card key={stage.id} className="border border-slate-200 overflow-hidden gap-0">
+              <button
+                type="button"
+                onClick={() => toggleStage(stage.id)}
+                className="w-full px-5 py-4 bg-white hover:bg-slate-50 transition-colors text-left"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold text-slate-800 min-w-16">{stage.name}</span>
                   <div>
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-medium text-gray-900">{a.title}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/60 font-medium">
-                        {sevLabel(a.severity)}
-                      </span>
-                      {a.resolved && <CheckCircle className="h-3.5 w-3.5 text-green-500" />}
-                    </div>
-                    <p className="text-xs text-gray-600">{a.description}</p>
-                    <p className="text-[11px] text-gray-400 mt-1">
-                      {a.region} · {a.detectedAt.replace('T', ' ').slice(0, 16)}
-                    </p>
+                    <p className="text-sm font-semibold text-gray-900">{stage.title}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{stage.responsibility}</p>
                   </div>
+                  <span
+                    className={`ml-auto inline-flex items-center rounded-full px-2 py-1 text-[11px] font-medium ${STAGE_STATUS_STYLE[stage.status]}`}
+                  >
+                    {STAGE_STATUS_LABEL[stage.status]}
+                  </span>
+                  {isOpen ? (
+                    <ChevronUp className="h-4 w-4 text-gray-400" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                  )}
                 </div>
-              </div>
-            ))}
-          </CardContent>
-        )}
+              </button>
+
+              {isOpen && (
+                <CardContent className="pt-1 pb-5 px-5 space-y-4 border-t border-slate-100">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] text-slate-500">KPI 연결</span>
+                    {stage.kpiLinks.map((kpi) => (
+                      <span
+                        key={kpi}
+                        className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-700"
+                      >
+                        {kpi}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    {stage.metrics.map((metric) => (
+                      <div key={metric.label} className="rounded-lg border border-slate-200 bg-white p-3">
+                        <p className="text-xs text-slate-500">{metric.label}</p>
+                        <p className="text-lg font-semibold text-gray-900 mt-1">{metric.value}</p>
+                        <div className="flex items-center justify-between mt-2">
+                          <span className="text-[11px] text-slate-500">{metric.target}</span>
+                          <span
+                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${METRIC_SIGNAL_STYLE[metric.signal]}`}
+                          >
+                            {metric.signal === 'risk' ? '위험' : metric.signal === 'watch' ? '주의' : '정상'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mt-2">{metric.note}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            품질 경보
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px]">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50/70">
+                  <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-600">발생일</th>
+                  <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-600">Stage</th>
+                  <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-600">원인 유형</th>
+                  <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-600">영향 KPI</th>
+                  <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-600">상태</th>
+                </tr>
+              </thead>
+              <tbody>
+                {QUALITY_ALERT_ROWS.map((row) => (
+                  <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                    <td className="py-3 px-3 text-sm text-gray-700">{row.occurredAt}</td>
+                    <td className="py-3 px-3">
+                      <span className="text-sm font-medium text-gray-900">{stageDisplay(row.stage)}</span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] font-medium ${ALERT_CAUSE_STYLE[row.causeType]}`}
+                      >
+                        {row.causeType}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 text-sm text-gray-700">{row.impactKpi}</td>
+                    <td className="py-3 px-3">
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-1 text-[11px] font-medium ${ALERT_STATUS_STYLE[row.status]}`}
+                      >
+                        {row.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {QUALITY_ALERT_ROWS.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="py-6 text-center text-sm text-gray-500">
+                      활성 품질 경보가 없습니다.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-3 text-[11px] text-gray-500">
+            상태 기준: 관찰(추세 모니터링), 조치 필요(운영/모델 개입 필요), 조치 완료(후속 검증 대기)
+          </div>
+        </CardContent>
       </Card>
     </div>
   );

@@ -1,0 +1,9 @@
+.git
+.gitignore
+node_modules
+build
+coverage
+dist
+citizen_sms_service
+instance-team6.key
+*.log

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AuthSystem } from './components/auth/AuthSystem';
 import { CitizenMobileApp } from './components/citizen/CitizenMobileApp';
 import { LocalCenterApp } from './components/local-center/LocalCenterApp';
@@ -15,8 +15,22 @@ interface User {
   organization?: string;
 }
 
+/** URL 해시가 #citizen 이면 로그인 없이 시민 화면 직접 접근 */
+function useCitizenDirectAccess() {
+  const [isCitizen, setIsCitizen] = useState(() => window.location.hash === '#citizen');
+
+  useEffect(() => {
+    const onHash = () => setIsCitizen(window.location.hash === '#citizen');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  return isCitizen;
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
+  const isCitizenDirect = useCitizenDirectAccess();
 
   const handleLogin = (userData: User) => {
     setUser(userData);
@@ -35,9 +49,23 @@ export default function App() {
       timestamp: new Date().toISOString(),
     });
     setUser(null);
+    // 시민 해시가 남아있으면 제거
+    if (window.location.hash === '#citizen') {
+      history.replaceState(null, '', window.location.pathname);
+    }
   };
 
-  // Render appropriate app based on user role
+  // 시민 직접 접근 (로그인 불필요)
+  if (isCitizenDirect) {
+    return (
+      <>
+        <Toaster />
+        <CitizenMobileApp />
+      </>
+    );
+  }
+
+  // 로그인 전
   if (!user) {
     return (
       <>

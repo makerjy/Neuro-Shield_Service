@@ -423,7 +423,7 @@ export function CaseDetail({ caseId, onBack, onStartConsultation }: {
 
       const results: string[] = [];
       for (const target of targets) {
-        const resp = await fetch('http://localhost:4120/api/outreach/send-sms', {
+        const resp = await fetch('/api/outreach/send-sms', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

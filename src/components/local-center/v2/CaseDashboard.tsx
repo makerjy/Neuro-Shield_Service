@@ -18,6 +18,7 @@ import { cn, type StageType } from "./shared";
 import {
   ALERT_FILTER_TABS,
   CASE_RECORDS,
+  getStage1InterventionPlan,
   maskName,
   maskPhone,
   matchesAlertFilter,
@@ -143,6 +144,37 @@ export function CaseDashboard({ onSelectCase, initialFilter }: {
     setSearchKeyword("");
   };
 
+  const clearHoverTimer = () => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  };
+
+  const openHoverPanel = (target: CaseRecord, delayMs = 0) => {
+    if (hoveredCase?.id === target.id) return;
+    clearHoverTimer();
+    if (delayMs <= 0) {
+      setHoveredCase(target);
+      return;
+    }
+    hoverTimerRef.current = setTimeout(() => {
+      setHoveredCase(target);
+      hoverTimerRef.current = null;
+    }, delayMs);
+  };
+
+  const closeHoverPanel = (delayMs = 140) => {
+    clearHoverTimer();
+    if (!hoveredCase) return;
+    hoverTimerRef.current = setTimeout(() => {
+      setHoveredCase(null);
+      hoverTimerRef.current = null;
+    }, delayMs);
+  };
+
+  useEffect(() => () => clearHoverTimer(), []);
+
   return (
     <div className="h-full flex flex-col gap-6">
       {/* 1) 상단 요약 */}
@@ -264,14 +296,24 @@ export function CaseDashboard({ onSelectCase, initialFilter }: {
                       hoveredCase?.id === c.id ? "bg-blue-50/60" : "hover:bg-gray-50/70"
                     )}
                     onClick={() => onSelectCase(c.id, c.stage)}
+                    onPointerEnter={(event) => {
+                      if (event.pointerType === "touch") return;
+                      openHoverPanel(c, 40);
+                    }}
+                    onPointerMove={(event) => {
+                      if (event.pointerType === "touch") return;
+                      openHoverPanel(c, 0);
+                    }}
+                    onPointerLeave={(event) => {
+                      if (event.pointerType === "touch") return;
+                      closeHoverPanel(140);
+                    }}
                     onMouseEnter={() => {
-                      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-                      hoverTimerRef.current = setTimeout(() => setHoveredCase(c), 120);
+                      openHoverPanel(c, 60);
                     }}
                     onMouseLeave={() => {
-                      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
                       /* popover 안에서 마우스가 나갈 때 약간의 딜레이 */
-                      hoverTimerRef.current = setTimeout(() => setHoveredCase(null), 200);
+                      closeHoverPanel(170);
                     }}
                   >
                     <td className="px-4 py-3.5">
@@ -304,10 +346,29 @@ export function CaseDashboard({ onSelectCase, initialFilter }: {
                       </span>
                     </td>
                     <td className="px-4 py-3.5">
-                      <div className="flex items-center gap-2">
-                        <div className={cn("w-2 h-2 rounded-full", riskDotTone(c.risk))}></div>
-                        <span className="font-medium text-gray-700">{c.path}</span>
-                      </div>
+                      {c.stage === "Stage 1" ? (
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const intervention = getStage1InterventionPlan(c);
+                            return (
+                              <>
+                                <span
+                                  className={cn("px-2 py-0.5 rounded text-[10px] font-bold border", intervention.guide.tone)}
+                                  title={`${intervention.level} · ${intervention.guide.label} | ${intervention.guide.whenToUse}`}
+                                >
+                                  {intervention.level}
+                                </span>
+                                <span className="font-medium text-gray-700">{intervention.guide.label}</span>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className={cn("w-2 h-2 rounded-full", riskDotTone(c.risk))}></div>
+                          <span className="font-medium text-gray-700">{c.path}</span>
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3.5">
                       <span className={cn("px-2 py-0.5 rounded text-[10px] font-bold", statusBadgeTone(c.status))}>
@@ -379,10 +440,18 @@ export function CaseDashboard({ onSelectCase, initialFilter }: {
                   right: 24,
                 }}
                 onMouseEnter={() => {
-                  if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+                  clearHoverTimer();
                 }}
                 onMouseLeave={() => {
-                  hoverTimerRef.current = setTimeout(() => setHoveredCase(null), 150);
+                  closeHoverPanel(130);
+                }}
+                onPointerEnter={(event) => {
+                  if (event.pointerType === "touch") return;
+                  clearHoverTimer();
+                }}
+                onPointerLeave={(event) => {
+                  if (event.pointerType === "touch") return;
+                  closeHoverPanel(130);
                 }}
               >
                 <div className="mb-3">

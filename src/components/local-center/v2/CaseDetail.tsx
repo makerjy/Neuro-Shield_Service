@@ -23,7 +23,18 @@ import {
 import { cn, type StageType } from "./shared";
 import { toast } from "sonner";
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from "recharts";
-import { getCaseRecordById, getStage1ContactPriority, maskName, maskPhone, toAgeBand, type CaseRecord } from "./caseRecords";
+import {
+  getCaseRecordById,
+  getStage1ContactPriority,
+  getStage1InterventionGuides,
+  getStage1InterventionPlan,
+  maskName,
+  maskPhone,
+  toAgeBand,
+  type CaseRecord,
+} from "./caseRecords";
+import { Stage2CaseWorkflow } from "./stage2/Stage2CaseWorkflow";
+import { Stage1CaseIdentity, Stage1OpsDetail } from "./stage1/Stage1OpsDetail";
 
 interface CaseDetailProps {
   caseId: string;
@@ -32,6 +43,10 @@ interface CaseDetailProps {
 }
 
 export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
+  if (stage === "Stage 2") {
+    return <Stage2CaseWorkflow caseId={caseId} onBack={onBack} />;
+  }
+
   const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
 
   return (
@@ -54,9 +69,9 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
               </span>
             </div>
             <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
-              <span className="font-bold text-gray-700">담당자: 김성실 매니저</span>
+              <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
               <span className="w-px h-2 bg-gray-200"></span>
-              <span>현재 상태: <span className="text-blue-600 font-bold">진행중</span></span>
+              <span>현재 상태: <span className="text-blue-600 font-bold">{profile?.status ?? "진행중"}</span></span>
             </p>
           </div>
         </div>
@@ -71,81 +86,89 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-gray-800 flex items-center gap-2">
-              <UserCircle size={16} className="text-gray-500" />
-              개인정보 요약
-            </h3>
-            <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-1 rounded">
-              {stage === "Stage 1" ? "Stage 1: 케이스ID 기반 식별" : "Stage 2+: 비식별 처리 적용"}
-            </span>
-          </div>
-          {profile ? (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-              <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                <p className="text-[10px] text-gray-400 font-bold uppercase">식별 키</p>
-                <p className="mt-1 font-bold text-gray-800">
-                  {stage === "Stage 1" ? profile.id : `${maskName(profile.profile.name)} (${profile.id})`}
-                </p>
+        {stage === "Stage 1" ? (
+          <>
+            <Stage1CaseIdentity caseRecord={profile} />
+            <Stage1OpsDetail caseRecord={profile} />
+          </>
+        ) : (
+          <>
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                  <UserCircle size={16} className="text-gray-500" />
+                  개인정보 요약
+                </h3>
+                <span className="text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                  {stage === "Stage 1" ? "Stage 1: 케이스ID 기반 식별" : "Stage 2+: 비식별 처리 적용"}
+                </span>
               </div>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                <p className="text-[10px] text-gray-400 font-bold uppercase">연령</p>
-                <p className="mt-1 font-bold text-gray-800">
-                  {stage === "Stage 1" ? toAgeBand(profile.profile.age) : `${profile.profile.age}세`}
-                </p>
-              </div>
-              <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-                <p className="text-[10px] text-gray-400 font-bold uppercase">연락처</p>
-                <p className="mt-1 font-bold text-gray-800">
-                  {maskPhone(profile.profile.phone)}
-                </p>
-                {stage === "Stage 1" && profile.profile.guardianPhone && (
-                  <p className="mt-1 text-[11px] text-gray-500">보호자: {maskPhone(profile.profile.guardianPhone)}</p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <p className="text-xs text-gray-500">케이스 프로필 데이터가 없어 기본 식별 정보만 표시합니다.</p>
-          )}
-        </div>
-
-        {stage === "Stage 1" && <Stage1Detail caseRecord={profile} />}
-        {stage === "Stage 2" && <Stage2Detail />}
-        {stage === "Stage 3" && <Stage3Detail />}
-
-        {/* 하단 고정 감사 로그/히스토리 */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-          <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
-            <h3 className="font-bold text-gray-800 flex items-center gap-2">
-              <History size={16} className="text-gray-400" />
-              변경 사유 및 감사 로그
-            </h3>
-            <div className="flex items-center gap-3">
-              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded flex items-center gap-1">
-                <ShieldCheck size={10} /> 보안 무결성 확인됨
-              </span>
-              <button className="text-[10px] font-bold text-gray-400 hover:text-gray-600">로그 내보내기</button>
-            </div>
-          </div>
-          <div className="space-y-3">
-            {[
-              { time: "2026-02-11 11:20", user: "김성실", action: "관리 경로 변경", reason: "재평가 트리거 충족 (점수 하락 15% 초과)", logId: "LOG-9921" },
-              { time: "2026-02-10 14:45", user: "박민지", action: "데이터 품질 승인", reason: "누락된 정보 보완 완료 확인", logId: "LOG-8842" },
-              { time: "2026-02-09 10:00", user: "System", action: "Stage 승급", reason: "2차 평가 데이터 입력 완료에 따른 자동 전환", logId: "LOG-7710" },
-            ].map((log, idx) => (
-              <div key={idx} className="flex gap-4 text-xs group">
-                <div className="w-32 shrink-0 font-mono text-gray-400">{log.time}</div>
-                <div className="shrink-0 font-bold text-gray-700 w-20">{log.user}</div>
-                <div className="flex-1">
-                  <span className="font-bold text-[#163b6f]">{log.action}: </span>
-                  <span className="text-gray-600">{log.reason}</span>
+              {profile ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <p className="text-[10px] text-gray-400 font-bold uppercase">식별 키</p>
+                    <p className="mt-1 font-bold text-gray-800">
+                      {stage === "Stage 1" ? profile.id : `${maskName(profile.profile.name)} (${profile.id})`}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <p className="text-[10px] text-gray-400 font-bold uppercase">연령</p>
+                    <p className="mt-1 font-bold text-gray-800">
+                      {stage === "Stage 1" ? toAgeBand(profile.profile.age) : `${profile.profile.age}세`}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <p className="text-[10px] text-gray-400 font-bold uppercase">연락처</p>
+                    <p className="mt-1 font-bold text-gray-800">
+                      {maskPhone(profile.profile.phone)}
+                    </p>
+                    {stage === "Stage 1" && profile.profile.guardianPhone && (
+                      <p className="mt-1 text-[11px] text-gray-500">보호자: {maskPhone(profile.profile.guardianPhone)}</p>
+                    )}
+                  </div>
                 </div>
-                <div className="shrink-0 font-mono text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">#{log.logId}</div>
+              ) : (
+                <p className="text-xs text-gray-500">케이스 프로필 데이터가 없어 기본 식별 정보만 표시합니다.</p>
+              )}
+            </div>
+
+            {stage === "Stage 2" && <Stage2Detail />}
+            {stage === "Stage 3" && <Stage3Detail />}
+
+            {/* 하단 고정 감사 로그/히스토리 */}
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+              <div className="flex items-center justify-between mb-4 pb-2 border-b border-gray-100">
+                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                  <History size={16} className="text-gray-400" />
+                  변경 사유 및 감사 로그
+                </h3>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded flex items-center gap-1">
+                    <ShieldCheck size={10} /> 보안 무결성 확인됨
+                  </span>
+                  <button className="text-[10px] font-bold text-gray-400 hover:text-gray-600">로그 내보내기</button>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
+              <div className="space-y-3">
+                {[
+                  { time: "2026-02-11 11:20", user: "김성실", action: "관리 경로 변경", reason: "재평가 트리거 충족 (점수 하락 15% 초과)", logId: "LOG-9921" },
+                  { time: "2026-02-10 14:45", user: "박민지", action: "데이터 품질 승인", reason: "누락된 정보 보완 완료 확인", logId: "LOG-8842" },
+                  { time: "2026-02-09 10:00", user: "System", action: "Stage 승급", reason: "2차 평가 데이터 입력 완료에 따른 자동 전환", logId: "LOG-7710" },
+                ].map((log, idx) => (
+                  <div key={idx} className="flex gap-4 text-xs group">
+                    <div className="w-32 shrink-0 font-mono text-gray-400">{log.time}</div>
+                    <div className="shrink-0 font-bold text-gray-700 w-20">{log.user}</div>
+                    <div className="flex-1">
+                      <span className="font-bold text-[#163b6f]">{log.action}: </span>
+                      <span className="text-gray-600">{log.reason}</span>
+                    </div>
+                    <div className="shrink-0 font-mono text-[10px] text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">#{log.logId}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -154,6 +177,16 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
 /* Stage 1 Case Detail */
 function Stage1Detail({ caseRecord }: { caseRecord?: CaseRecord }) {
   const contactPriority = getStage1ContactPriority(caseRecord);
+  const interventionPlan = getStage1InterventionPlan(caseRecord);
+  const interventionGuides = getStage1InterventionGuides();
+  const qualityLabel = caseRecord?.quality ?? "양호";
+  const qualityTone =
+    qualityLabel === "경고"
+      ? "bg-red-50 text-red-700 border-red-100"
+      : qualityLabel === "주의"
+        ? "bg-orange-50 text-orange-700 border-orange-100"
+        : "bg-emerald-50 text-emerald-700 border-emerald-100";
+  const qualityScore = qualityLabel === "경고" ? "62%" : qualityLabel === "주의" ? "81%" : "100%";
 
   return (
     <div className="grid grid-cols-12 gap-6">
@@ -168,16 +201,71 @@ function Stage1Detail({ caseRecord }: { caseRecord?: CaseRecord }) {
             </div>
             <div className="flex flex-col">
               <span className="text-[10px] font-bold text-gray-400 uppercase">개입 레벨</span>
-              <span className="text-sm font-bold text-[#163b6f]">{caseRecord?.path ?? "초기 안내"}</span>
+              <div className="mt-1 flex items-center gap-2">
+                <span className={cn("inline-flex items-center rounded-md border px-2.5 py-1 text-sm font-bold", interventionPlan.guide.tone)}>
+                  {interventionPlan.level} · {interventionPlan.guide.label}
+                </span>
+                <span className="text-[11px] text-gray-500">{interventionPlan.guide.purpose}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {interventionGuides.map((guide) => (
+                  <div key={guide.level} className="relative group">
+                    <button
+                      type="button"
+                      className={cn(
+                        "rounded-md border px-2 py-1 text-[10px] font-bold transition-colors",
+                        guide.level === interventionPlan.level
+                          ? guide.tone
+                          : "text-gray-500 bg-white border-gray-200 hover:bg-gray-50"
+                      )}
+                    >
+                      {guide.level}
+                    </button>
+                    <div className="pointer-events-none absolute left-1/2 top-full z-20 hidden w-72 -translate-x-1/2 pt-2 group-hover:block">
+                      <div className="rounded-lg border border-gray-200 bg-white p-3 text-left shadow-xl">
+                        <p className="text-xs font-bold text-gray-900">
+                          {guide.level} · {guide.label}
+                        </p>
+                        <p className="mt-1 text-[11px] text-gray-600">{guide.purpose}</p>
+                        <p className="mt-1 text-[11px] text-gray-500">적용 시점: {guide.whenToUse}</p>
+                        <div className="mt-2 space-y-1">
+                          {guide.actions.map((action) => (
+                            <p key={action} className="text-[11px] text-gray-600">
+                              · {action}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="flex flex-col">
               <span className="text-[10px] font-bold text-gray-400 uppercase">연계 상태</span>
               <span className="text-sm font-bold text-orange-600">{caseRecord?.status ?? "검토중"}</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-gray-400">데이터 품질</span>
-            <span className="px-2 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded border border-emerald-100">양호 (100%)</span>
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-gray-400">데이터 품질</span>
+              <span className={cn("px-2 py-1 text-[10px] font-bold rounded border", qualityTone)}>
+                {qualityLabel} ({qualityScore})
+              </span>
+            </div>
+            {interventionPlan.exceptionState && (
+              <div className="flex items-center gap-2">
+                <span className={cn(
+                  "px-2 py-0.5 rounded border text-[10px] font-bold",
+                  interventionPlan.exceptionState === "제외"
+                    ? "text-red-700 bg-red-50 border-red-200"
+                    : "text-amber-700 bg-amber-50 border-amber-200"
+                )}>
+                  예외: {interventionPlan.exceptionState}
+                </span>
+                <span className="text-[10px] text-gray-500">{interventionPlan.exceptionReason}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -223,25 +311,47 @@ function Stage1Detail({ caseRecord }: { caseRecord?: CaseRecord }) {
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
           <h3 className="font-bold text-gray-800 mb-4">운영 액션</h3>
           <div className="space-y-3">
-            <button className="w-full p-4 border border-gray-100 rounded-xl hover:bg-gray-50 text-left transition-all group">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-bold text-gray-400">L0: 정보 제공 기록</span>
-                <CheckCircle2 size={16} className="text-gray-300 group-hover:text-emerald-500" />
+            {interventionGuides.map((guide) => (
+              <div key={guide.level} className="relative">
+                <button
+                  className={cn(
+                    "w-full p-4 rounded-xl text-left transition-all border",
+                    guide.level === interventionPlan.level
+                      ? "border-2 border-[#163b6f] bg-blue-50/20 hover:bg-blue-50"
+                      : "border-gray-100 hover:bg-gray-50"
+                  )}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={cn("text-xs font-bold", guide.level === interventionPlan.level ? "text-[#163b6f]" : "text-gray-500")}>
+                      {guide.level}: {guide.label}
+                    </span>
+                    {guide.level === "L0" && <CheckCircle2 size={16} className="text-gray-300" />}
+                    {guide.level === "L1" && <MessageSquare size={16} className="text-gray-300" />}
+                    {guide.level === "L2" && <Phone size={16} className="text-gray-300" />}
+                    {guide.level === "L3" && <ArrowRight size={16} className="text-gray-300" />}
+                  </div>
+                  <p className="text-[10px] text-gray-500">{guide.purpose}</p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {guide.actions.slice(0, 2).map((action) => (
+                      <span key={`${guide.level}-${action}`} className="text-[9px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
+                        {action}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+                {guide.level === "L3" && (
+                  <div className="absolute -top-2 -right-2 px-2 py-0.5 bg-red-600 text-white text-[9px] font-bold rounded-full shadow-lg border-2 border-white flex items-center gap-1">
+                    <Lock size={8} /> 정책 게이트 확인
+                  </div>
+                )}
               </div>
-              <p className="text-[10px] text-gray-400">치매 예방 브로슈어 및 서비스 안내 발송</p>
-            </button>
-            <button className="w-full p-4 border border-gray-100 rounded-xl hover:bg-gray-50 text-left transition-all group">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-bold text-gray-400">L1: 자가점검/안내 발송</span>
-                <MessageSquare size={16} className="text-gray-300 group-hover:text-blue-500" />
-              </div>
-              <p className="text-[10px] text-gray-400">정기 자가검진 키트(비대면) 발송 예약</p>
-            </button>
-            
-            <div className="relative">
-              <button className="w-full p-4 border-2 border-[#163b6f] bg-blue-50/20 rounded-xl hover:bg-blue-50 text-left transition-all">
+            ))}
+
+            {interventionPlan.level === "L3" && (
+              <div className="relative">
+                <button className="w-full p-4 border-2 border-[#163b6f] bg-blue-50/20 rounded-xl hover:bg-blue-50 text-left transition-all">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-bold text-[#163b6f]">L2 후보: 2차 연계 요청</span>
+                  <span className="text-xs font-bold text-[#163b6f]">L3 실행: 2차 연계 요청</span>
                   <ArrowRight size={16} className="text-[#163b6f]" />
                 </div>
                 <div className="flex flex-wrap gap-1.5 mt-2">
@@ -249,18 +359,18 @@ function Stage1Detail({ caseRecord }: { caseRecord?: CaseRecord }) {
                   <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">채널 확인 完</span>
                   <span className="text-[9px] font-bold bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">목적 고지 중</span>
                 </div>
-              </button>
-              {/* Gate Policy Badge */}
-              <div className="absolute -top-2 -right-2 px-2 py-0.5 bg-red-600 text-white text-[9px] font-bold rounded-full shadow-lg border-2 border-white flex items-center gap-1">
-                <Lock size={8} /> 정책 게이트 미충족
+                </button>
+                <div className="absolute -top-2 -right-2 px-2 py-0.5 bg-red-600 text-white text-[9px] font-bold rounded-full shadow-lg border-2 border-white flex items-center gap-1">
+                  <Lock size={8} /> 정책 게이트 미충족
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
         <div className="bg-gray-900 text-white rounded-xl p-4 shadow-sm">
           <p className="text-[10px] font-bold opacity-50 uppercase mb-2">운영자 주석</p>
           <p className="text-xs leading-relaxed">
-            대상자가 2차 연계 목적에 대해 재설명을 요청했습니다. 전화 상담 후 게이트 승인을 완료하십시오.
+            현재 개입 레벨은 {interventionPlan.level}({interventionPlan.guide.label})입니다. {interventionPlan.guide.whenToUse}
           </p>
         </div>
       </div>
@@ -268,7 +378,10 @@ function Stage1Detail({ caseRecord }: { caseRecord?: CaseRecord }) {
       {/* 하단 담당자 액션 로그 (Stage 1 특화) */}
       <div className="col-span-12">
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-[10px] text-gray-500 italic text-center">
-          * 운영자 주석: L2 후보로 분류된 케이스입니다. 개인정보 활용 동의 및 채널 고지가 완료되었으므로 연계 요청을 실행해 주십시오. (마지막 로그: 김성실, 2026-02-11 11:45)
+          * 운영자 주석: {interventionPlan.level} 경로 기준으로 액션 큐가 정렬되어 있습니다.
+          {interventionPlan.exceptionState
+            ? ` 예외 상태(${interventionPlan.exceptionState}) 해제 후 다음 단계를 실행해 주세요.`
+            : " 정책 게이트 확인 후 순차 실행해 주세요."}
         </div>
       </div>
     </div>
@@ -350,7 +463,7 @@ function Stage2Detail() {
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
           <div className="bg-gray-100/80 px-6 py-3 border-b border-gray-200 flex items-center justify-between">
             <h3 className="text-xs font-bold text-gray-600 uppercase flex items-center gap-2">
-              <Lock size={14} className="text-orange-500" /> 참고 분류 (의료진 확인 전 - 비진단형)
+              <Lock size={14} className="text-orange-500" /> 참고 분류 (의료진 확인 전)
             </h3>
             {!showSensitive && (
               <button 

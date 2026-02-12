@@ -4,6 +4,8 @@ export type CaseRisk = "고" | "중" | "저";
 export type CaseStatus = "진행중" | "대기" | "완료" | "임박" | "지연";
 export type CaseQuality = "양호" | "주의" | "경고";
 export type ContactPriority = "즉시" | "높음" | "보통" | "낮음";
+export type Stage1InterventionLevel = "L0" | "L1" | "L2" | "L3";
+export type Stage1ExceptionState = "제외" | "보류" | null;
 
 export const ALERT_FILTER_TABS = [
   "전체",
@@ -39,6 +41,50 @@ export type CaseRecord = {
   profile: Profile;
   alertTags: AlertTag[];
 };
+
+export type Stage1InterventionGuide = {
+  level: Stage1InterventionLevel;
+  label: string;
+  tone: string;
+  purpose: string;
+  whenToUse: string;
+  actions: string[];
+};
+
+const STAGE1_INTERVENTION_GUIDES: Stage1InterventionGuide[] = [
+  {
+    level: "L0",
+    label: "관찰(기록 중심)",
+    tone: "text-gray-700 bg-gray-100 border-gray-200",
+    purpose: "즉시 조치보다 기록과 모니터링 중심",
+    whenToUse: "위험 신호가 낮거나 데이터 근거가 약한 경우",
+    actions: ["운영 지원 안내 완료 기록", "재접촉 예정일 등록", "연락처/보호자 데이터 보강 요청"],
+  },
+  {
+    level: "L1",
+    label: "안내(자가점검/정보제공)",
+    tone: "text-blue-700 bg-blue-50 border-blue-200",
+    purpose: "가벼운 개입으로 참여 반응 확인",
+    whenToUse: "연락은 가능하지만 연계 실행은 이른 경우",
+    actions: ["안내문 또는 자가점검 링크 발송", "보호자 연락처 선택/확인 요청", "재평가 트리거(예: 미응답 7일) 설정"],
+  },
+  {
+    level: "L2",
+    label: "접촉(상담사 직접 연락)",
+    tone: "text-orange-700 bg-orange-50 border-orange-200",
+    purpose: "전화 상담으로 상태 확인 및 다음 단계 연결",
+    whenToUse: "SLA 임박, 미응답 누적, 위험 신호 중간 이상",
+    actions: ["전화 시도 및 실패 재시도 스케줄 생성", "필요 시 보호자 우선 접촉 전환", "2차 평가 예약 유도 준비"],
+  },
+  {
+    level: "L3",
+    label: "연계 강화(2차 연결 요청)",
+    tone: "text-purple-700 bg-purple-50 border-purple-200",
+    purpose: "Stage 1 내 최고 강도 행정 실행",
+    whenToUse: "위험 신호가 높고 SLA/장기대기 리스크가 큰 경우",
+    actions: ["2차 평가 연계 요청", "예약/의뢰서 생성", "정책 게이트 미충족 시 사유 확인 후 보완"],
+  },
+];
 
 export const CASE_RECORDS: CaseRecord[] = [
   {
@@ -426,6 +472,74 @@ export function getStage1ContactPriority(
   }
 
   return { label: "낮음", tone: "text-emerald-700 bg-emerald-50 border-emerald-200" };
+}
+
+export type Stage1InterventionPlan = {
+  level: Stage1InterventionLevel;
+  guide: Stage1InterventionGuide;
+  exceptionState: Stage1ExceptionState;
+  exceptionReason?: string;
+};
+
+export function getStage1InterventionGuides(): Stage1InterventionGuide[] {
+  return STAGE1_INTERVENTION_GUIDES;
+}
+
+export function getStage1InterventionPlan(
+  item?: Pick<CaseRecord, "stage" | "status" | "alertTags" | "risk" | "quality">
+): Stage1InterventionPlan {
+  const fallbackGuide = STAGE1_INTERVENTION_GUIDES[1];
+
+  if (!item || item.stage !== "Stage 1") {
+    return {
+      level: fallbackGuide.level,
+      guide: fallbackGuide,
+      exceptionState: null,
+    };
+  }
+
+  const isUrgent =
+    item.status === "임박" ||
+    item.status === "지연" ||
+    item.alertTags.includes("SLA 임박") ||
+    item.alertTags.includes("이탈 위험");
+
+  const isHighSignal =
+    item.risk === "고" ||
+    item.alertTags.includes("재평가 필요") ||
+    item.alertTags.includes("MCI 미등록");
+
+  const isWaiting = item.status === "대기" || item.alertTags.includes("연계 대기");
+
+  let level: Stage1InterventionLevel = "L0";
+  let exceptionState: Stage1ExceptionState = null;
+  let exceptionReason: string | undefined;
+
+  if (item.quality === "경고") {
+    level = "L0";
+    exceptionState = "제외";
+    exceptionReason = "데이터 품질 보강 전까지 우선순위 산정 제외";
+  } else if (isHighSignal && (isUrgent || isWaiting)) {
+    level = "L3";
+  } else if (isUrgent || isHighSignal) {
+    level = "L2";
+  } else if (isWaiting || item.quality === "주의") {
+    level = "L1";
+  }
+
+  if (!exceptionState && item.status === "대기" && !isUrgent && !isHighSignal) {
+    exceptionState = "보류";
+    exceptionReason = "7일 후 자동 재상정";
+  }
+
+  const guide = STAGE1_INTERVENTION_GUIDES.find((entry) => entry.level === level) ?? fallbackGuide;
+
+  return {
+    level,
+    guide,
+    exceptionState,
+    exceptionReason,
+  };
 }
 
 export function toAgeBand(age: number): string {

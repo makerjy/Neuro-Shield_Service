@@ -134,6 +134,8 @@ export function LocalCenterApp({
     }
   };
 
+  const isCaseDetailView = activeTab === 'cases' && selectedCaseId !== null;
+
   return (
     <div className="flex h-screen w-full bg-gray-50 overflow-hidden text-slate-900 font-sans">
       <Sidebar
@@ -151,11 +153,13 @@ export function LocalCenterApp({
       />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <Header
-          activeTab={activeTab}
-          globalFilter={globalFilter}
-          setGlobalFilter={setGlobalFilter}
-        />
+        {!isCaseDetailView && (
+          <Header
+            activeTab={activeTab}
+            globalFilter={globalFilter}
+            setGlobalFilter={setGlobalFilter}
+          />
+        )}
 
         <main className="flex-1 overflow-y-auto p-6">
           {renderContent()}

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { 
   ArrowUpRight, 
   ArrowDownRight, 
@@ -142,6 +142,7 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
   centerName?: string,
 }) {
   const mapScope = resolveLocalMapScope(centerName);
+  const [hoveredPipelineStep, setHoveredPipelineStep] = useState<string | null>(null);
 
   return (
     <div className="space-y-6">
@@ -199,14 +200,40 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
                       : "from-blue-700 to-indigo-700";
 
               const progressWidth = Math.max(8, Math.min(step.rate, 100));
+              const isHovered = hoveredPipelineStep === step.name;
 
               return (
                 <button
                   key={step.name}
                   onClick={() => onNavigateToCases(step.name)}
-                  className="group relative text-left rounded-2xl border border-slate-200 bg-white shadow-[0_14px_28px_rgba(15,23,42,0.08)] transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_18px_34px_rgba(37,99,235,0.22)]"
+                  onPointerEnter={(event) => {
+                    if (event.pointerType !== "touch") {
+                      setHoveredPipelineStep(step.name);
+                    }
+                  }}
+                  onPointerMove={(event) => {
+                    if (event.pointerType !== "touch") {
+                      setHoveredPipelineStep(step.name);
+                    }
+                  }}
+                  onPointerLeave={() => setHoveredPipelineStep((prev) => (prev === step.name ? null : prev))}
+                  onMouseEnter={() => setHoveredPipelineStep(step.name)}
+                  onMouseLeave={() => setHoveredPipelineStep((prev) => (prev === step.name ? null : prev))}
+                  onFocus={() => setHoveredPipelineStep(step.name)}
+                  onBlur={() => setHoveredPipelineStep((prev) => (prev === step.name ? null : prev))}
+                  className={cn(
+                    "relative text-left rounded-2xl border border-slate-200 bg-white transition-all duration-200",
+                    isHovered
+                      ? "-translate-y-1 shadow-[0_18px_34px_rgba(37,99,235,0.22)]"
+                      : "shadow-[0_14px_28px_rgba(15,23,42,0.08)]"
+                  )}
                 >
-                  <div className="pointer-events-none absolute inset-x-4 -bottom-2 h-3 rounded-xl bg-slate-300/60 blur-sm group-hover:bg-blue-300/60" />
+                  <div
+                    className={cn(
+                      "pointer-events-none absolute inset-x-4 -bottom-2 h-3 rounded-xl blur-sm transition-colors",
+                      isHovered ? "bg-blue-300/60" : "bg-slate-300/60"
+                    )}
+                  />
                   <div className="relative rounded-2xl">
                     <div className="p-4">
                       <div className="flex items-center justify-between">

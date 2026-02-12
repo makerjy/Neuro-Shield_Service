@@ -40,9 +40,10 @@ interface CaseDetailProps {
   caseId: string;
   stage: StageType;
   onBack: () => void;
+  onOpenConsultation?: (caseId: string, entry: "call" | "sms") => void;
 }
 
-export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
+export function CaseDetail({ caseId, stage, onBack, onOpenConsultation }: CaseDetailProps) {
   if (stage === "Stage 2") {
     return <Stage2CaseWorkflow caseId={caseId} onBack={onBack} />;
   }
@@ -89,7 +90,7 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
         {stage === "Stage 1" ? (
           <>
             <Stage1CaseIdentity caseRecord={profile} />
-            <Stage1OpsDetail caseRecord={profile} />
+            <Stage1OpsDetail caseRecord={profile} onOpenConsultation={onOpenConsultation} />
           </>
         ) : (
           <>
@@ -270,11 +271,11 @@ function Stage1Detail({ caseRecord }: { caseRecord?: CaseRecord }) {
         </div>
       </div>
 
-      {/* 좌측 블록: 1차 점수 요약 */}
+      {/* 좌측 블록: 1차 검사 점수 */}
       <div className="col-span-8 space-y-6">
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="font-bold text-gray-800">1차 점수 요약</h3>
+            <h3 className="font-bold text-gray-800">1차 검사 점수</h3>
             <span className="text-[10px] text-gray-400 font-mono">Ver 2.1 (2026-02-10 14:00 산출)</span>
           </div>
           <div className="grid grid-cols-4 gap-4 mb-8">

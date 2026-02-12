@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  AlertCircle,
   ArrowRightCircle,
   Ban,
   Check,
@@ -22,6 +23,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "../shared";
 import {
+  getStage1ContactPriority,
   getStage1InterventionGuides,
   getStage1InterventionPlan,
   maskPhone,
@@ -45,6 +47,7 @@ type ConsoleFocus = "NONE" | "CALL" | "SMS";
 type CallTarget = "citizen" | "guardian";
 type SmsTarget = "citizen" | "guardian";
 type SmsDispatchStatus = "DELIVERED" | "FAILED" | "PENDING";
+type CallScriptStep = "greeting" | "purpose" | "assessment" | "scheduling";
 
 type AuditLogEntry = {
   id: string;
@@ -127,6 +130,47 @@ const SMS_TEMPLATES: SmsTemplate[] = [
   },
 ];
 
+const CALL_SCRIPT_STEPS: Array<{
+  step: CallScriptStep;
+  title: string;
+  content: string;
+  tips: string[];
+  checkpoints: string[];
+}> = [
+  {
+    step: "greeting",
+    title: "1단계: 인사 및 본인 확인",
+    content:
+      "안녕하세요. 치매안심센터 운영 담당자입니다. 지금 통화 가능하신가요? 본인 확인을 위해 성함과 생년월일 앞자리를 확인드리겠습니다.",
+    tips: ["차분한 톤으로 시작", "통화 가능 여부 우선 확인", "확인 내용은 짧고 명확하게"],
+    checkpoints: ["통화 가능 확인", "본인/보호자 확인", "기본 응대 분위기 점검"],
+  },
+  {
+    step: "purpose",
+    title: "2단계: 연락 목적 고지",
+    content:
+      "이번 연락은 위험 신호 모니터링과 운영 지원 안내 목적입니다. 의료진 확인 전 단계의 참고 정보이며, 담당자 검토 후 다음 절차를 안내드립니다.",
+    tips: ["목적을 선명하게 안내", "불안 유발 표현 금지", "확인 전 단계임을 명시"],
+    checkpoints: ["목적 고지 문구 전달", "상대방 이해 여부 확인", "추가 문의 기록"],
+  },
+  {
+    step: "assessment",
+    title: "3단계: 현재 상황 확인",
+    content:
+      "최근 일상에서 불편했던 점이나 연락이 어려웠던 사유가 있었는지 확인드리겠습니다. 필요한 경우 보호자 연락으로 전환해 안내를 이어가겠습니다.",
+    tips: ["개방형 질문 우선", "기록 중심으로 정리", "재접촉 가능 시간 확인"],
+    checkpoints: ["현재 상황 확인", "연락 가능 시간대 확인", "추가 지원 필요 여부 확인"],
+  },
+  {
+    step: "scheduling",
+    title: "4단계: 다음 실행 정리",
+    content:
+      "오늘 확인 내용을 기준으로 다음 안내(문자/재접촉 일정/후속 경로 후보)를 정리하겠습니다. 회신 가능한 시간도 함께 확인하겠습니다.",
+    tips: ["다음 행동 1개로 요약", "문자 안내 여부 확인", "재접촉 일정 설정"],
+    checkpoints: ["다음 행동 합의", "문자 발송 동의 확인", "재접촉 시점 설정"],
+  },
+];
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -181,6 +225,68 @@ function mapDataQuality(raw?: CaseRecord["quality"]) {
     level: "GOOD" as DataQualityLevel,
     score: 96,
     notes: ["운영 실행 가능"],
+  };
+}
+
+function computePriorityValue(caseRecord?: CaseRecord) {
+  const statusScoreMap: Record<CaseRecord["status"], number> = {
+    진행중: 62,
+    대기: 76,
+    완료: 24,
+    임박: 88,
+    지연: 94,
+  };
+  const riskBoost: Record<CaseRecord["risk"], number> = {
+    저: 0,
+    중: 8,
+    고: 16,
+  };
+  const qualityPenalty: Record<CaseRecord["quality"], number> = {
+    양호: 0,
+    주의: 6,
+    경고: 18,
+  };
+
+  if (!caseRecord) {
+    return 60;
+  }
+
+  const alertBonus = Math.min(caseRecord.alertTags.length * 3, 12);
+  const raw = statusScoreMap[caseRecord.status] + riskBoost[caseRecord.risk] + alertBonus - qualityPenalty[caseRecord.quality];
+
+  return Math.max(5, Math.min(99, raw));
+}
+
+function priorityIndicator(value: number) {
+  if (value >= 85) {
+    return {
+      label: "긴급",
+      tone: "border-red-200 bg-red-50 text-red-700",
+      bar: "bg-red-500",
+      guide: "24시간 이내 접촉 실행",
+    };
+  }
+  if (value >= 65) {
+    return {
+      label: "우선",
+      tone: "border-orange-200 bg-orange-50 text-orange-700",
+      bar: "bg-orange-500",
+      guide: "당일 연락/안내 우선 처리",
+    };
+  }
+  if (value >= 45) {
+    return {
+      label: "일반",
+      tone: "border-blue-200 bg-blue-50 text-blue-700",
+      bar: "bg-blue-500",
+      guide: "정규 순서로 처리",
+    };
+  }
+  return {
+    label: "관찰",
+    tone: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    bar: "bg-emerald-500",
+    guide: "기록/모니터링 중심",
   };
 }
 
@@ -619,7 +725,13 @@ async function sendSmsApi(payload: {
   return false;
 }
 
-export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
+export function Stage1OpsDetail({
+  caseRecord,
+  onOpenConsultation,
+}: {
+  caseRecord?: CaseRecord;
+  onOpenConsultation?: (caseId: string, entry: "call" | "sms") => void;
+}) {
   const [detail, setDetail] = useState<Stage1Detail>(() => buildInitialStage1Detail(caseRecord));
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() =>
     buildInitialAuditLogs(caseRecord, buildInitialStage1Detail(caseRecord))
@@ -632,8 +744,14 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
   const [callActive, setCallActive] = useState(false);
   const [callSeconds, setCallSeconds] = useState(0);
   const [callMemo, setCallMemo] = useState("");
+  const [callResultDraft, setCallResultDraft] = useState<"SUCCESS" | "NO_ANSWER" | "REJECTED" | "WRONG_NUMBER">(
+    "SUCCESS"
+  );
 
-  const [smsTarget, setSmsTarget] = useState<SmsTarget>("citizen");
+  const [smsTargets, setSmsTargets] = useState<{ citizen: boolean; guardian: boolean }>({
+    citizen: true,
+    guardian: false,
+  });
   const [smsTemplateId, setSmsTemplateId] = useState(SMS_TEMPLATES[0].id);
   const [smsScheduleType, setSmsScheduleType] = useState<"NOW" | "SCHEDULE">("NOW");
   const [smsScheduledAt, setSmsScheduledAt] = useState("");
@@ -656,7 +774,8 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
     setCallActive(false);
     setCallSeconds(0);
     setCallMemo("");
-    setSmsTarget("citizen");
+    setCallResultDraft("SUCCESS");
+    setSmsTargets({ citizen: true, guardian: false });
     setSmsTemplateId(SMS_TEMPLATES[0].id);
     setSmsScheduleType("NOW");
     setSmsScheduledAt("");
@@ -720,7 +839,11 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
     (callTarget === "guardian" && !hasGuardianPhone ? "보호자 연락처가 없습니다" : undefined);
   const smsDisabledReason =
     smsGateReason ??
-    (smsTarget === "guardian" && !hasGuardianPhone ? "보호자 연락처가 없습니다" : undefined);
+    ((smsTargets.guardian && !hasGuardianPhone) || (!smsTargets.citizen && !smsTargets.guardian)
+      ? !smsTargets.citizen && !smsTargets.guardian
+        ? "수신 대상을 선택하세요"
+        : "보호자 연락처가 없습니다"
+      : undefined);
 
   const appendAuditLog = (message: string) => {
     const entry: AuditLogEntry = {
@@ -799,7 +922,6 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
 
     if (action === "OPEN_NOTICE_SCRIPT") {
       setScriptOpen(true);
-      setConsoleFocus("CALL");
       toast.success("처리 완료(로그 기록됨)");
       appendAuditLog("목적 고지 스크립트 열람");
       return;
@@ -842,6 +964,24 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
       nextStatus,
       reason: "",
     });
+  };
+
+  const openConsultationPage = (entry: "call" | "sms") => {
+    const label = entry === "call" ? "전화 상담" : "문자/연계";
+    appendTimeline({
+      type: "STATUS_CHANGE",
+      at: nowIso(),
+      from: "Stage1 상세",
+      to: "상담 서비스 화면",
+      reason: `${label} 페이지 이동`,
+      by: detail.header.assigneeName,
+    });
+    appendAuditLog(`${label} 페이지로 이동`);
+    if (onOpenConsultation) {
+      onOpenConsultation(detail.header.caseId, entry);
+      return;
+    }
+    toast.error("상담 페이지 이동 경로를 확인하세요");
   };
 
   const confirmReasonAction = () => {
@@ -919,7 +1059,7 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
     setOutcomeModal({
       mode: "CALL",
       title: "통화 결과 기록",
-      result: "SUCCESS",
+      result: callResultDraft,
       note: callMemo,
       durationSec: callSeconds,
     });
@@ -985,41 +1125,53 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
 
     const smsResult = outcomeModal.result;
     const message = smsPreview;
-    const targetPhone =
-      smsTarget === "guardian"
-        ? caseRecord?.profile.guardianPhone
-        : caseRecord?.profile.phone;
+    const targets: Array<{ key: SmsTarget; label: string; phone?: string }> = [
+      { key: "citizen", label: "본인", phone: caseRecord?.profile.phone },
+      { key: "guardian", label: "보호자", phone: caseRecord?.profile.guardianPhone },
+    ].filter((entry) => smsTargets[entry.key]);
 
-    let finalStatus: SmsDispatchStatus = smsResult;
+    const timelineAt = outcomeModal.scheduled && smsScheduledAt ? new Date(smsScheduledAt).toISOString() : nowIso();
+    let deliveredCount = 0;
+    let failedCount = 0;
 
-    if (!outcomeModal.scheduled && targetPhone && smsResult !== "FAILED") {
-      const ok = await sendSmsApi({
-        case_id: detail.header.caseId,
-        template_id: smsTemplateId,
-        citizen_phone: targetPhone,
-        message,
-        channel: "sms",
-        dedupe_key: `${detail.header.caseId}-${smsTemplateId}-${Date.now()}`,
-      });
+    for (const target of targets) {
+      let finalStatus: SmsDispatchStatus = smsResult;
 
-      if (!ok) {
-        finalStatus = "FAILED";
+      if (!outcomeModal.scheduled && target.phone && smsResult !== "FAILED") {
+        const ok = await sendSmsApi({
+          case_id: detail.header.caseId,
+          template_id: smsTemplateId,
+          citizen_phone: target.phone,
+          message,
+          channel: "sms",
+          dedupe_key: `${detail.header.caseId}-${smsTemplateId}-${target.label}-${Date.now()}`,
+        });
+        if (!ok) {
+          finalStatus = "FAILED";
+        }
       }
+
+      if (finalStatus === "DELIVERED" || finalStatus === "PENDING") {
+        deliveredCount += 1;
+      }
+      if (finalStatus === "FAILED") {
+        failedCount += 1;
+      }
+
+      appendTimeline({
+        type: "SMS_SENT",
+        at: timelineAt,
+        templateId: `${smsTemplateId}(${target.label})`,
+        status: finalStatus,
+        by: detail.header.assigneeName,
+      });
     }
 
-    appendTimeline({
-      type: "SMS_SENT",
-      at: outcomeModal.scheduled && smsScheduledAt ? new Date(smsScheduledAt).toISOString() : nowIso(),
-      templateId: smsTemplateId,
-      status: finalStatus,
-      by: detail.header.assigneeName,
-    });
-
     appendAuditLog(
-      `문자 ${outcomeModal.scheduled ? "예약" : "발송"}: ${smsTemplate.label} (${smsResultLabel(finalStatus)})`
+      `문자 ${outcomeModal.scheduled ? "예약" : "발송"}: ${smsTemplate.label} (${targets.length}건, 완료/예약 ${deliveredCount}, 실패 ${failedCount})`
     );
 
-    if (finalStatus === "DELIVERED") {
+    if (deliveredCount > 0) {
       completeSuggestedTodo("SMS");
       setRecontactDueAt(withHoursFromNow(48));
     }
@@ -1034,6 +1186,9 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
   const lastCallEvent = detail.timeline.find((event) => event.type === "CALL_ATTEMPT");
   const lastSmsEvent = detail.timeline.find((event) => event.type === "SMS_SENT");
   const isConsoleExpanded = consoleFocus !== "NONE";
+  const modelPriorityValue = useMemo(() => computePriorityValue(caseRecord), [caseRecord]);
+  const modelPriorityMeta = useMemo(() => priorityIndicator(modelPriorityValue), [modelPriorityValue]);
+  const contactPriority = useMemo(() => getStage1ContactPriority(caseRecord), [caseRecord]);
 
   return (
     <div className="space-y-5">
@@ -1044,6 +1199,13 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
         recontactCountdown={remainingTimeText(recontactDueAt, nowTick)}
       />
 
+      <Stage1ScorePanel
+        scoreSummary={detail.scoreSummary}
+        modelPriorityValue={modelPriorityValue}
+        modelPriorityMeta={modelPriorityMeta}
+        contactPriority={contactPriority}
+      />
+
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
         <section className={cn("space-y-4", isConsoleExpanded ? "xl:col-span-7" : "xl:col-span-8")}>
           <PolicyGatePanel gates={detail.policyGates} onFix={handleGateFixAction} />
@@ -1051,7 +1213,6 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
           <RiskSignalEvidencePanel
             evidence={detail.riskEvidence}
             quality={detail.header.dataQuality}
-            scoreSummary={detail.scoreSummary}
           />
 
           <ContactTimeline
@@ -1069,38 +1230,10 @@ export function Stage1OpsDetail({ caseRecord }: { caseRecord?: CaseRecord }) {
             onCancel={(todoId) => changeTodoStatus(todoId, "CANCELED")}
           />
 
-          <CallConsolePanel
-            focus={consoleFocus === "CALL"}
-            disabledReason={callDisabledReason}
-            callTarget={callTarget}
-            onTargetChange={setCallTarget}
-            callActive={callActive}
-            callDurationText={callDurationText}
-            callMemo={callMemo}
-            onMemoChange={setCallMemo}
-            onOpenScript={() => setScriptOpen(true)}
-            onStartCall={handleCallStart}
-            onStopCall={handleCallStop}
-            onFocus={() => setConsoleFocus("CALL")}
-            onFocusClose={() => setConsoleFocus("NONE")}
+          <ConsultationServicePanel
+            onOpenCall={() => openConsultationPage("call")}
+            onOpenSms={() => openConsultationPage("sms")}
             lastCallEvent={lastCallEvent}
-          />
-
-          <SmsConsolePanel
-            focus={consoleFocus === "SMS"}
-            disabledReason={smsDisabledReason}
-            smsTarget={smsTarget}
-            onTargetChange={setSmsTarget}
-            smsTemplateId={smsTemplateId}
-            onTemplateChange={setSmsTemplateId}
-            smsScheduleType={smsScheduleType}
-            onScheduleTypeChange={setSmsScheduleType}
-            smsScheduledAt={smsScheduledAt}
-            onScheduledAtChange={setSmsScheduledAt}
-            previewText={smsPreview}
-            onPrepareDispatch={handleSmsDispatchPrepare}
-            onFocus={() => setConsoleFocus("SMS")}
-            onFocusClose={() => setConsoleFocus("NONE")}
             lastSmsEvent={lastSmsEvent}
           />
 
@@ -1289,74 +1422,171 @@ export function PolicyGatePanel({ gates, onFix }: { gates: PolicyGate[]; onFix: 
 export function RiskSignalEvidencePanel({
   evidence,
   quality,
-  scoreSummary,
 }: {
   evidence: Stage1Detail["riskEvidence"];
   quality: CaseHeader["dataQuality"];
-  scoreSummary: Stage1Detail["scoreSummary"];
 }) {
   return (
-    <section className="space-y-4">
-      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-            <Layers size={15} className="text-slate-500" />
-            위험 신호 근거
-          </h3>
-          <span className="text-[11px] text-gray-500">산출 시각 {formatDateTime(evidence.computedAt)} · {evidence.version}</span>
-        </div>
+    <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+          <Layers size={15} className="text-slate-500" />
+          위험 신호 근거
+        </h3>
+        <span className="text-[11px] text-gray-500">산출 시각 {formatDateTime(evidence.computedAt)} · {evidence.version}</span>
+      </div>
 
-        <div className="mt-3 space-y-2">
-          {evidence.topFactors.slice(0, 3).map((factor) => (
-            <div key={factor.title} className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
-              <div className="flex items-center gap-2">
-                <p className="text-xs font-semibold text-slate-900">{factor.title}</p>
-                {factor.isMissing && (
-                  <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">누락 가능</span>
-                )}
-              </div>
-              <p className="mt-1 text-[11px] text-gray-600">{factor.description}</p>
-              <p className="mt-1 text-[10px] text-gray-400">최근성: {formatDateTime(factor.recency)}</p>
+      <div className="mt-3 space-y-2">
+        {evidence.topFactors.slice(0, 3).map((factor) => (
+          <div key={factor.title} className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold text-slate-900">{factor.title}</p>
+              {factor.isMissing && (
+                <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">누락 가능</span>
+              )}
             </div>
-          ))}
-        </div>
+            <p className="mt-1 text-[11px] text-gray-600">{factor.description}</p>
+            <p className="mt-1 text-[10px] text-gray-400">최근성: {formatDateTime(factor.recency)}</p>
+          </div>
+        ))}
+      </div>
 
-        <div className="mt-3 rounded-md border border-gray-100 bg-white px-3 py-2 text-[11px] text-gray-600">
-          <p>데이터 최신성: 최근 48시간 내 동기화 기준</p>
-          <p title="품질 점수는 누락 필드, 연락처 검증, 최근성 기준의 운영 점수입니다.">품질 점수: {quality.score}% (툴팁 확인 가능)</p>
-          <p>누락 필드: {quality.notes?.join(", ") ?? "없음"}</p>
+      <div className="mt-3 rounded-md border border-gray-100 bg-white px-3 py-2 text-[11px] text-gray-600">
+        <p>데이터 최신성: 최근 48시간 내 동기화 기준</p>
+        <p title="품질 점수는 누락 필드, 연락처 검증, 최근성 기준의 운영 점수입니다.">품질 점수: {quality.score}% (툴팁 확인 가능)</p>
+        <p>누락 필드: {quality.notes?.join(", ") ?? "없음"}</p>
+      </div>
+    </section>
+  );
+}
+
+export function Stage1ScorePanel({
+  scoreSummary,
+  modelPriorityValue,
+  modelPriorityMeta,
+  contactPriority,
+}: {
+  scoreSummary: Stage1Detail["scoreSummary"];
+  modelPriorityValue: number;
+  modelPriorityMeta: { label: string; tone: string; bar: string; guide: string };
+  contactPriority: { label: string; tone: string };
+}) {
+  const clampedPriority = Math.max(0, Math.min(100, modelPriorityValue));
+  const topPercent = Math.max(1, 100 - clampedPriority);
+  const activeBand =
+    clampedPriority >= 85
+      ? "긴급"
+      : clampedPriority >= 65
+        ? "우선"
+        : clampedPriority >= 45
+          ? "일반"
+          : "관찰";
+  const scoreTone =
+    activeBand === "긴급"
+      ? "text-red-600"
+      : activeBand === "우선"
+        ? "text-orange-600"
+        : activeBand === "일반"
+          ? "text-blue-600"
+          : "text-emerald-600";
+  const stepCards = [
+    { key: "관찰", range: "0-44", tone: "border-emerald-300 bg-emerald-50 text-emerald-700", dot: "bg-emerald-500", guide: "기록/모니터링" },
+    { key: "일반", range: "45-64", tone: "border-blue-300 bg-blue-50 text-blue-700", dot: "bg-blue-500", guide: "정규 순서 처리" },
+    { key: "우선", range: "65-84", tone: "border-orange-300 bg-orange-50 text-orange-700", dot: "bg-orange-500", guide: "당일 우선 처리" },
+    { key: "긴급", range: "85-100", tone: "border-red-300 bg-red-50 text-red-700", dot: "bg-red-500", guide: "24시간 내 실행" },
+  ] as const;
+
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-bold text-slate-900">1차 검사 점수</h3>
+        <div className="flex items-center gap-2">
+          <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-semibold", contactPriority.tone)}>
+            접촉 우선도 {contactPriority.label}
+          </span>
+          <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-semibold", modelPriorityMeta.tone)}>
+            모델 산출 우선도 지표 {modelPriorityMeta.label} {modelPriorityValue}
+          </span>
         </div>
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-        <h3 className="text-sm font-bold text-slate-900">1차 점수 요약</h3>
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
-          {scoreSummary.map((item) => (
-            <article key={item.label} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-              <p className="text-[11px] font-semibold text-gray-500">{item.label}</p>
-              <p className="mt-1 text-lg font-bold text-slate-900">
-                {item.value}
-                {item.unit ? <span className="ml-0.5 text-xs text-gray-400">{item.unit}</span> : null}
-              </p>
-              <p className="text-[10px] text-gray-400">업데이트 {formatDateTime(item.updatedAt)}</p>
-              {item.flags?.length ? (
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {item.flags.map((flag) => (
-                    <span key={`${item.label}-${flag}`} className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
-                      {flag}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <span className="mt-1 inline-flex rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
-                  정상
-                </span>
-              )}
-            </article>
-          ))}
+      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
+        {scoreSummary.map((item) => (
+          <article key={item.label} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <p className="text-[11px] font-semibold text-gray-500">{item.label}</p>
+            <p className="mt-1 text-lg font-bold text-slate-900">
+              {item.value}
+              {item.unit ? <span className="ml-0.5 text-xs text-gray-400">{item.unit}</span> : null}
+            </p>
+            <p className="text-[10px] text-gray-400">업데이트 {formatDateTime(item.updatedAt)}</p>
+            {item.flags?.length ? (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {item.flags.map((flag) => (
+                  <span key={`${item.label}-${flag}`} className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
+                    {flag}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <span className="mt-1 inline-flex rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                정상
+              </span>
+            )}
+          </article>
+        ))}
+      </div>
+
+      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center justify-between text-[11px] text-slate-700">
+          <span className="font-semibold">운영 우선도 Bullet Chart</span>
+          <span>{modelPriorityMeta.guide}</span>
         </div>
 
-        <p className="mt-3 text-[11px] text-gray-500">운영자가 지금 해야 할 행동: 점수 변동이 큰 항목 1개 확인 후 안내 메시지 선택</p>
+        <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-[210px,1fr]">
+          <div className="rounded-lg border border-white bg-white px-3 py-2">
+            <p className="text-[10px] font-semibold text-gray-500">현재 우선도 점수</p>
+            <p className={cn("mt-1 text-3xl font-black", scoreTone)}>{clampedPriority}</p>
+            <div className="mt-2 flex items-center justify-between">
+              <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-semibold", modelPriorityMeta.tone)}>
+                {activeBand}
+              </span>
+              <span className="text-[10px] font-semibold text-gray-500">상위 {topPercent}% 대상</span>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white bg-white px-3 py-3">
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+              {stepCards.map((step) => {
+                const isActive = step.key === activeBand;
+                return (
+                  <div
+                    key={step.key}
+                    className={cn(
+                      "rounded-lg border px-2 py-2 transition-colors",
+                      isActive ? step.tone : "border-gray-200 bg-gray-50 text-gray-500"
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-bold">{step.key}</p>
+                      <span
+                        className={cn(
+                          "h-2 w-2 rounded-full",
+                          isActive ? step.dot : "bg-gray-300"
+                        )}
+                      />
+                    </div>
+                    <p className="mt-0.5 text-[10px] font-semibold">{step.range}</p>
+                    <p className="mt-1 text-[10px]">{step.guide}</p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-2 rounded-md border border-gray-100 bg-gray-50 px-2 py-1.5 text-[11px] text-gray-600">
+              현재 위치: <span className={cn("font-bold", scoreTone)}>{activeBand}</span> · 점수 {clampedPriority}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -1489,6 +1719,68 @@ export function TodoChecklistPanel({
   );
 }
 
+function ConsultationServicePanel({
+  onOpenCall,
+  onOpenSms,
+  lastCallEvent,
+  lastSmsEvent,
+}: {
+  onOpenCall: () => void;
+  onOpenSms: () => void;
+  lastCallEvent?: ContactEvent;
+  lastSmsEvent?: ContactEvent;
+}) {
+  return (
+    <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+        <PhoneCall size={15} className="text-slate-500" />
+        상담/문자 실행
+      </h3>
+
+      <p className="mt-2 text-[11px] text-gray-500">
+        전화 상담과 문자 발송은 v1 상담 서비스 화면으로 이동해 처리합니다.
+      </p>
+
+      <div className="mt-3 space-y-2">
+        <button
+          onClick={onOpenCall}
+          className="inline-flex w-full items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-left hover:bg-blue-100"
+        >
+          <span className="inline-flex items-center gap-2 text-xs font-semibold text-blue-900">
+            <Phone size={13} /> 전화 상담 페이지 열기
+          </span>
+          <ArrowRightCircle size={14} className="text-blue-700" />
+        </button>
+
+        <button
+          onClick={onOpenSms}
+          className="inline-flex w-full items-center justify-between rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-left hover:bg-orange-100"
+        >
+          <span className="inline-flex items-center gap-2 text-xs font-semibold text-orange-900">
+            <MessageSquare size={13} /> 문자/연계 페이지 열기
+          </span>
+          <ArrowRightCircle size={14} className="text-orange-700" />
+        </button>
+      </div>
+
+      <div className="mt-3 space-y-1 rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+        <p className="text-[11px] text-gray-600">
+          최근 전화:{" "}
+          {lastCallEvent?.type === "CALL_ATTEMPT"
+            ? `${formatDateTime(lastCallEvent.at)} · ${eventTitle(lastCallEvent)}`
+            : "기록 없음"}
+        </p>
+        <p className="text-[11px] text-gray-600">
+          최근 문자:{" "}
+          {lastSmsEvent?.type === "SMS_SENT"
+            ? `${formatDateTime(lastSmsEvent.at)} · ${lastSmsEvent.templateId}`
+            : "기록 없음"}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 export function CallConsolePanel({
   focus,
   disabledReason,
@@ -1496,6 +1788,8 @@ export function CallConsolePanel({
   onTargetChange,
   callActive,
   callDurationText,
+  callResultDraft,
+  onResultDraftChange,
   callMemo,
   onMemoChange,
   onOpenScript,
@@ -1511,6 +1805,8 @@ export function CallConsolePanel({
   onTargetChange: (target: CallTarget) => void;
   callActive: boolean;
   callDurationText: string;
+  callResultDraft: "SUCCESS" | "NO_ANSWER" | "REJECTED" | "WRONG_NUMBER";
+  onResultDraftChange: (value: "SUCCESS" | "NO_ANSWER" | "REJECTED" | "WRONG_NUMBER") => void;
   callMemo: string;
   onMemoChange: (value: string) => void;
   onOpenScript: () => void;
@@ -1520,101 +1816,199 @@ export function CallConsolePanel({
   onFocusClose: () => void;
   lastCallEvent?: ContactEvent;
 }) {
+  const [currentStep, setCurrentStep] = useState<CallScriptStep>("greeting");
+  const [checkStates, setCheckStates] = useState<Record<string, boolean>>({});
+  const script = CALL_SCRIPT_STEPS.find((entry) => entry.step === currentStep) ?? CALL_SCRIPT_STEPS[0];
+
+  useEffect(() => {
+    setCurrentStep("greeting");
+    setCheckStates({});
+  }, [callTarget]);
+
   return (
     <section
       className={cn(
-        "rounded-xl border bg-white p-4 shadow-sm transition-all",
+        "rounded-xl border bg-white p-0 shadow-sm transition-all overflow-hidden",
         focus ? "border-blue-300 ring-2 ring-blue-100 shadow-lg" : "border-gray-200"
       )}
     >
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-          <PhoneCall size={15} className="text-slate-500" />
-          콜 실행 패널
-        </h3>
-        {focus ? (
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold text-blue-900 flex items-center gap-2">
+            <PhoneCall size={15} className="text-blue-700" />
+            상담 실행 엔진
+          </h3>
+          {focus ? (
+            <button
+              onClick={onFocusClose}
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-600"
+            >
+              <X size={11} /> 포커스 종료
+            </button>
+          ) : (
+            <button
+              onClick={onFocus}
+              className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-white px-2 py-1 text-[10px] font-semibold text-blue-700"
+            >
+              <ExternalLink size={11} /> 포커스
+            </button>
+          )}
+        </div>
+        <p className="mt-1 text-[11px] text-blue-700">구버전 상담 화면 흐름(단계 선택/스크립트/결과 기록)을 v2 운영 콘솔에 맞춰 반영</p>
+      </div>
+
+      <div className="p-4 space-y-3">
+        <div className="grid grid-cols-2 gap-2">
           <button
-            onClick={onFocusClose}
-            className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[10px] font-semibold text-gray-600"
+            onClick={() => onTargetChange("citizen")}
+            className={cn(
+              "flex items-center gap-2 rounded-lg border-2 px-3 py-2.5 text-left transition-colors",
+              callTarget === "citizen" ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-gray-50 hover:border-gray-300"
+            )}
           >
-            <X size={11} /> 포커스 종료
+            <div className={cn("h-3 w-3 rounded-full border-2", callTarget === "citizen" ? "border-blue-500 bg-blue-500" : "border-gray-300")} />
+            <div>
+              <p className="text-xs font-semibold text-slate-900">대상자 본인</p>
+              <p className="text-[10px] text-gray-500">상담 기본 대상</p>
+            </div>
           </button>
-        ) : (
           <button
-            onClick={onFocus}
-            className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700"
+            onClick={() => onTargetChange("guardian")}
+            className={cn(
+              "flex items-center gap-2 rounded-lg border-2 px-3 py-2.5 text-left transition-colors",
+              callTarget === "guardian" ? "border-violet-500 bg-violet-50" : "border-gray-200 bg-gray-50 hover:border-gray-300"
+            )}
           >
-            <ExternalLink size={11} /> 포커스
+            <div className={cn("h-3 w-3 rounded-full border-2", callTarget === "guardian" ? "border-violet-500 bg-violet-500" : "border-gray-300")} />
+            <div>
+              <p className="text-xs font-semibold text-slate-900">보호자</p>
+              <p className="text-[10px] text-gray-500">필요 시 우선 연락 전환</p>
+            </div>
           </button>
-        )}
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-[11px] font-semibold">
-        <button
-          onClick={() => onTargetChange("citizen")}
-          className={cn("rounded-md px-2 py-1", callTarget === "citizen" ? "bg-white shadow-sm text-slate-900" : "text-gray-500")}
-        >
-          본인
-        </button>
-        <button
-          onClick={() => onTargetChange("guardian")}
-          className={cn("rounded-md px-2 py-1", callTarget === "guardian" ? "bg-white shadow-sm text-slate-900" : "text-gray-500")}
-        >
-          보호자
-        </button>
-      </div>
-
-      <div className="mt-3 flex items-center gap-2">
-        <button
-          onClick={onOpenScript}
-          className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700"
-        >
-          <FilePenLine size={12} /> 목적고지 스크립트
-        </button>
-        <span className="text-[11px] text-gray-500">스크립트 확인 후 통화 실행</span>
-      </div>
-
-      <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
-        <p className="text-[11px] text-gray-500">통화 메모</p>
-        <textarea
-          value={callMemo}
-          onChange={(e) => onMemoChange(e.target.value)}
-          className="mt-1 h-16 w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs outline-none focus:border-blue-400"
-          placeholder="통화 중 확인한 사항을 기록하세요"
-        />
-      </div>
-
-      <div className="mt-3 flex items-center justify-between">
-        <div className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-[11px] font-semibold text-gray-700">
-          <Timer size={12} /> {callActive ? `통화 중 ${callDurationText}` : "대기"}
         </div>
 
-        {!callActive ? (
-          <button
-            onClick={onStartCall}
-            disabled={Boolean(disabledReason)}
-            title={disabledReason}
-            className="inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
-          >
-            <Phone size={12} /> 전화하기
-          </button>
-        ) : (
-          <button
-            onClick={onStopCall}
-            className="inline-flex items-center gap-1 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white"
-          >
-            <CheckCircle2 size={12} /> 통화 종료
-          </button>
-        )}
+        <div className="grid grid-cols-4 gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-[11px] font-semibold">
+          {CALL_SCRIPT_STEPS.map((step, idx) => (
+            <button
+              key={step.step}
+              onClick={() => setCurrentStep(step.step)}
+              className={cn(
+                "rounded-md px-2 py-1 transition-colors",
+                currentStep === step.step ? "bg-white text-slate-900 shadow-sm" : "text-gray-500 hover:bg-white"
+              )}
+            >
+              {idx + 1}단계
+            </button>
+          ))}
+        </div>
+
+        <div>
+          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-blue-900">{script.title}</p>
+              <button
+                onClick={onOpenScript}
+                className="inline-flex items-center gap-1 rounded border border-blue-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-blue-700"
+              >
+                <FilePenLine size={10} />
+                목적 고지
+              </button>
+            </div>
+            <p className="mt-2 whitespace-pre-line text-[11px] leading-relaxed text-blue-900">{script.content}</p>
+          </div>
+
+          <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2">
+            <div className="rounded-md border border-gray-100 bg-gray-50 p-2">
+              <p className="text-[11px] font-semibold text-gray-700">상담 팁</p>
+              <ul className="mt-1 space-y-1">
+                {script.tips.map((tip) => (
+                  <li key={tip} className="text-[10px] text-gray-600">• {tip}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="rounded-md border border-gray-100 bg-gray-50 p-2">
+              <p className="text-[11px] font-semibold text-gray-700">체크포인트</p>
+              <div className="mt-1 space-y-1">
+                {script.checkpoints.map((checkpoint) => (
+                  <label key={checkpoint} className="flex items-center gap-1 text-[10px] text-gray-600">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(checkStates[checkpoint])}
+                      onChange={(e) => setCheckStates((prev) => ({ ...prev, [checkpoint]: e.target.checked }))}
+                    />
+                    {checkpoint}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+          <p className="text-[11px] font-semibold text-gray-700">통화 결과(임시 선택)</p>
+          <div className="mt-1 grid grid-cols-2 gap-1 text-[11px]">
+            {[
+              { value: "SUCCESS", label: "성공", icon: CheckCircle2, tone: "text-emerald-700" },
+              { value: "NO_ANSWER", label: "부재", icon: Clock3, tone: "text-orange-700" },
+              { value: "REJECTED", label: "거절", icon: AlertCircle, tone: "text-red-700" },
+              { value: "WRONG_NUMBER", label: "번호 오류", icon: X, tone: "text-gray-700" },
+            ].map((option) => (
+              <label key={option.value} className="flex items-center gap-1 rounded border border-gray-200 bg-white px-2 py-1">
+                <input
+                  type="radio"
+                  name="call-result-draft"
+                  checked={callResultDraft === option.value}
+                  onChange={() => onResultDraftChange(option.value as "SUCCESS" | "NO_ANSWER" | "REJECTED" | "WRONG_NUMBER")}
+                />
+                <option.icon size={11} className={option.tone} />
+                {option.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+          <p className="text-[11px] text-gray-500">통화 메모</p>
+          <textarea
+            value={callMemo}
+            onChange={(e) => onMemoChange(e.target.value)}
+            className="mt-1 h-16 w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs outline-none focus:border-blue-400"
+            placeholder="통화 중 확인한 사항을 기록하세요"
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-[11px] font-semibold text-gray-700">
+            <Timer size={12} /> {callActive ? `통화 중 ${callDurationText}` : "대기"}
+          </div>
+
+          {!callActive ? (
+            <button
+              onClick={onStartCall}
+              disabled={Boolean(disabledReason)}
+              title={disabledReason}
+              className="inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
+            >
+              <Phone size={12} /> 전화하기
+            </button>
+          ) : (
+            <button
+              onClick={onStopCall}
+              className="inline-flex items-center gap-1 rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              <CheckCircle2 size={12} /> 통화 종료
+            </button>
+          )}
+        </div>
+
+        {disabledReason ? <p className="text-[11px] text-red-600">실행 불가: {disabledReason}</p> : null}
+
+        {lastCallEvent?.type === "CALL_ATTEMPT" ? (
+          <p className="text-[11px] text-gray-500">
+            최근 이력: {formatDateTime(lastCallEvent.at)} · {eventTitle(lastCallEvent)}
+          </p>
+        ) : null}
       </div>
-
-      {disabledReason ? <p className="mt-2 text-[11px] text-red-600">실행 불가: {disabledReason}</p> : null}
-
-      {lastCallEvent?.type === "CALL_ATTEMPT" ? (
-        <p className="mt-2 text-[11px] text-gray-500">
-          최근 이력: {formatDateTime(lastCallEvent.at)} · {eventTitle(lastCallEvent)}
-        </p>
-      ) : null}
     </section>
   );
 }
@@ -1622,8 +2016,9 @@ export function CallConsolePanel({
 export function SmsConsolePanel({
   focus,
   disabledReason,
-  smsTarget,
-  onTargetChange,
+  smsTargets,
+  onToggleTarget,
+  guardianAvailable,
   smsTemplateId,
   onTemplateChange,
   smsScheduleType,
@@ -1638,8 +2033,9 @@ export function SmsConsolePanel({
 }: {
   focus: boolean;
   disabledReason?: string;
-  smsTarget: SmsTarget;
-  onTargetChange: (target: SmsTarget) => void;
+  smsTargets: { citizen: boolean; guardian: boolean };
+  onToggleTarget: (target: SmsTarget, checked: boolean) => void;
+  guardianAvailable: boolean;
   smsTemplateId: string;
   onTemplateChange: (id: string) => void;
   smsScheduleType: "NOW" | "SCHEDULE";
@@ -1652,49 +2048,88 @@ export function SmsConsolePanel({
   onFocusClose: () => void;
   lastSmsEvent?: ContactEvent;
 }) {
+  const selectedCount = Number(smsTargets.citizen) + Number(smsTargets.guardian && guardianAvailable);
+
   return (
     <section
       className={cn(
-        "rounded-xl border bg-white p-4 shadow-sm transition-all",
-        focus ? "border-blue-300 ring-2 ring-blue-100 shadow-lg" : "border-gray-200"
+        "rounded-xl border bg-white p-0 shadow-sm transition-all overflow-hidden",
+        focus ? "border-orange-300 ring-2 ring-orange-100 shadow-lg" : "border-gray-200"
       )}
     >
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-          <MessageSquare size={15} className="text-slate-500" />
-          SMS 엔진
-        </h3>
-        {focus ? (
-          <button
-            onClick={onFocusClose}
-            className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[10px] font-semibold text-gray-600"
-          >
-            <X size={11} /> 포커스 종료
-          </button>
-        ) : (
-          <button
-            onClick={onFocus}
-            className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700"
-          >
-            <ExternalLink size={11} /> 포커스
-          </button>
-        )}
+      <div className="bg-gradient-to-r from-orange-50 to-amber-50 border-b border-orange-100 px-4 py-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-bold text-orange-900 flex items-center gap-2">
+            <MessageSquare size={15} className="text-orange-700" />
+            SMS 엔진
+          </h3>
+          {focus ? (
+            <button
+              onClick={onFocusClose}
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-600"
+            >
+              <X size={11} /> 포커스 종료
+            </button>
+          ) : (
+            <button
+              onClick={onFocus}
+              className="inline-flex items-center gap-1 rounded-md border border-orange-200 bg-white px-2 py-1 text-[10px] font-semibold text-orange-700"
+            >
+              <ExternalLink size={11} /> 포커스
+            </button>
+          )}
+        </div>
+        <p className="mt-1 text-[11px] text-orange-700">구버전 문자 발송 UI(대상 선택/템플릿/미리보기)를 v2 콘솔로 이식</p>
       </div>
 
-      <div className="mt-3 space-y-2">
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-[11px] font-semibold">
-          <button
-            onClick={() => onTargetChange("citizen")}
-            className={cn("rounded-md px-2 py-1", smsTarget === "citizen" ? "bg-white shadow-sm text-slate-900" : "text-gray-500")}
+      <div className="p-4 space-y-2">
+        <div className="space-y-2">
+          <label
+            className={cn(
+              "flex items-center gap-3 rounded-lg border-2 px-3 py-2.5 transition-colors",
+              smsTargets.citizen ? "border-orange-400 bg-orange-50" : "border-gray-200 bg-white hover:border-gray-300"
+            )}
           >
-            본인
-          </button>
-          <button
-            onClick={() => onTargetChange("guardian")}
-            className={cn("rounded-md px-2 py-1", smsTarget === "guardian" ? "bg-white shadow-sm text-slate-900" : "text-gray-500")}
+            <input
+              type="checkbox"
+              checked={smsTargets.citizen}
+              onChange={(e) => onToggleTarget("citizen", e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-orange-600"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-900">대상자 본인</p>
+              <p className="text-[11px] text-gray-500">기본 수신 대상</p>
+            </div>
+            {smsTargets.citizen ? (
+              <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">발송</span>
+            ) : null}
+          </label>
+
+          <label
+            className={cn(
+              "flex items-center gap-3 rounded-lg border-2 px-3 py-2.5 transition-colors",
+              !guardianAvailable
+                ? "border-dashed border-gray-200 bg-gray-50 opacity-60"
+                : smsTargets.guardian
+                  ? "border-blue-400 bg-blue-50"
+                  : "border-gray-200 bg-white hover:border-gray-300"
+            )}
           >
-            보호자
-          </button>
+            <input
+              type="checkbox"
+              checked={smsTargets.guardian && guardianAvailable}
+              onChange={(e) => onToggleTarget("guardian", e.target.checked)}
+              disabled={!guardianAvailable}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600"
+            />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-900">보호자</p>
+              <p className="text-[11px] text-gray-500">{guardianAvailable ? "추가 수신 가능" : "등록된 번호 없음"}</p>
+            </div>
+            {smsTargets.guardian && guardianAvailable ? (
+              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">발송</span>
+            ) : null}
+          </label>
         </div>
 
         <select
@@ -1736,25 +2171,26 @@ export function SmsConsolePanel({
         <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
           <p className="text-[11px] text-gray-500">미리보기</p>
           <p className="mt-1 text-[11px] text-gray-700 whitespace-pre-wrap">{previewText}</p>
+          <p className="mt-1 text-[10px] text-gray-400">예상 길이: {previewText.length}자</p>
         </div>
+
+        <button
+          onClick={onPrepareDispatch}
+          disabled={Boolean(disabledReason) || (smsScheduleType === "SCHEDULE" && !smsScheduledAt)}
+          title={disabledReason ?? (smsScheduleType === "SCHEDULE" && !smsScheduledAt ? "예약 시간을 입력하세요" : undefined)}
+          className="inline-flex w-full items-center justify-center gap-1 rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
+        >
+          <MessageSquare size={12} /> {smsScheduleType === "NOW" ? `SMS 발송 (${selectedCount}건)` : `SMS 예약 (${selectedCount}건)`}
+        </button>
+
+        {disabledReason ? <p className="text-[11px] text-red-600">실행 불가: {disabledReason}</p> : null}
+
+        {lastSmsEvent?.type === "SMS_SENT" ? (
+          <p className="text-[11px] text-gray-500">
+            최근 이력: {formatDateTime(lastSmsEvent.at)} · {lastSmsEvent.templateId} · {smsResultLabel(lastSmsEvent.status)}
+          </p>
+        ) : null}
       </div>
-
-      <button
-        onClick={onPrepareDispatch}
-        disabled={Boolean(disabledReason) || (smsScheduleType === "SCHEDULE" && !smsScheduledAt)}
-        title={disabledReason ?? (smsScheduleType === "SCHEDULE" && !smsScheduledAt ? "예약 시간을 입력하세요" : undefined)}
-        className="mt-3 inline-flex w-full items-center justify-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-300"
-      >
-        <MessageSquare size={12} /> {smsScheduleType === "NOW" ? "문자 발송" : "문자 예약"}
-      </button>
-
-      {disabledReason ? <p className="mt-2 text-[11px] text-red-600">실행 불가: {disabledReason}</p> : null}
-
-      {lastSmsEvent?.type === "SMS_SENT" ? (
-        <p className="mt-2 text-[11px] text-gray-500">
-          최근 이력: {formatDateTime(lastSmsEvent.at)} · {lastSmsEvent.templateId} · {smsResultLabel(lastSmsEvent.status)}
-        </p>
-      ) : null}
     </section>
   );
 }

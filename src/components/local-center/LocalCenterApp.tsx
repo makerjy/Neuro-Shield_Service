@@ -11,6 +11,7 @@ import { type StageType, type TabType } from './v2/shared';
 import { CaseDetailStage2 } from './CaseDetailStage2';
 import { CaseDetailStage3 } from './CaseDetailStage3';
 import { ConsultationPage } from './ConsultationPage';
+import { SmsOperationsPage } from './SmsOperationsPage';
 
 interface LocalCenterAppProps {
   userRole?: 'counselor' | 'center_manager';
@@ -29,7 +30,7 @@ export function LocalCenterApp({
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [selectedCaseStage, setSelectedCaseStage] = useState<StageType>('Stage 1');
   const [currentFilter, setCurrentFilter] = useState<string | null>(null);
-  const [caseSubView, setCaseSubView] = useState<'detail' | 'consultation' | 'stage-workflow'>('detail');
+  const [caseSubView, setCaseSubView] = useState<'detail' | 'consultation' | 'sms' | 'stage-workflow'>('detail');
   const [globalFilter, setGlobalFilter] = useState({
     period: 'today',
     manager: 'all',
@@ -56,9 +57,9 @@ export function LocalCenterApp({
     setCaseSubView('detail');
   };
 
-  const handleStartConsultation = (caseId: string) => {
+  const handleOpenCaseService = (caseId: string, entry: 'call' | 'sms' = 'call') => {
     setSelectedCaseId(caseId);
-    setCaseSubView('consultation');
+    setCaseSubView(entry === 'sms' ? 'sms' : 'consultation');
   };
 
   const renderContent = () => {
@@ -67,8 +68,18 @@ export function LocalCenterApp({
         return (
           <ConsultationPage
             caseId={selectedCaseId}
+            showReferralTab={false}
             onComplete={resetCaseSelection}
             onCancel={() => setCaseSubView('detail')}
+            onBack={() => setCaseSubView('detail')}
+          />
+        );
+      }
+
+      if (caseSubView === 'sms') {
+        return (
+          <SmsOperationsPage
+            caseId={selectedCaseId}
             onBack={() => setCaseSubView('detail')}
           />
         );
@@ -97,6 +108,7 @@ export function LocalCenterApp({
           caseId={selectedCaseId}
           stage={selectedCaseStage}
           onBack={resetCaseSelection}
+          onOpenConsultation={handleOpenCaseService}
         />
       );
     }

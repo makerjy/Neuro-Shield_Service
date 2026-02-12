@@ -46,6 +46,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 interface ConsultationPageProps {
   caseId: string;
   patientName?: string;
+  initialTab?: MainTab;
+  showReferralTab?: boolean;
   onComplete?: () => void;
   onCancel?: () => void;
   onBack?: () => void;
@@ -74,9 +76,17 @@ interface ConsultationHistory {
   actions: string[];
 }
 
-export function ConsultationPage({ caseId, patientName, onComplete, onCancel, onBack }: ConsultationPageProps) {
+export function ConsultationPage({
+  caseId,
+  patientName,
+  initialTab = 'consultation',
+  showReferralTab = true,
+  onComplete,
+  onCancel,
+  onBack,
+}: ConsultationPageProps) {
   // Tab Management
-  const [activeTab, setActiveTab] = useState<MainTab>('consultation');
+  const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   
   // Case Data
   const [caseStatus, setCaseStatus] = useState<CaseStatus>('new');
@@ -292,6 +302,16 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
       return () => clearInterval(interval);
     }
   }, [consultationNotes, autoSaveEnabled]);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (!showReferralTab && activeTab === 'referral') {
+      setActiveTab('consultation');
+    }
+  }, [showReferralTab, activeTab]);
 
   useEffect(() => {
     setScriptEditMode(false);
@@ -601,10 +621,12 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
                 <MessageSquare className="h-4 w-4 mr-2" />
                 상담 진행
               </TabsTrigger>
-              <TabsTrigger value="referral" className="data-[state=active]:bg-purple-50 data-[state=active]:text-purple-900">
-                <Link className="h-4 w-4 mr-2" />
-                연계/예약
-              </TabsTrigger>
+              {showReferralTab && (
+                <TabsTrigger value="referral" className="data-[state=active]:bg-purple-50 data-[state=active]:text-purple-900">
+                  <Link className="h-4 w-4 mr-2" />
+                  연계/예약
+                </TabsTrigger>
+              )}
               <TabsTrigger value="dropout" className="data-[state=active]:bg-orange-50 data-[state=active]:text-orange-900">
                 <UserX className="h-4 w-4 mr-2" />
                 이탈 관리
@@ -935,14 +957,20 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
 
                       {/* Quick Actions */}
                       <div className="grid grid-cols-2 gap-2">
-                        <Button 
-                          variant="outline" 
-                          onClick={() => setActiveTab('referral')}
-                          className="w-full"
-                        >
-                          <Link className="h-4 w-4 mr-2" />
-                          연계/예약
-                        </Button>
+                        {showReferralTab ? (
+                          <Button
+                            variant="outline"
+                            onClick={() => setActiveTab('referral')}
+                            className="w-full"
+                          >
+                            <Link className="h-4 w-4 mr-2" />
+                            연계/예약
+                          </Button>
+                        ) : (
+                          <div className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-center text-xs text-gray-500">
+                            문자/연계는 전용 페이지에서 처리
+                          </div>
+                        )}
                         <Button 
                           variant="outline" 
                           onClick={() => setActiveTab('dropout')}
@@ -977,136 +1005,138 @@ export function ConsultationPage({ caseId, patientName, onComplete, onCancel, on
             </TabsContent>
 
             {/* Tab 2: Referral & Appointment */}
-            <TabsContent value="referral" className="h-full m-0 p-6">
-              <div className="max-w-[1200px] mx-auto">
-                <Card>
-                  <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 border-b">
-                    <CardTitle className="flex items-center gap-2 text-purple-900">
-                      <Calendar className="h-5 w-5" />
-                      연계 및 예약
-                    </CardTitle>
-                    <CardDescription>
-                      센터 검사 예약, 보건소 안내, 의료기관 의뢰 등 - 저장 시 상담 기록에 자동 반영됩니다
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="p-6">
-                    <div className="grid grid-cols-2 gap-6">
-                      {/* Left: Appointment Details */}
-                      <div className="space-y-4">
-                        <div>
-                          <Label>연계 유형 *</Label>
-                          <RadioGroup 
-                            value={referralType} 
-                            onValueChange={(value: any) => setReferralType(value)}
-                            className="mt-2 space-y-2"
-                          >
-                            <div className="flex items-center space-x-2 border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                              <RadioGroupItem value="screening" id="screening" />
-                              <Label htmlFor="screening" className="font-normal flex items-center gap-2 cursor-pointer flex-1">
-                                <Brain className="h-4 w-4 text-purple-600" />
-                                센터 선별검사 예약
-                              </Label>
-                            </div>
-                            <div className="flex items-center space-x-2 border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                              <RadioGroupItem value="health_center" id="health_center" />
-                              <Label htmlFor="health_center" className="font-normal flex items-center gap-2 cursor-pointer flex-1">
-                                <Building2 className="h-4 w-4 text-blue-600" />
-                                보건소 안내
-                              </Label>
-                            </div>
-                            <div className="flex items-center space-x-2 border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                              <RadioGroupItem value="medical" id="medical" />
-                              <Label htmlFor="medical" className="font-normal flex items-center gap-2 cursor-pointer flex-1">
-                                <Hospital className="h-4 w-4 text-red-600" />
-                                의료기관 의뢰
-                              </Label>
-                            </div>
-                          </RadioGroup>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
+            {showReferralTab && (
+              <TabsContent value="referral" className="h-full m-0 p-6">
+                <div className="max-w-[1200px] mx-auto">
+                  <Card>
+                    <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 border-b">
+                      <CardTitle className="flex items-center gap-2 text-purple-900">
+                        <Calendar className="h-5 w-5" />
+                        연계 및 예약
+                      </CardTitle>
+                      <CardDescription>
+                        센터 검사 예약, 보건소 안내, 의료기관 의뢰 등 - 저장 시 상담 기록에 자동 반영됩니다
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-6">
+                      <div className="grid grid-cols-2 gap-6">
+                        {/* Left: Appointment Details */}
+                        <div className="space-y-4">
                           <div>
-                            <Label htmlFor="appointment-date">예약 날짜 *</Label>
-                            <Input
-                              id="appointment-date"
-                              type="date"
-                              value={appointmentDate}
-                              onChange={(e) => setAppointmentDate(e.target.value)}
+                            <Label>연계 유형 *</Label>
+                            <RadioGroup 
+                              value={referralType} 
+                              onValueChange={(value: any) => setReferralType(value)}
+                              className="mt-2 space-y-2"
+                            >
+                              <div className="flex items-center space-x-2 border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
+                                <RadioGroupItem value="screening" id="screening" />
+                                <Label htmlFor="screening" className="font-normal flex items-center gap-2 cursor-pointer flex-1">
+                                  <Brain className="h-4 w-4 text-purple-600" />
+                                  센터 선별검사 예약
+                                </Label>
+                              </div>
+                              <div className="flex items-center space-x-2 border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
+                                <RadioGroupItem value="health_center" id="health_center" />
+                                <Label htmlFor="health_center" className="font-normal flex items-center gap-2 cursor-pointer flex-1">
+                                  <Building2 className="h-4 w-4 text-blue-600" />
+                                  보건소 안내
+                                </Label>
+                              </div>
+                              <div className="flex items-center space-x-2 border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
+                                <RadioGroupItem value="medical" id="medical" />
+                                <Label htmlFor="medical" className="font-normal flex items-center gap-2 cursor-pointer flex-1">
+                                  <Hospital className="h-4 w-4 text-red-600" />
+                                  의료기관 의뢰
+                                </Label>
+                              </div>
+                            </RadioGroup>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <Label htmlFor="appointment-date">예약 날짜 *</Label>
+                              <Input
+                                id="appointment-date"
+                                type="date"
+                                value={appointmentDate}
+                                onChange={(e) => setAppointmentDate(e.target.value)}
+                                className="mt-2"
+                                min={new Date().toISOString().split('T')[0]}
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor="appointment-time">예약 시간 *</Label>
+                              <Select value={appointmentTime} onValueChange={setAppointmentTime}>
+                                <SelectTrigger id="appointment-time" className="mt-2">
+                                  <SelectValue placeholder="시간 선택" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="09:00">오전 09:00</SelectItem>
+                                  <SelectItem value="10:00">오전 10:00</SelectItem>
+                                  <SelectItem value="11:00">오전 11:00</SelectItem>
+                                  <SelectItem value="14:00">오후 02:00</SelectItem>
+                                  <SelectItem value="15:00">오후 03:00</SelectItem>
+                                  <SelectItem value="16:00">오후 04:00</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+
+                          <div>
+                            <Label htmlFor="pre-visit">방문 전 안내사항</Label>
+                            <Textarea
+                              id="pre-visit"
+                              value={preVisitNotes}
+                              onChange={(e) => setPreVisitNotes(e.target.value)}
+                              placeholder="예: 신분증 지참, 편한 복장 착용, 공복 불필요"
+                              rows={3}
                               className="mt-2"
-                              min={new Date().toISOString().split('T')[0]}
                             />
                           </div>
+                        </div>
+
+                        {/* Right: SMS Preview */}
+                        <div className="space-y-4">
                           <div>
-                            <Label htmlFor="appointment-time">예약 시간 *</Label>
-                            <Select value={appointmentTime} onValueChange={setAppointmentTime}>
-                              <SelectTrigger id="appointment-time" className="mt-2">
-                                <SelectValue placeholder="시간 선택" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="09:00">오전 09:00</SelectItem>
-                                <SelectItem value="10:00">오전 10:00</SelectItem>
-                                <SelectItem value="11:00">오전 11:00</SelectItem>
-                                <SelectItem value="14:00">오후 02:00</SelectItem>
-                                <SelectItem value="15:00">오후 03:00</SelectItem>
-                                <SelectItem value="16:00">오후 04:00</SelectItem>
-                              </SelectContent>
-                            </Select>
+                            <Label>SMS 발송 미리보기</Label>
+                            <div className="mt-2 bg-gray-900 text-white p-4 rounded-lg min-h-[200px] font-mono text-sm whitespace-pre-line">
+                              {smsPreview || '← 좌측에서 예약 정보를 입력하면 자동으로 SMS가 생성됩니다'}
+                            </div>
+                          </div>
+
+                          <Alert>
+                            <Send className="h-4 w-4" />
+                            <AlertDescription className="text-sm">
+                              <strong>수신번호:</strong> {caseData.phone}<br />
+                              예약 확정 시 자동으로 SMS가 발송되며, 상담 기록에 자동 반영됩니다.
+                            </AlertDescription>
+                          </Alert>
+
+                          <div className="flex gap-2">
+                            <Button 
+                              variant="outline"
+                              onClick={() => setActiveTab('consultation')} 
+                              className="flex-1"
+                            >
+                              상담으로 돌아가기
+                            </Button>
+                            <Button 
+                              onClick={handleConfirmAppointment} 
+                              className="flex-1"
+                              disabled={!referralType || !appointmentDate || !appointmentTime}
+                            >
+                              <Send className="h-4 w-4 mr-2" />
+                              예약 확정
+                            </Button>
                           </div>
                         </div>
-
-                        <div>
-                          <Label htmlFor="pre-visit">방문 전 안내사항</Label>
-                          <Textarea
-                            id="pre-visit"
-                            value={preVisitNotes}
-                            onChange={(e) => setPreVisitNotes(e.target.value)}
-                            placeholder="예: 신분증 지참, 편한 복장 착용, 공복 불필요"
-                            rows={3}
-                            className="mt-2"
-                          />
-                        </div>
                       </div>
-
-                      {/* Right: SMS Preview */}
-                      <div className="space-y-4">
-                        <div>
-                          <Label>SMS 발송 미리보기</Label>
-                          <div className="mt-2 bg-gray-900 text-white p-4 rounded-lg min-h-[200px] font-mono text-sm whitespace-pre-line">
-                            {smsPreview || '← 좌측에서 예약 정보를 입력하면 자동으로 SMS가 생성됩니다'}
-                          </div>
-                        </div>
-
-                        <Alert>
-                          <Send className="h-4 w-4" />
-                          <AlertDescription className="text-sm">
-                            <strong>수신번호:</strong> {caseData.phone}<br />
-                            예약 확정 시 자동으로 SMS가 발송되며, 상담 기록에 자동 반영됩니다.
-                          </AlertDescription>
-                        </Alert>
-
-                        <div className="flex gap-2">
-                          <Button 
-                            variant="outline"
-                            onClick={() => setActiveTab('consultation')} 
-                            className="flex-1"
-                          >
-                            상담으로 돌아가기
-                          </Button>
-                          <Button 
-                            onClick={handleConfirmAppointment} 
-                            className="flex-1"
-                            disabled={!referralType || !appointmentDate || !appointmentTime}
-                          >
-                            <Send className="h-4 w-4 mr-2" />
-                            예약 확정
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </TabsContent>
+                    </CardContent>
+                  </Card>
+                </div>
+              </TabsContent>
+            )}
 
             {/* Tab 3: Dropout Management */}
             <TabsContent value="dropout" className="h-full m-0 p-6">

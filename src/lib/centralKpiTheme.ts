@@ -50,6 +50,14 @@ export interface CentralKpiTheme {
   riskBelow?: number;
   /** 높을수록 위험한 지표인지 (bottleneckRisk 등) */
   higherIsWorse?: boolean;
+  /** 범례 계약 */
+  legend: {
+    ticks: number[];
+    format: (v: number) => string;
+    direction: "higherBetter" | "higherWorse";
+  };
+  /** 우측 분석 차트 요약 텍스트 */
+  analysisSummary: string;
 }
 
 /* ─── KPI 테마 상수 ─── */
@@ -72,6 +80,8 @@ export const KPI_THEMES: Record<CentralKpiKey, CentralKpiTheme> = {
     target: 95,
     warnBelow: 90,
     riskBelow: 85,
+    legend: { ticks: [0, 20, 40, 60, 80, 100], format: fmtPct, direction: 'higherBetter' },
+    analysisSummary: '유효 신호율, 중복/철회 비중으로 신호 품질을 확인',
   },
   policyImpact: {
     key: "policyImpact",
@@ -89,6 +99,8 @@ export const KPI_THEMES: Record<CentralKpiKey, CentralKpiTheme> = {
     palette: ["#faf5ff", "#e9d5ff", "#d8b4fe", "#c084fc", "#a855f7", "#7c3aed", "#6d28d9"],
     valueFormatter: fmtScore,
     higherIsWorse: true,
+    legend: { ticks: [0, 20, 40, 60, 80, 100], format: fmtScore, direction: 'higherWorse' },
+    analysisSummary: '정책/규칙 변경 이후 지표 변동을 영향점수로 표시',
   },
   bottleneckRisk: {
     key: "bottleneckRisk",
@@ -106,7 +118,9 @@ export const KPI_THEMES: Record<CentralKpiKey, CentralKpiTheme> = {
     palette: ["#fef2f2", "#fecaca", "#fca5a5", "#f87171", "#ef4444", "#dc2626", "#b91c1c"],
     valueFormatter: fmtScore,
     higherIsWorse: true,
-    warnBelow: undefined, // higherIsWorse이므로 warnAbove 개념
+    warnBelow: undefined,
+    legend: { ticks: [0, 20, 40, 60, 80, 100], format: fmtScore, direction: 'higherWorse' },
+    analysisSummary: 'SLA 위반/적체/재접촉이 결합된 병목 위험을 확인',
   },
   dataReadiness: {
     key: "dataReadiness",
@@ -126,6 +140,8 @@ export const KPI_THEMES: Record<CentralKpiKey, CentralKpiTheme> = {
     target: 95,
     warnBelow: 90,
     riskBelow: 85,
+    legend: { ticks: [0, 20, 40, 60, 80, 100], format: fmtPct, direction: 'higherBetter' },
+    analysisSummary: '입력 기준 충족/완전성이 운영 왜곡을 줄이는지 확인',
   },
   governanceSafety: {
     key: "governanceSafety",
@@ -145,6 +161,8 @@ export const KPI_THEMES: Record<CentralKpiKey, CentralKpiTheme> = {
     target: 98,
     warnBelow: 95,
     riskBelow: 90,
+    legend: { ticks: [0, 20, 40, 60, 80, 100], format: fmtPct, direction: 'higherBetter' },
+    analysisSummary: '감사/책임소재에 필요한 로그/근거 누락을 점검',
   },
 };
 
@@ -223,3 +241,44 @@ export interface CentralDashboardData {
   regionMetrics: Record<CentralKpiKey, CentralRegionMetric[]>;
   chartData: Record<CentralKpiKey, CentralKpiChartData>;
 }
+
+/* ─── CentralKpiId ↔ CentralKpiKey 매핑 ─── */
+import type { CentralKpiId } from './kpi.types';
+
+export const KPI_ID_TO_KEY: Record<CentralKpiId, CentralKpiKey> = {
+  SIGNAL_QUALITY: 'signalQuality',
+  POLICY_IMPACT: 'policyImpact',
+  BOTTLENECK_RISK: 'bottleneckRisk',
+  DATA_READINESS: 'dataReadiness',
+  GOVERNANCE_SAFETY: 'governanceSafety',
+};
+
+export const KPI_KEY_TO_ID: Record<CentralKpiKey, CentralKpiId> = {
+  signalQuality: 'SIGNAL_QUALITY',
+  policyImpact: 'POLICY_IMPACT',
+  bottleneckRisk: 'BOTTLENECK_RISK',
+  dataReadiness: 'DATA_READINESS',
+  governanceSafety: 'GOVERNANCE_SAFETY',
+};
+
+/* ─── KpiBundle: 하나의 KPI에 대한 모든 패널 데이터 ─── */
+export interface KpiBundle {
+  national: {
+    value: number;
+    deltaPP: number;
+    target?: number;
+    numerator?: number;
+    denominator?: number;
+  };
+  regions: CentralRegionMetric[];
+  breakdown: { name: string; value: number; color?: string }[];
+  breakdownType: 'donut' | 'stacked' | 'bar' | 'timeline';
+  cause: { name: string; value: number; color?: string }[];
+  causeType: 'bar' | 'donut' | 'lineRank';
+  trend: { period: string; value: number }[];
+  worstRegions: CentralRegionMetric[];
+  bestRegions: CentralRegionMetric[];
+}
+
+/** 전체 대시보드 데이터 = KPI 5개의 KpiBundle */
+export type DashboardData = Record<CentralKpiKey, KpiBundle>;

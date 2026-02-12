@@ -947,3 +947,161 @@ export async function fetchCentralCases(
   });
   return { total: 42, page: _page, pageSize: 10, items };
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   7) KpiBundle — 모든 패널이 하나의 KPI를 소비할 때 사용하는 통합 데이터
+═══════════════════════════════════════════════════════════════════════════════ */
+import type { KpiBundle, CentralKpiKey, DashboardData, CentralRegionMetric } from '../lib/centralKpiTheme';
+
+export async function fetchCentralDashboardBundle(
+  window: CentralTimeWindow = 'LAST_7D'
+): Promise<DashboardData> {
+  await delay(250);
+  const seed = `bundle-${window}`;
+
+  const makeRegions = (kpiKey: string, min: number, max: number): CentralRegionMetric[] =>
+    REGION_LIST.map(r => ({
+      regionCode: r.code,
+      regionName: r.name,
+      value: Number(_sv(`${seed}-${kpiKey}-${r.code}`, min, max).toFixed(1)),
+    }));
+
+  const makeTrend = (kpiKey: string, base: number, spread: number) =>
+    Array.from({ length: 7 }, (_, i) => ({
+      period: `D${i + 1}`,
+      value: Number((base + _sv(`${seed}-${kpiKey}-tr-${i}`, -spread, spread)).toFixed(1)),
+    }));
+
+  const sorted = (regions: CentralRegionMetric[], higherBetter: boolean) => {
+    const s = [...regions].sort((a, b) => higherBetter ? a.value - b.value : b.value - a.value);
+    return { worst: s.slice(0, 5), best: s.slice(-5).reverse() };
+  };
+
+  /* ── signalQuality ── */
+  const sqRegions = makeRegions('sq', 80, 98);
+  const sqSorted = sorted(sqRegions, true);
+  const signalQuality: KpiBundle = {
+    national: { value: Number(_sv(`${seed}-sq-nat`, 88, 96).toFixed(1)), deltaPP: Number(_sv(`${seed}-sq-d`, -2, 3).toFixed(1)), target: 95 },
+    regions: sqRegions,
+    breakdown: [
+      { name: '유효 신호', value: Math.round(_sv(`${seed}-sq-b1`, 8500, 16000)), color: '#2563eb' },
+      { name: '중복', value: Math.round(_sv(`${seed}-sq-b2`, 200, 800)), color: '#f59e0b' },
+      { name: '철회', value: Math.round(_sv(`${seed}-sq-b3`, 100, 400)), color: '#ef4444' },
+      { name: '무효', value: Math.round(_sv(`${seed}-sq-b4`, 50, 200)), color: '#6b7280' },
+    ],
+    breakdownType: 'donut',
+    cause: [
+      { name: '연락처 오류', value: Math.round(_sv(`${seed}-sq-c1`, 120, 350)) },
+      { name: '동일인 재등록', value: Math.round(_sv(`${seed}-sq-c2`, 80, 250)) },
+      { name: '대상 미해당', value: Math.round(_sv(`${seed}-sq-c3`, 50, 180)) },
+      { name: '시스템 중복', value: Math.round(_sv(`${seed}-sq-c4`, 30, 120)) },
+      { name: '기타', value: Math.round(_sv(`${seed}-sq-c5`, 10, 60)) },
+    ],
+    causeType: 'bar',
+    trend: makeTrend('sq', 92, 3),
+    worstRegions: sqSorted.worst,
+    bestRegions: sqSorted.best,
+  };
+
+  /* ── policyImpact ── */
+  const piRegions = makeRegions('pi', 10, 50);
+  const piSorted = sorted(piRegions, false);
+  const policyImpact: KpiBundle = {
+    national: { value: Number(_sv(`${seed}-pi-nat`, 15, 40).toFixed(1)), deltaPP: Number(_sv(`${seed}-pi-d`, -5, 8).toFixed(1)), target: 20 },
+    regions: piRegions,
+    breakdown: [
+      { name: '기준점 변경', value: Math.round(_sv(`${seed}-pi-b1`, 3, 12)), color: '#7c3aed' },
+      { name: '모델 배포', value: Math.round(_sv(`${seed}-pi-b2`, 1, 5)), color: '#a855f7' },
+      { name: '규칙 변경', value: Math.round(_sv(`${seed}-pi-b3`, 2, 8)), color: '#c084fc' },
+      { name: '접촉규칙', value: Math.round(_sv(`${seed}-pi-b4`, 1, 4)), color: '#e9d5ff' },
+    ],
+    breakdownType: 'bar',
+    cause: [
+      { name: 'SLA 변동', value: Number(_sv(`${seed}-pi-c1`, 1, 8).toFixed(1)) },
+      { name: '응답 적시율 변동', value: Number(_sv(`${seed}-pi-c2`, 0.5, 5).toFixed(1)) },
+      { name: '완료율 변동', value: Number(_sv(`${seed}-pi-c3`, 0.3, 4).toFixed(1)) },
+      { name: '데이터 충족 변동', value: Number(_sv(`${seed}-pi-c4`, 0.1, 2).toFixed(1)) },
+    ],
+    causeType: 'bar',
+    trend: makeTrend('pi', 28, 8),
+    worstRegions: piSorted.worst,
+    bestRegions: piSorted.best,
+  };
+
+  /* ── bottleneckRisk ── */
+  const brRegions = makeRegions('br', 15, 60);
+  const brSorted = sorted(brRegions, false);
+  const bottleneckRisk: KpiBundle = {
+    national: { value: Number(_sv(`${seed}-br-nat`, 25, 50).toFixed(1)), deltaPP: Number(_sv(`${seed}-br-d`, -4, 6).toFixed(1)), target: 30 },
+    regions: brRegions,
+    breakdown: [
+      { name: 'SLA 위반', value: Number(_sv(`${seed}-br-b1`, 5, 25).toFixed(1)), color: '#dc2626' },
+      { name: 'L2 적체', value: Number(_sv(`${seed}-br-b2`, 8, 30).toFixed(1)), color: '#f87171' },
+      { name: '재접촉 필요', value: Number(_sv(`${seed}-br-b3`, 3, 18).toFixed(1)), color: '#fca5a5' },
+    ],
+    breakdownType: 'stacked',
+    cause: [
+      { name: '서류 미비', value: Math.round(_sv(`${seed}-br-c1`, 20, 80)) },
+      { name: '기관 거부', value: Math.round(_sv(`${seed}-br-c2`, 10, 45)) },
+      { name: '연락 두절', value: Math.round(_sv(`${seed}-br-c3`, 8, 35)) },
+      { name: '자격 미달', value: Math.round(_sv(`${seed}-br-c4`, 5, 20)) },
+      { name: '기타', value: Math.round(_sv(`${seed}-br-c5`, 3, 15)) },
+    ],
+    causeType: 'bar',
+    trend: makeTrend('br', 38, 8),
+    worstRegions: brSorted.worst,
+    bestRegions: brSorted.best,
+  };
+
+  /* ── dataReadiness ── */
+  const drRegions = makeRegions('dr', 78, 99);
+  const drSorted = sorted(drRegions, true);
+  const dataReadiness: KpiBundle = {
+    national: { value: Number(_sv(`${seed}-dr-nat`, 85, 96).toFixed(1)), deltaPP: Number(_sv(`${seed}-dr-d`, -3, 4).toFixed(1)), target: 95 },
+    regions: drRegions,
+    breakdown: [
+      { name: '기준 충족', value: Math.round(_sv(`${seed}-dr-b1`, 7000, 15000)), color: '#059669' },
+      { name: '필드 결측', value: Math.round(_sv(`${seed}-dr-b2`, 200, 900)), color: '#f59e0b' },
+      { name: '연계 미완료', value: Math.round(_sv(`${seed}-dr-b3`, 100, 500)), color: '#ef4444' },
+    ],
+    breakdownType: 'donut',
+    cause: [
+      { name: '연락처 누락', value: Math.round(_sv(`${seed}-dr-c1`, 80, 300)) },
+      { name: '주소 미입력', value: Math.round(_sv(`${seed}-dr-c2`, 60, 250)) },
+      { name: '동의일자 누락', value: Math.round(_sv(`${seed}-dr-c3`, 40, 180)) },
+      { name: '과거력 결측', value: Math.round(_sv(`${seed}-dr-c4`, 20, 120)) },
+    ],
+    causeType: 'donut',
+    trend: makeTrend('dr', 90, 4),
+    worstRegions: drSorted.worst,
+    bestRegions: drSorted.best,
+  };
+
+  /* ── governanceSafety ── */
+  const gsRegions = makeRegions('gs', 85, 99);
+  const gsSorted = sorted(gsRegions, true);
+  const governanceSafety: KpiBundle = {
+    national: { value: Number(_sv(`${seed}-gs-nat`, 90, 98).toFixed(1)), deltaPP: Number(_sv(`${seed}-gs-d`, -2, 3).toFixed(1)), target: 98 },
+    regions: gsRegions,
+    breakdown: [
+      { name: '근거 미첨부', value: Math.round(_sv(`${seed}-gs-b1`, 30, 150)), color: '#d97706' },
+      { name: '책임자 미기재', value: Math.round(_sv(`${seed}-gs-b2`, 20, 100)), color: '#f59e0b' },
+      { name: '타임스탬프 불일치', value: Math.round(_sv(`${seed}-gs-b3`, 10, 60)), color: '#fbbf24' },
+      { name: '로그 누락', value: Math.round(_sv(`${seed}-gs-b4`, 5, 40)), color: '#fcd34d' },
+    ],
+    breakdownType: 'donut',
+    cause: [
+      { name: '부산', value: Math.round(_sv(`${seed}-gs-c1`, 8, 25)) },
+      { name: '대구', value: Math.round(_sv(`${seed}-gs-c2`, 6, 20)) },
+      { name: '인천', value: Math.round(_sv(`${seed}-gs-c3`, 4, 18)) },
+      { name: '경기', value: Math.round(_sv(`${seed}-gs-c4`, 3, 15)) },
+      { name: '충남', value: Math.round(_sv(`${seed}-gs-c5`, 2, 12)) },
+    ],
+    causeType: 'lineRank',
+    trend: makeTrend('gs', 95, 2),
+    worstRegions: gsSorted.worst,
+    bestRegions: gsSorted.best,
+  };
+
+  return { signalQuality, policyImpact, bottleneckRisk, dataReadiness, governanceSafety };
+}

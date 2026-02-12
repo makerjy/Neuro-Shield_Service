@@ -33,7 +33,8 @@ import {
   toAgeBand,
   type CaseRecord,
 } from "./caseRecords";
-import { Stage2CaseWorkflow } from "./stage2/Stage2CaseWorkflow";
+import { CaseDetailStage2 } from "../CaseDetailStage2";
+import { CaseDetailStage3 } from "../CaseDetailStage3";
 import { Stage1CaseIdentity, Stage1OpsDetail } from "./stage1/Stage1OpsDetail";
 
 interface CaseDetailProps {
@@ -45,7 +46,10 @@ interface CaseDetailProps {
 
 export function CaseDetail({ caseId, stage, onBack, onOpenConsultation }: CaseDetailProps) {
   if (stage === "Stage 2") {
-    return <Stage2CaseWorkflow caseId={caseId} onBack={onBack} />;
+    return <CaseDetailStage2 caseId={caseId} onBack={onBack} />;
+  }
+  if (stage === "Stage 3") {
+    return <CaseDetailStage3 caseId={caseId} onBack={onBack} />;
   }
 
   const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);

@@ -30,9 +30,10 @@ import { getKPIsByPanel, getKPIsForLevel, fetchKPIData, getChartEnabledKPIs } fr
 import { KPIDefinition, DrillLevel, DonutDataItem, BarDataItem } from '../../lib/kpi.types';
 import { Activity, Shield, Database, ExternalLink as ExternalLinkIcon } from 'lucide-react';
 import type { TabContext } from '../../lib/useTabContext';
-import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS, fetchCentralKpis, fetchCentralFunnel, fetchCentralBottlenecks, fetchCentralLinkage, fetchCentralRegions } from '../../mocks/mockCentralOps';
+import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS, fetchCentralKpis, fetchCentralFunnel, fetchCentralBottlenecks, fetchCentralLinkage, fetchCentralRegions, fetchCentralDashboardBundle } from '../../mocks/mockCentralOps';
 import type { CentralKpiId, CentralTimeWindow, CentralKpiValue, FunnelStage, BottleneckMetric, LinkageMetric, RegionComparisonRow } from '../../lib/kpi.types';
 import { getCentralKpiList, CENTRAL_KPI_COLORS, FUNNEL_STAGE_LABELS } from '../../lib/centralKpiDictionary';
+import { KPI_THEMES, KPI_ID_TO_KEY, type KpiBundle, type DashboardData, type CentralKpiKey } from '../../lib/centralKpiTheme';
 import { AlertTriangle, Users, Clock, Link2, ClipboardList } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -1108,7 +1109,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   /* ── 중앙센터 운영감사형 KPI 상태 ── */
   const [centralWindow, setCentralWindow] = useState<CentralTimeWindow>('LAST_7D');
   const [centralKpis, setCentralKpis] = useState<CentralKpiValue[]>([]);
-  const [activeCentralKpi, setActiveCentralKpi] = useState<CentralKpiId | null>(null);
+  const [activeCentralKpi, setActiveCentralKpi] = useState<CentralKpiId>('SIGNAL_QUALITY');
   const [showDrilldown, setShowDrilldown] = useState(false);
   const [centralLoading, setCentralLoading] = useState(false);
   // Drilldown data
@@ -1118,13 +1119,37 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   const [regionData, setRegionData] = useState<RegionComparisonRow[]>([]);
   const centralKpiDefs = useMemo(() => getCentralKpiList(), []);
 
+  /* ── KPI Bundle (모든 패널의 SSOT) ── */
+  const [dashData, setDashData] = useState<DashboardData | null>(null);
+
+  // 현재 선택된 KPI의 테마 & 번들
+  const activeKpiKey = useMemo<CentralKpiKey>(() => KPI_ID_TO_KEY[activeCentralKpi], [activeCentralKpi]);
+  const activeTheme = useMemo(() => KPI_THEMES[activeKpiKey], [activeKpiKey]);
+  const currentBundle = useMemo<KpiBundle | null>(() => dashData ? dashData[activeKpiKey] : null, [dashData, activeKpiKey]);
+
+  /* ── KPI → MapColorScheme 매핑 ── */
+  const kpiColorScheme = useMemo<MapColorScheme>(() => {
+    const map: Record<CentralKpiId, MapColorScheme> = {
+      SIGNAL_QUALITY: 'blue',
+      POLICY_IMPACT: 'purple',
+      BOTTLENECK_RISK: 'red',
+      DATA_READINESS: 'green',
+      GOVERNANCE_SAFETY: 'orange',
+    };
+    return map[activeCentralKpi];
+  }, [activeCentralKpi]);
+
   // Central KPI data fetch
   useEffect(() => {
     let cancelled = false;
     setCentralLoading(true);
-    fetchCentralKpis(centralWindow).then(res => {
+    Promise.all([
+      fetchCentralKpis(centralWindow),
+      fetchCentralDashboardBundle(centralWindow),
+    ]).then(([res, bundle]) => {
       if (!cancelled) {
         setCentralKpis(res.kpis);
+        setDashData(bundle);
         setCentralLoading(false);
       }
     });
@@ -1645,13 +1670,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                   def={def}
                   isActive={activeCentralKpi === def.id}
                   onClick={() => {
-                    if (activeCentralKpi === def.id) {
-                      setActiveCentralKpi(null);
-                      setShowDrilldown(false);
-                    } else {
-                      setActiveCentralKpi(def.id);
-                      setShowDrilldown(true);
-                    }
+                    setActiveCentralKpi(def.id);
                   }}
                 />
               );
@@ -1752,8 +1771,9 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                 {centralWindow === 'LAST_24H' ? '최근 24시간' : centralWindow === 'LAST_7D' ? '최근 7일' : centralWindow === 'LAST_30D' ? '최근 30일' : '최근 90일'}
               </span>
               {activeCentralKpi && (
-                <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${CENTRAL_KPI_COLORS[activeCentralKpi].bg} ${CENTRAL_KPI_COLORS[activeCentralKpi].text}`}>
-                  {centralKpiDefs.find(d => d.id === activeCentralKpi)?.shortName} 포커스
+                <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium`}
+                  style={{ backgroundColor: `${activeTheme.primaryColor}15`, color: activeTheme.primaryColor }}>
+                  {activeTheme.shortLabel} 포커스
                 </span>
               )}
             </div>
@@ -1817,82 +1837,91 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold text-gray-700">선택 KPI 요약</span>
               <span className="text-[11px] px-1.5 py-0.5 rounded font-medium" 
-                style={{ backgroundColor: `${COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue}15`, color: COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue }}>
-                {selectedMapCard.label}
+                style={{ backgroundColor: `${activeTheme.primaryColor}15`, color: activeTheme.primaryColor }}>
+                {activeTheme.shortLabel}
               </span>
             </div>
-            {(() => {
-              const kpiVal = selectedMapCard.getValue(statsScopeKey);
-              const avg = mapHeatmapData.length > 0 ? mapHeatmapData.reduce((s, d) => s + d.size, 0) / mapHeatmapData.length : 0;
-              const sorted = [...mapHeatmapData].sort((a, b) => b.size - a.size);
-              const best = sorted[0];
-              const worst = sorted[sorted.length - 1];
-              const kpiC = COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue;
+            {currentBundle ? (() => {
+              const { national, worstRegions, bestRegions } = currentBundle;
+              const deltaColor = activeTheme.higherIsWorse
+                ? (national.deltaPP <= 0 ? 'text-green-600' : 'text-red-600')
+                : (national.deltaPP >= 0 ? 'text-green-600' : 'text-red-600');
               return (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-gray-500">전국 평균</span>
-                    <span className="text-sm font-bold" style={{ color: kpiC }}>{Math.round(avg).toLocaleString()}{selectedMapCard.unit}</span>
+                    <span className="text-[12px] text-gray-500">전국 값</span>
+                    <span className="text-sm font-bold" style={{ color: activeTheme.primaryColor }}>
+                      {activeTheme.valueFormatter(national.value)}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-gray-500">현재값</span>
-                    <span className="text-sm font-bold text-gray-800">{kpiVal.toLocaleString()}{selectedMapCard.unit}</span>
+                    <span className="text-[12px] text-gray-500">전주 대비</span>
+                    <span className={`text-sm font-bold ${deltaColor}`}>
+                      {national.deltaPP > 0 ? '+' : ''}{national.deltaPP}pp
+                    </span>
                   </div>
-                  {best && (
+                  {national.target != null && (
                     <div className="flex items-center justify-between">
-                      <span className="text-[12px] text-gray-500">최고 ({best.name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()})</span>
-                      <span className="text-xs font-semibold text-green-600">{best.size.toLocaleString()}</span>
+                      <span className="text-[12px] text-gray-500">목표</span>
+                      <span className="text-xs font-semibold text-gray-600">{activeTheme.valueFormatter(national.target)}</span>
                     </div>
                   )}
-                  {worst && (
+                  {bestRegions[0] && (
                     <div className="flex items-center justify-between">
-                      <span className="text-[12px] text-gray-500">최저 ({worst.name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()})</span>
-                      <span className="text-xs font-semibold text-red-600">{worst.size.toLocaleString()}</span>
+                      <span className="text-[12px] text-gray-500">
+                        최고 ({bestRegions[0].regionName.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()})
+                      </span>
+                      <span className="text-xs font-semibold text-green-600">{activeTheme.valueFormatter(bestRegions[0].value)}</span>
+                    </div>
+                  )}
+                  {worstRegions[0] && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[12px] text-gray-500">
+                        최저 ({worstRegions[0].regionName.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()})
+                      </span>
+                      <span className="text-xs font-semibold text-red-600">{activeTheme.valueFormatter(worstRegions[0].value)}</span>
                     </div>
                   )}
                 </div>
               );
-            })()}
+            })() : (
+              <div className="h-24 flex items-center justify-center text-xs text-gray-400 animate-pulse">로딩 중…</div>
+            )}
           </div>
 
           {/* ── 리스크 Top 5 ── */}
           <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold text-gray-700">리스크 Top 5</span>
-              <span className="text-[11px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-medium">{selectedRegion?.name || '전국'} 하위</span>
+              <span className="text-[11px] px-1.5 py-0.5 rounded font-medium"
+                style={{ backgroundColor: `${activeTheme.primaryColor}15`, color: activeTheme.primaryColor }}>
+                {activeTheme.shortLabel}
+              </span>
             </div>
             <div className="space-y-1">
-              {(() => {
-                const riskTop = [...riskMatrixData]
-                  .map(r => ({
-                    ...r,
-                    riskScore: (100 - r.slaRate) + (100 - r.dataRate),
-                  }))
-                  .sort((a, b) => b.riskScore - a.riskScore)
-                  .slice(0, 5);
-                return riskTop.map((r, idx) => (
-                  <button
-                    key={r.regionId}
-                    onClick={() => {
-                      // drillLevel에 따라 다음 레벨로 drillDown
-                      const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
-                      drillDown({ code: r.regionId, name: r.regionName, level: nextLevel });
-                    }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors text-left"
-                  >
-                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-bold text-white ${
-                      idx === 0 ? 'bg-red-500' : idx === 1 ? 'bg-orange-500' : 'bg-amber-400'
-                    }`}>{idx + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium text-gray-800 truncate">{r.regionName}</div>
-                      <div className="text-[12px] text-gray-500">SLA {r.slaRate}% · 데이터 {r.dataRate}%</div>
-                    </div>
-                    <span className={`text-[12px] font-bold ${r.riskScore > 15 ? 'text-red-600' : r.riskScore > 8 ? 'text-amber-600' : 'text-green-600'}`}>
-                      {r.riskScore.toFixed(1)}
-                    </span>
-                  </button>
-                ));
-              })()}
+              {(currentBundle?.worstRegions ?? []).slice(0, 5).map((r, idx) => (
+                <button
+                  key={r.regionCode}
+                  onClick={() => {
+                    const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
+                    drillDown({ code: r.regionCode, name: r.regionName, level: nextLevel });
+                  }}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors text-left"
+                >
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[12px] font-bold text-white ${
+                    idx === 0 ? 'bg-red-500' : idx === 1 ? 'bg-orange-500' : 'bg-amber-400'
+                  }`}>{idx + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-gray-800 truncate">{r.regionName}</div>
+                  </div>
+                  <span className="text-[12px] font-bold" style={{ color: activeTheme.primaryColor }}>
+                    {activeTheme.valueFormatter(r.value)}
+                  </span>
+                </button>
+              ))}
+              {(!currentBundle || currentBundle.worstRegions.length === 0) && (
+                <div className="text-xs text-gray-400 text-center py-4 animate-pulse">로딩 중…</div>
+              )}
             </div>
           </div>
 
@@ -2067,8 +2096,8 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                     {analyticsPeriodLabel} · 기준연도 2026
                   </span>
                   <span className="h-6 inline-flex items-center px-2 text-white text-[12px] rounded font-semibold"
-                    style={{ backgroundColor: COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue }}>
-                    {selectedMapCard.label}
+                    style={{ backgroundColor: activeTheme.primaryColor }}>
+                    {activeTheme.shortLabel}
                   </span>
                   <span className="h-6 inline-flex items-center px-2 bg-red-500 text-white text-[12px] rounded font-semibold">
                     {getDrillLevelLabel(drillLevel)}
@@ -2131,7 +2160,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                   externalSelectedCode={selectedRegion?.code}
                   onRegionSelect={handleRegionSelect}
                   onGoBack={drillUp}
-                  externalColorScheme={selectedMapCard.color as MapColorScheme}
+                  externalColorScheme={kpiColorScheme}
                   hideLegendPanel
                   onSubRegionsChange={handleSubRegionsChange}
                 />
@@ -2169,30 +2198,29 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
               )}
             </div>
 
-            {/* ── KPI 색상 범례 (지오맵 바로 아래, 고도화) ── */}
+            {/* ── KPI 색상 범례 (지오맵 바로 아래, KPI 연동) ── */}
             <div className="mx-2 mb-2 px-3 py-2 rounded-lg bg-gradient-to-r from-gray-50 to-gray-100/80 border border-gray-200/60 shrink-0">
               <div className="flex items-center gap-2 mb-1.5">
-                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: COLORS[selectedMapCard.color as keyof typeof COLORS] || COLORS.blue }} />
-                <span className="text-[12px] font-bold text-gray-600 tracking-wide">{selectedMapCard.label}</span>
-                <span className="text-[11px] text-gray-400 ml-auto">{selectedMapCard.unit}</span>
+                <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: activeTheme.primaryColor }} />
+                <span className="text-[12px] font-bold text-gray-600 tracking-wide">{activeTheme.shortLabel}</span>
+                <span className="text-[11px] text-gray-400 ml-auto">{activeTheme.unit}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[12px] font-semibold text-gray-500 tabular-nums min-w-[36px] text-right">
-                  {(() => {
-                    const values = mapHeatmapData.map(d => d.size);
-                    return values.length ? Math.min(...values).toLocaleString() : '-';
-                  })()}
+                  {activeTheme.legend.format(activeTheme.legend.ticks[0])}
                 </span>
                 <div className="flex-1 h-3 rounded-md overflow-hidden flex shadow-inner">
-                  {(COLOR_PALETTES[selectedMapCard.color as keyof typeof COLOR_PALETTES] || COLOR_PALETTES.blue).map((c: string, i: number) => (
+                  {activeTheme.palette.map((c: string, i: number) => (
                     <div key={i} className="flex-1 transition-colors" style={{ backgroundColor: c }} />
                   ))}
                 </div>
                 <span className="text-[12px] font-semibold text-gray-500 tabular-nums min-w-[36px]">
-                  {(() => {
-                    const values = mapHeatmapData.map(d => d.size);
-                    return values.length ? Math.max(...values).toLocaleString() : '-';
-                  })()}
+                  {activeTheme.legend.format(activeTheme.legend.ticks[activeTheme.legend.ticks.length - 1])}
+                </span>
+              </div>
+              <div className="flex items-center justify-center gap-1 mt-1">
+                <span className="text-[10px] text-gray-400">
+                  {activeTheme.legend.direction === 'higherBetter' ? '← 낮음 (주의) · 높음 (양호) →' : '← 낮음 (양호) · 높음 (위험) →'}
                 </span>
               </div>
             </div>
@@ -2211,7 +2239,144 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             : 'w-full shrink-0'
         }`}>
           
-          {/* ═══ SLA × 데이터 충족률 리스크 매트릭스 (ScatterChart) ═══ */}
+          {/* ═══ KPI 분석 요약 텍스트 ═══ */}
+          <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: activeTheme.primaryColor }} />
+              <span className="text-sm font-semibold text-gray-700">{activeTheme.label} 분석</span>
+            </div>
+            <p className="text-[12px] text-gray-600 leading-relaxed">{activeTheme.analysisSummary}</p>
+          </div>
+
+          {/* ═══ 분해 차트 (KPI별 donut/stacked/bar) ═══ */}
+          {currentBundle && (
+            <div className="bg-white border border-gray-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-gray-700">구성 분해</span>
+                <span className="text-[11px] px-1.5 py-0.5 rounded font-medium"
+                  style={{ backgroundColor: `${activeTheme.primaryColor}15`, color: activeTheme.primaryColor }}>
+                  {currentBundle.breakdownType === 'donut' ? '도넛' : currentBundle.breakdownType === 'stacked' ? '스택바' : '바'}
+                </span>
+              </div>
+              {currentBundle.breakdownType === 'donut' ? (
+                <div className="relative" style={{ height: '200px' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={currentBundle.breakdown} cx="50%" cy="50%" innerRadius={45} outerRadius={75}
+                        dataKey="value" startAngle={90} endAngle={-270} paddingAngle={2} strokeWidth={0}
+                        label={renderDonutLabel} labelLine={false}>
+                        {currentBundle.breakdown.map((entry, idx) => (
+                          <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(v: number) => [v.toLocaleString(), '']}
+                        contentStyle={{ fontSize: '12px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  {/* 중앙 총합 */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <div className="text-[11px] text-gray-500">총합</div>
+                    <div className="text-sm font-bold text-gray-800">
+                      {currentBundle.breakdown.reduce((s, d) => s + d.value, 0).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ height: '200px' }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={currentBundle.breakdown} margin={{ top: 8, right: 10, left: -10, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                      <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#4b5563' }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickLine={false} axisLine={false} width={38} />
+                      <Tooltip contentStyle={{ fontSize: '12px', borderRadius: '8px' }} />
+                      <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                        {currentBundle.breakdown.map((entry, idx) => (
+                          <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              {/* 범례 */}
+              <div className="flex flex-wrap gap-2 mt-2 pt-2 border-t border-gray-100">
+                {currentBundle.breakdown.map((d, i) => (
+                  <div key={i} className="flex items-center gap-1 text-[11px] text-gray-600">
+                    <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: d.color || activeTheme.palette[i % activeTheme.palette.length] }} />
+                    <span>{d.name}</span>
+                    <span className="font-semibold text-gray-800">{d.value.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ═══ 원인 분포 차트 ═══ */}
+          {currentBundle && (
+            <div className="bg-white border border-gray-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-gray-700">원인 분포</span>
+              </div>
+              <div style={{ height: '200px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={currentBundle.cause} layout="vertical" margin={{ top: 4, right: 30, left: 10, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
+                    <XAxis type="number" tick={{ fontSize: 11, fill: '#6b7280' }} />
+                    <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: '#4b5563' }} width={80} />
+                    <Tooltip contentStyle={{ fontSize: '12px', borderRadius: '8px' }} />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]} fill={activeTheme.primaryColor}
+                      label={{ position: 'right', fontSize: 11, fill: '#374151', formatter: (v: number) => v.toLocaleString() }}>
+                      {currentBundle.cause.map((_, idx) => (
+                        <Cell key={idx} fill={activeTheme.palette[Math.min(idx + 1, activeTheme.palette.length - 2)]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* ═══ KPI 추이 차트 (단일 KPI) ═══ */}
+          {currentBundle && (
+            <div className="bg-white border border-gray-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: activeTheme.primaryColor }} />
+                  <span className="text-sm font-semibold text-gray-700">{activeTheme.shortLabel} 추이</span>
+                </div>
+                <span className="text-[11px] text-gray-400">{analyticsPeriodLabel}</span>
+              </div>
+              <div style={{ height: '200px' }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={currentBundle.trend} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
+                    <defs>
+                      <linearGradient id="kpiTrendGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={activeTheme.primaryColor} stopOpacity={0.25} />
+                        <stop offset="100%" stopColor={activeTheme.primaryColor} stopOpacity={0.03} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                    <XAxis dataKey="period" tick={{ fontSize: 12, fill: '#6b7280' }} tickLine={false} />
+                    <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={36}
+                      tickFormatter={(v) => activeTheme.valueFormatter(v)} />
+                    <Tooltip
+                      contentStyle={{ fontSize: '12px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}
+                      formatter={(v: number) => [activeTheme.valueFormatter(v), activeTheme.shortLabel]}
+                    />
+                    {activeTheme.target != null && (
+                      <ReferenceLine y={activeTheme.target} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1.5}
+                        label={{ value: `목표 ${activeTheme.valueFormatter(activeTheme.target)}`, fontSize: 11, fill: '#ef4444', position: 'right' }} />
+                    )}
+                    <Area type="monotone" dataKey="value" fill="url(#kpiTrendGrad)" stroke="none" />
+                    <Line type="monotone" dataKey="value" stroke={activeTheme.primaryColor} strokeWidth={2.5}
+                      dot={false} activeDot={{ r: 5, fill: activeTheme.primaryColor, stroke: '#fff', strokeWidth: 2 }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {/* ═══ SLA × 데이터 충족률 리스크 매트릭스 (ScatterChart) — 유지 ═══ */}
           <div className="bg-white border border-gray-200 rounded-lg p-3">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold text-gray-700">SLA × 데이터 충족률 리스크 매트릭스</span>
@@ -2305,43 +2470,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             )}
           </div>
 
-          {/* ═══ KPI 통합 추이 차트 (멀티라인) ═══ */}
-          <KPIUnifiedChart
-            bulletKPIs={bulletKPIs}
-            kpiDataMap={kpiDataMap}
-            analyticsPeriod={analyticsPeriod}
-          />
-
-          {/* 나머지 KPI 위젯들 (도넛 차트 제외, center-load 제외) */}
-          {rightKPIs.filter(kpi => 
-            kpi.visualization.chartType !== 'donut' && 
-            kpi.visualization.chartType !== 'table'
-          ).map(kpi => {
-            const data = kpiDataMap[kpi.id];
-            if (!data) return null;
-            
-            return (
-              <div key={kpi.id} className="bg-white border border-gray-200 rounded-lg p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-gray-700">{kpi.name}</span>
-                    <HelpCircle className="h-3 w-3 text-gray-400" />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button className="px-2 py-0.5 text-[12px] text-blue-600 bg-blue-50 rounded hover:bg-blue-100">통계표 보기</button>
-                    <button className="p-1 hover:bg-gray-100 rounded"><Download className="h-3 w-3 text-gray-500" /></button>
-                  </div>
-                </div>
-                <KPIWidget 
-                  kpi={kpi} 
-                  data={data} 
-                  statsScopeKey={statsScopeKey}
-                  activeDonutIndex={activeDonutIndex}
-                  setActiveDonutIndex={setActiveDonutIndex}
-                />
-              </div>
-            );
-          })}
+          {/* KPI 통합 추이 및 추가 위젯은 상단 KPI별 분해/원인/추이로 대체됨 */}
 
         </div>
         

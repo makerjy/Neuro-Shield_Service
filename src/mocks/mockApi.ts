@@ -1,4 +1,12 @@
 import { MOCK_GEOJSON, SIDO_OPTIONS, SIGUNGU_OPTIONS } from './mockGeo';
+import type {
+  CentralKpiKey,
+  CentralKpiSummary,
+  CentralRegionMetric,
+  CentralKpiChartData,
+  CentralDashboardData,
+} from '../lib/centralKpiTheme';
+import { CENTRAL_KPI_KEYS } from '../lib/centralKpiTheme';
 
 export type RegionLevel = 'nation' | 'sido' | 'sigungu';
 
@@ -225,4 +233,207 @@ export async function fetchGeoJSON(level: RegionLevel, regionKey?: RegionKey) {
     return MOCK_GEOJSON.sigungu;
   }
   return MOCK_GEOJSON.nation;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   중앙 전국운영대시보드 — 5 KPI 전용 Mock
+═══════════════════════════════════════════════════════════════════════════ */
+
+const makeCentralKpiSummary = (rnd: () => number): CentralKpiSummary[] => [
+  {
+    key: "signalQuality",
+    value: Number(clamp(86 + rnd() * 10, 80, 98).toFixed(1)),
+    delta: Number((-3 + rnd() * 6).toFixed(1)),
+    sub1Label: "중복률",
+    sub1Value: `${clamp(2 + rnd() * 5, 1, 8).toFixed(1)}%`,
+    sub2Label: "철회률",
+    sub2Value: `${clamp(0.5 + rnd() * 3, 0.2, 4).toFixed(1)}%`,
+  },
+  {
+    key: "policyImpact",
+    value: Number(clamp(15 + rnd() * 50, 5, 85).toFixed(1)),
+    delta: Number((-10 + rnd() * 20).toFixed(1)),
+    sub1Label: "롤백 횟수",
+    sub1Value: `${Math.round(rnd() * 4)}건`,
+    sub2Label: "경고 지역",
+    sub2Value: `${Math.round(1 + rnd() * 6)}개`,
+  },
+  {
+    key: "bottleneckRisk",
+    value: Number(clamp(20 + rnd() * 50, 10, 90).toFixed(1)),
+    delta: Number((-8 + rnd() * 16).toFixed(1)),
+    sub1Label: "SLA 위반",
+    sub1Value: `${clamp(1 + rnd() * 6, 0.5, 9).toFixed(1)}%`,
+    sub2Label: "L2 적체",
+    sub2Value: `${Math.round(30 + rnd() * 200)}건`,
+  },
+  {
+    key: "dataReadiness",
+    value: Number(clamp(85 + rnd() * 12, 78, 99).toFixed(1)),
+    delta: Number((-2 + rnd() * 4).toFixed(1)),
+    sub1Label: "필수필드 충족",
+    sub1Value: `${clamp(88 + rnd() * 10, 82, 99).toFixed(1)}%`,
+    sub2Label: "연계 미완료",
+    sub2Value: `${clamp(1 + rnd() * 8, 0.5, 10).toFixed(1)}%`,
+  },
+  {
+    key: "governanceSafety",
+    value: Number(clamp(88 + rnd() * 10, 82, 99).toFixed(1)),
+    delta: Number((-2 + rnd() * 4).toFixed(1)),
+    sub1Label: "책임자 누락",
+    sub1Value: `${clamp(0.5 + rnd() * 4, 0.2, 5).toFixed(1)}%`,
+    sub2Label: "설명근거 미첨부",
+    sub2Value: `${clamp(1 + rnd() * 6, 0.5, 8).toFixed(1)}%`,
+  },
+];
+
+const makeCentralRegionMetrics = (
+  rnd: () => number
+): Record<CentralKpiKey, CentralRegionMetric[]> => {
+  const regions = SIDO_OPTIONS.filter((s) => s.code !== "all");
+  const result: Record<string, CentralRegionMetric[]> = {};
+
+  const ranges: Record<CentralKpiKey, [number, number]> = {
+    signalQuality: [78, 98],
+    policyImpact: [5, 85],
+    bottleneckRisk: [10, 90],
+    dataReadiness: [75, 99],
+    governanceSafety: [80, 99],
+  };
+
+  for (const key of CENTRAL_KPI_KEYS) {
+    const [lo, hi] = ranges[key];
+    result[key] = regions.map((r) => ({
+      regionCode: r.code,
+      regionName: r.label,
+      value: Number(clamp(lo + rnd() * (hi - lo), lo, hi).toFixed(1)),
+    }));
+  }
+  return result as Record<CentralKpiKey, CentralRegionMetric[]>;
+};
+
+const makeCentralChartData = (
+  rnd: () => number
+): Record<CentralKpiKey, CentralKpiChartData> => {
+  const trend12 = (base: number, scale: number) =>
+    Array.from({ length: 12 }, (_, i) => ({
+      period: `W${i + 1}`,
+      value: Number(clamp(base + rnd() * scale - scale / 3, base - scale / 2, base + scale / 2).toFixed(1)),
+      delta: Number((-5 + rnd() * 10).toFixed(1)),
+    }));
+
+  return {
+    signalQuality: {
+      definitionLine: "유효 신호 비율: 행정적으로 활용 가능한 신호의 비율",
+      lastUpdated: new Date().toLocaleString("ko-KR"),
+      decomposition: [
+        { name: "유효", value: Number((75 + rnd() * 15).toFixed(1)), color: "#2563eb" },
+        { name: "중복", value: Number((3 + rnd() * 6).toFixed(1)), color: "#f59e0b" },
+        { name: "철회", value: Number((1 + rnd() * 4).toFixed(1)), color: "#ef4444" },
+        { name: "무효", value: Number((1 + rnd() * 3).toFixed(1)), color: "#94a3b8" },
+      ],
+      decompositionType: "donut",
+      causeDistribution: [
+        { name: "중복 접수", value: Math.round(20 + rnd() * 30) },
+        { name: "기간 만료", value: Math.round(10 + rnd() * 20) },
+        { name: "데이터 오류", value: Math.round(5 + rnd() * 15) },
+        { name: "대상자 철회", value: Math.round(3 + rnd() * 12) },
+        { name: "기타", value: Math.round(2 + rnd() * 8) },
+      ],
+      causeType: "bar",
+      trend: trend12(91, 8),
+    },
+    policyImpact: {
+      definitionLine: "정책/규칙 변경이 현장 흐름에 미친 변동 수준(정규화 스코어)",
+      lastUpdated: new Date().toLocaleString("ko-KR"),
+      decomposition: [
+        { name: "연령 기준 변경", value: Number((10 + rnd() * 25).toFixed(1)), color: "#7c3aed" },
+        { name: "SLA 기준 변경", value: Number((5 + rnd() * 20).toFixed(1)), color: "#a855f7" },
+        { name: "데이터 규칙 변경", value: Number((3 + rnd() * 15).toFixed(1)), color: "#c084fc" },
+        { name: "우선순위 변경", value: Number((2 + rnd() * 10).toFixed(1)), color: "#d8b4fe" },
+      ],
+      decompositionType: "stackedBar",
+      causeDistribution: [
+        { name: "연령 기준", value: Math.round(25 + rnd() * 30) },
+        { name: "SLA 임계", value: Math.round(15 + rnd() * 25) },
+        { name: "데이터 기준", value: Math.round(10 + rnd() * 20) },
+        { name: "경로 규칙", value: Math.round(5 + rnd() * 15) },
+      ],
+      causeType: "bar",
+      trend: trend12(35, 30),
+    },
+    bottleneckRisk: {
+      definitionLine: "SLA 위반·적체·재접촉 필요의 가중합 (0-100 스케일)",
+      lastUpdated: new Date().toLocaleString("ko-KR"),
+      decomposition: [
+        { name: "신규→처리중", value: Number((5 + rnd() * 15).toFixed(1)), color: "#2563eb" },
+        { name: "처리중→재접촉", value: Number((8 + rnd() * 20).toFixed(1)), color: "#f59e0b" },
+        { name: "재접촉→L2", value: Number((3 + rnd() * 12).toFixed(1)), color: "#ef4444" },
+        { name: "L2→완료", value: Number((2 + rnd() * 8).toFixed(1)), color: "#dc2626" },
+      ],
+      decompositionType: "stackedBar",
+      causeDistribution: [
+        { name: "60대", value: Number((15 + rnd() * 20).toFixed(1)) },
+        { name: "70대+", value: Number((20 + rnd() * 25).toFixed(1)) },
+        { name: "50대", value: Number((10 + rnd() * 15).toFixed(1)) },
+        { name: "40대", value: Number((5 + rnd() * 12).toFixed(1)) },
+        { name: "30대 이하", value: Number((3 + rnd() * 8).toFixed(1)) },
+      ],
+      causeType: "heatBar",
+      trend: trend12(42, 25),
+    },
+    dataReadiness: {
+      definitionLine: "필수 데이터 기준을 충족하는 케이스 비율",
+      lastUpdated: new Date().toLocaleString("ko-KR"),
+      decomposition: [
+        { name: "건강검진", value: Number((90 + rnd() * 8).toFixed(1)), color: "#059669" },
+        { name: "문진 응답", value: Number((82 + rnd() * 12).toFixed(1)), color: "#34d399" },
+        { name: "행정정보", value: Number((88 + rnd() * 10).toFixed(1)), color: "#6ee7b7" },
+        { name: "과거 이력", value: Number((75 + rnd() * 18).toFixed(1)), color: "#a7f3d0" },
+        { name: "연계 결과", value: Number((70 + rnd() * 20).toFixed(1)), color: "#d1fae5" },
+      ],
+      decompositionType: "stackedBar",
+      causeDistribution: [
+        { name: "미수집", value: Math.round(30 + rnd() * 25) },
+        { name: "형식 오류", value: Math.round(15 + rnd() * 15) },
+        { name: "연계 지연", value: Math.round(10 + rnd() * 20) },
+        { name: "중복 값", value: Math.round(5 + rnd() * 10) },
+        { name: "기타", value: Math.round(3 + rnd() * 8) },
+      ],
+      causeType: "donut",
+      trend: trend12(91, 8),
+    },
+    governanceSafety: {
+      definitionLine: "감사·민원 대응 시 필수 근거가 확보된 비율",
+      lastUpdated: new Date().toLocaleString("ko-KR"),
+      decomposition: [
+        { name: "로그 누락", value: Number((2 + rnd() * 5).toFixed(1)), color: "#d97706" },
+        { name: "설명근거 미첨부", value: Number((3 + rnd() * 6).toFixed(1)), color: "#f59e0b" },
+        { name: "책임자 미지정", value: Number((1 + rnd() * 4).toFixed(1)), color: "#fbbf24" },
+        { name: "검토 미완료", value: Number((1 + rnd() * 3).toFixed(1)), color: "#fcd34d" },
+      ],
+      decompositionType: "donut",
+      causeDistribution: [
+        { name: "서울", value: Number((0.5 + rnd() * 3).toFixed(1)) },
+        { name: "경기", value: Number((1 + rnd() * 4).toFixed(1)) },
+        { name: "부산", value: Number((0.8 + rnd() * 3).toFixed(1)) },
+        { name: "대구", value: Number((0.5 + rnd() * 3).toFixed(1)) },
+        { name: "인천", value: Number((0.3 + rnd() * 2).toFixed(1)) },
+      ],
+      causeType: "lineRank",
+      trend: trend12(93, 6),
+    },
+  };
+};
+
+export async function fetchCentralDashboard(
+  regionKey: RegionKey
+): Promise<CentralDashboardData> {
+  await delay(350);
+  const rnd = makeBase(regionKey);
+  return {
+    kpiSummaries: makeCentralKpiSummary(rnd),
+    regionMetrics: makeCentralRegionMetrics(rnd),
+    chartData: makeCentralChartData(rnd),
+  };
 }

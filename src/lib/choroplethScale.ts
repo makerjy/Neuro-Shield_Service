@@ -156,6 +156,12 @@ export const KPI_PALETTE_MAP: Record<string, keyof typeof COLOR_PALETTES> = {
   slaViolationRateNow: 'red',
   dataShortageRateNow: 'heat',
   activeIncidentsNow: 'green',
+  /* 새 5-KPI */
+  signalQuality: 'blue',
+  policyImpact: 'purple',
+  bottleneckRisk: 'red',
+  dataReadiness: 'green',
+  governanceSafety: 'heat',
 };
 
 /** KPI 키에 해당하는 팔레트 이름 반환 */
@@ -180,6 +186,12 @@ export const KPI_LABELS: Record<string, string> = {
   slaViolationRateNow: 'SLA 위반률',
   dataShortageRateNow: '데이터 부족률',
   activeIncidentsNow: '활성 이슈',
+  /* 새 5-KPI */
+  signalQuality: '신호 품질',
+  policyImpact: '정책 영향',
+  bottleneckRisk: '병목 위험',
+  dataReadiness: '데이터 준비도',
+  governanceSafety: '거버넌스 안전',
 };
 
 export function getKpiLabel(kpiKey: string): string {

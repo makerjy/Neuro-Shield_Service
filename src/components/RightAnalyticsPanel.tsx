@@ -14,13 +14,17 @@ import {
   XAxis,
   YAxis,
   ZAxis,
-  Legend
+  Legend,
+  Line,
+  LineChart,
 } from 'recharts';
 import { ChartCard } from './ChartCard';
 import { AlertsCard } from './AlertsCard';
 import { Charts as NationalCharts, RiskMatrixPoint, StageByRegion, AgeRiskItem } from '../mocks/mockApi';
 import { AlertItem, Charts as RegionalCharts } from '../mocks/mockRegionalApi';
 import { CHART_COLORS } from '../styles/tokens';
+import type { CentralKpiKey, CentralKpiChartData } from '../lib/centralKpiTheme';
+import { getCentralKpiTheme } from '../lib/centralKpiTheme';
 
 const pieColors = ['#2563eb', '#e2e8f0'];
 
@@ -32,9 +36,12 @@ type RightAnalyticsPanelProps = {
   alerts?: AlertItem[];
   loading?: boolean;
   onSelectRegion?: (regionId: string) => void;
+  /** 중앙 KPI 기반 차트 */
+  selectedKpi?: CentralKpiKey;
+  centralChartData?: CentralKpiChartData | null;
 };
 
-export function RightAnalyticsPanel({ variant = 'national', charts, alerts, loading, onSelectRegion }: RightAnalyticsPanelProps) {
+export function RightAnalyticsPanel({ variant = 'national', charts, alerts, loading, onSelectRegion, selectedKpi, centralChartData }: RightAnalyticsPanelProps) {
   if (loading) {
     return (
       <div className="space-y-3">
@@ -139,6 +146,168 @@ export function RightAnalyticsPanel({ variant = 'national', charts, alerts, load
   }
 
   const nationalCharts = charts as NationalCharts;
+
+  /* ── 중앙 KPI 기반 3-slot 차트 시스템 ── */
+  if (selectedKpi && centralChartData) {
+    const theme = getCentralKpiTheme(selectedKpi);
+    const { decomposition, decompositionType, causeDistribution, causeType, definitionLine, lastUpdated } = centralChartData;
+
+    const renderDecomposition = () => {
+      if (decompositionType === 'donut') {
+        return (
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={decomposition}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={45}
+                  outerRadius={70}
+                  paddingAngle={2}
+                  label={({ name, value }) => `${name} ${value}`}
+                >
+                  {decomposition.map((d, i) => (
+                    <Cell key={i} fill={d.color ?? theme.palette[i % theme.palette.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v: any) => [`${v}`, '']} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      }
+      // stackedBar / timeline → BarChart
+      return (
+        <div className="h-48">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={decomposition} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} />
+              <Tooltip />
+              <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+                {decomposition.map((d, i) => (
+                  <Cell key={i} fill={d.color ?? theme.palette[Math.min(i + 2, theme.palette.length - 1)]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    };
+
+    const renderCause = () => {
+      if (causeType === 'donut') {
+        const causeColors = [theme.primaryColor, '#94a3b8', '#cbd5e1', '#e2e8f0', '#f1f5f9'];
+        return (
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={causeDistribution}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={45}
+                  outerRadius={70}
+                  paddingAngle={2}
+                  label={({ name, value }) => `${name} ${value}`}
+                >
+                  {causeDistribution.map((_, i) => (
+                    <Cell key={i} fill={causeColors[i % causeColors.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v: any) => [`${v}`, '']} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      }
+      if (causeType === 'lineRank') {
+        return (
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={causeDistribution} layout="vertical" margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis type="number" tick={{ fontSize: 10 }} />
+                <YAxis dataKey="name" type="category" width={50} tick={{ fontSize: 10 }} />
+                <Tooltip />
+                <Bar dataKey="value" fill={theme.primaryColor} radius={[0, 3, 3, 0]} fillOpacity={0.8}>
+                  {causeDistribution.map((_, i) => (
+                    <Cell key={i} fill={theme.palette[Math.min(i + 3, theme.palette.length - 1)]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      }
+      // bar / heatBar
+      return (
+        <div className="h-48">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={causeDistribution} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} />
+              <Tooltip />
+              <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+                {causeDistribution.map((_, i) => (
+                  <Cell key={i} fill={causeType === 'heatBar'
+                    ? theme.palette[Math.min(i + 1, theme.palette.length - 1)]
+                    : theme.primaryColor
+                  } fillOpacity={0.85} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    };
+
+    return (
+      <div className="space-y-3">
+        {/* Slot 1: KPI 정의 요약 */}
+        <div className="rounded-md border border-gray-200 bg-white p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span
+              className="inline-block h-3 w-3 rounded-full"
+              style={{ backgroundColor: theme.primaryColor }}
+            />
+            <span className="text-sm font-semibold text-gray-900">{theme.label}</span>
+          </div>
+          <p className="text-xs text-gray-600 leading-relaxed">{definitionLine}</p>
+          <div className="mt-2 flex items-center gap-3 text-[10px] text-gray-400">
+            <span>단위: {theme.unit}</span>
+            {theme.target && <span>목표: {theme.valueFormatter(theme.target)}</span>}
+            <span>갱신: {lastUpdated}</span>
+          </div>
+        </div>
+
+        {/* Slot 2: 핵심 분해 차트 */}
+        <ChartCard
+          title={`${theme.shortLabel} — 구성 분해`}
+          tableData={decomposition.map((d) => ({ label: d.name, value: String(d.value) }))}
+          onTypeChange={() => undefined}
+          onDownload={() => undefined}
+        >
+          {renderDecomposition()}
+        </ChartCard>
+
+        {/* Slot 3: 원인 기여도/분포 */}
+        <ChartCard
+          title={`${theme.shortLabel} — 원인 분포`}
+          tableData={causeDistribution.map((d) => ({ label: d.name, value: String(d.value) }))}
+          onTypeChange={() => undefined}
+          onDownload={() => undefined}
+        >
+          {renderCause()}
+        </ChartCard>
+      </div>
+    );
+  }
+
+  /* ── 레거시 national 차트 (fallback) ── */
 
   const SLA_THRESHOLD = 95;
   const DATA_THRESHOLD = 93;

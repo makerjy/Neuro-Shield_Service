@@ -1,5 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ArrowLeft, HelpCircle, Printer, RefreshCw, Share2 } from 'lucide-react';
+import type { CentralKpiKey } from '../lib/centralKpiTheme';
+import { KPI_THEMES, CENTRAL_KPI_KEYS, getCentralKpiTheme, getCentralKpiStatus } from '../lib/centralKpiTheme';
+import type { CentralKpiSummary } from '../lib/centralKpiTheme';
 
 export type MetricOption = {
   id: string;
@@ -33,10 +36,12 @@ type HeaderBarProps = {
   lastUpdated: string;
   isRefreshing: boolean;
   onRefresh: () => void;
-  /* KPI 요약 버튼 */
+  /* KPI 요약 버튼 (레거시 - regional 용) */
   kpiOptions?: KpiHeaderOption[];
   selectedKpi?: string;
   onSelectKpi?: (key: string) => void;
+  /* 중앙 KPI 요약 (새 5-KPI 시스템) */
+  centralKpiSummaries?: CentralKpiSummary[];
   /* 드릴 상태 */
   regionLabel?: string;
   canDrillUp?: boolean;
@@ -68,15 +73,108 @@ export function HeaderBar({
   kpiOptions,
   selectedKpi,
   onSelectKpi,
+  centralKpiSummaries,
   regionLabel,
   canDrillUp,
   onDrillUp
 }: HeaderBarProps) {
+  const [hoveredKpi, setHoveredKpi] = useState<CentralKpiKey | null>(null);
+
   return (
     <header className="sticky top-0 z-30 border-b border-gray-200 bg-white">
       <div className="mx-auto max-w-[1400px] px-6 py-3">
-        {/* ── 1줄: KPI 요약 버튼 그룹 (주요 인터랙션) ── */}
-        {kpiOptions && kpiOptions.length > 0 && (
+        {/* ── 1줄: 중앙 KPI 5-버튼 그룹 ── */}
+        {centralKpiSummaries && centralKpiSummaries.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            {centralKpiSummaries.map((summary) => {
+              const theme = getCentralKpiTheme(summary.key);
+              const isActive = selectedKpi === summary.key;
+              const status = getCentralKpiStatus(summary.key, summary.value);
+              const isHovered = hoveredKpi === summary.key;
+              return (
+                <div key={summary.key} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => onSelectKpi?.(summary.key)}
+                    onMouseEnter={() => setHoveredKpi(summary.key)}
+                    onMouseLeave={() => setHoveredKpi(null)}
+                    className={`flex items-center gap-2.5 rounded-lg border-2 px-3.5 py-2 text-xs transition-all ${
+                      isActive
+                        ? 'shadow-md'
+                        : 'border-gray-200 bg-white hover:shadow-sm'
+                    }`}
+                    style={
+                      isActive
+                        ? {
+                            borderColor: theme.primaryColor,
+                            backgroundColor: theme.softBg,
+                            boxShadow: `0 0 0 2px ${theme.primaryColor}33`,
+                          }
+                        : undefined
+                    }
+                  >
+                    {/* 컬러 도트 */}
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: theme.primaryColor }}
+                    />
+                    <span className="text-gray-500">{theme.shortLabel}</span>
+                    <span
+                      className="font-bold"
+                      style={{
+                        color:
+                          status === 'risk'
+                            ? '#dc2626'
+                            : status === 'warn'
+                              ? '#d97706'
+                              : '#111827',
+                      }}
+                    >
+                      {theme.valueFormatter(summary.value)}
+                    </span>
+                    {/* 델타 */}
+                    <span
+                      className={`text-[10px] ${
+                        summary.delta > 0
+                          ? theme.higherIsWorse
+                            ? 'text-red-500'
+                            : 'text-emerald-500'
+                          : summary.delta < 0
+                            ? theme.higherIsWorse
+                              ? 'text-emerald-500'
+                              : 'text-red-500'
+                            : 'text-gray-400'
+                      }`}
+                    >
+                      {summary.delta > 0 ? '▲' : summary.delta < 0 ? '▼' : '─'}{' '}
+                      {Math.abs(summary.delta).toFixed(1)}
+                    </span>
+                  </button>
+
+                  {/* Tooltip (hover 시 3줄 표시) */}
+                  {isHovered && (
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50 w-72 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-lg text-[11px] text-gray-600 pointer-events-none">
+                      <div className="font-semibold text-gray-900 mb-1.5">{theme.label}</div>
+                      {theme.tooltipLines.map((line, i) => (
+                        <div key={i} className="leading-relaxed">
+                          {line}
+                        </div>
+                      ))}
+                      <div className="mt-1.5 flex items-center gap-2 text-[10px] text-gray-400">
+                        <span>{summary.sub1Label}: {summary.sub1Value}</span>
+                        <span>·</span>
+                        <span>{summary.sub2Label}: {summary.sub2Value}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── 레거시 KPI 버튼 (Regional 등에서 사용) ── */}
+        {!centralKpiSummaries && kpiOptions && kpiOptions.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 mb-3">
             {kpiOptions.map((opt) => {
               const isActive = selectedKpi === opt.key;

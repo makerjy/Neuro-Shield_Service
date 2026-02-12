@@ -4,11 +4,14 @@ import { LeftKpiPanel } from '../components/LeftKpiPanel';
 import { GeoMapPanel } from '../components/GeoMapPanel';
 import { RightAnalyticsPanel } from '../components/RightAnalyticsPanel';
 import { BottomTrendPanel } from '../components/BottomTrendPanel';
-import { fetchDashboard, RegionKey } from '../mocks/mockApi';
+import { fetchDashboard, fetchCentralDashboard, RegionKey } from '../mocks/mockApi';
 import { SIDO_OPTIONS, SIGUNGU_OPTIONS } from '../mocks/mockGeo';
 import { GEO_INDICATORS } from '../components/geomap/geoIndicators';
 import { getKpiLabel } from '../lib/choroplethScale';
 import type { KpiHeaderOption } from '../components/HeaderBar';
+import type { CentralKpiKey } from '../lib/centralKpiTheme';
+import type { CentralDashboardData } from '../lib/centralKpiTheme';
+import { getCentralKpiTheme } from '../lib/centralKpiTheme';
 
 const metricOptions = GEO_INDICATORS.map((item) => ({ id: item.id, label: item.label }));
 
@@ -31,9 +34,10 @@ export function NationalOpsDashboard() {
   const [mapMode, setMapMode] = useState<'fill' | 'dot' | 'bubble'>('fill');
   const [mapLevels, setMapLevels] = useState(7);
   const [mapAlpha, setMapAlpha] = useState(0.95);
-  const [selectedKpi, setSelectedKpi] = useState<string>('throughputNow');
+  const [selectedKpi, setSelectedKpi] = useState<CentralKpiKey>('signalQuality');
 
   const [data, setData] = useState<any | null>(null);
+  const [centralData, setCentralData] = useState<CentralDashboardData | null>(null);
   const [status, setStatus] = useState<'loadingInitial' | 'loadingRegion' | 'ready' | 'empty' | 'partial' | 'error'>('loadingInitial');
   const [lastUpdated, setLastUpdated] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -77,10 +81,14 @@ export function NationalOpsDashboard() {
       if (mode === 'region') setStatus('loadingRegion');
       if (mode === 'refresh') setIsRefreshing(true);
       try {
-        const next = await fetchDashboard(regionKey);
+        const [next, central] = await Promise.all([
+          fetchDashboard(regionKey),
+          fetchCentralDashboard(regionKey),
+        ]);
         const hasEmpty = next.map.length === 0;
         const hasPartial = next.charts.barKpi.length === 0 || next.charts.weeklyTrend.length === 0;
         setData(next);
+        setCentralData(central);
         setStatus(hasEmpty ? 'empty' : hasPartial ? 'partial' : 'ready');
         setLastUpdated(new Date().toLocaleString('ko-KR'));
       } catch (error) {
@@ -165,17 +173,8 @@ export function NationalOpsDashboard() {
       }));
   }, [data?.map, regionLookup]);
 
-  /* ── 헤더 KPI 요약 옵션 ── */
-  const kpiHeaderOptions: KpiHeaderOption[] = useMemo(() => {
-    if (!data?.kpi) return [];
-    const kpi = data.kpi;
-    return [
-      { key: 'throughputNow', label: '처리건수', value: `${Math.round(kpi.throughputNow).toLocaleString()}건`, status: 'normal' as const },
-      { key: 'slaViolationRateNow', label: 'SLA 위반률', value: `${kpi.slaViolationRateNow.toFixed(2)}%`, status: (kpi.slaViolationRateNow >= 3 ? 'risk' : 'normal') as 'normal' | 'risk' },
-      { key: 'dataShortageRateNow', label: '데이터 부족률', value: `${kpi.dataShortageRateNow.toFixed(2)}%`, status: (kpi.dataShortageRateNow >= 5 ? 'warn' : 'normal') as 'normal' | 'warn' },
-      { key: 'activeIncidentsNow', label: '활성 이슈', value: `${kpi.activeIncidentsNow}건`, status: 'normal' as const },
-    ];
-  }, [data?.kpi]);
+  /* ── 헤더 KPI 요약 — 새 5-KPI 시스템 ── */
+  const centralKpiSummaries = centralData?.kpiSummaries ?? [];
 
   const showLoading = status === 'loadingInitial' || status === 'loadingRegion';
   const partial = status === 'partial';
@@ -200,9 +199,9 @@ export function NationalOpsDashboard() {
         lastUpdated={lastUpdated}
         isRefreshing={isRefreshing}
         onRefresh={() => loadDashboard('refresh')}
-        kpiOptions={kpiHeaderOptions}
+        centralKpiSummaries={centralKpiSummaries}
         selectedKpi={selectedKpi}
-        onSelectKpi={setSelectedKpi}
+        onSelectKpi={(key) => setSelectedKpi(key as CentralKpiKey)}
         regionLabel={regionLabel}
         canDrillUp={canDrillUp}
         onDrillUp={drillUp}
@@ -226,7 +225,7 @@ export function NationalOpsDashboard() {
         )}
 
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,2.4fr)_minmax(0,1.3fr)]">
-          <LeftKpiPanel kpi={data?.kpi ?? null} loading={showLoading} partial={partial} selectedKpi={selectedKpi} onSelectKpi={setSelectedKpi} />
+          <LeftKpiPanel kpi={data?.kpi ?? null} loading={showLoading} partial={partial} selectedKpi={selectedKpi} onSelectKpi={(key) => setSelectedKpi(key as CentralKpiKey)} centralData={centralData} />
 
           <div className="space-y-3">
             <GeoMapPanel
@@ -253,7 +252,7 @@ export function NationalOpsDashboard() {
                   <span className="text-xs font-semibold text-gray-700">
                     리스크 Top-5 ({regionLabel} 하위 구역)
                   </span>
-                  <span className="text-[10px] text-gray-400">{getKpiLabel(selectedKpi)} 기준</span>
+                  <span className="text-[10px] text-gray-400">{getCentralKpiTheme(selectedKpi).label} 기준</span>
                 </div>
                 <div className="space-y-1">
                   {top5Regions.map((item: any, idx: number) => (
@@ -305,11 +304,11 @@ export function NationalOpsDashboard() {
             </div>
           </div>
 
-          <RightAnalyticsPanel charts={data?.charts ?? null} loading={showLoading} />
+          <RightAnalyticsPanel charts={data?.charts ?? null} loading={showLoading} selectedKpi={selectedKpi} centralChartData={centralData?.chartData?.[selectedKpi] ?? null} />
         </div>
 
         <div className="mt-4">
-          <BottomTrendPanel data={data?.charts?.weeklyTrend ?? null} loading={showLoading} />
+          <BottomTrendPanel data={data?.charts?.weeklyTrend ?? null} loading={showLoading} selectedKpi={selectedKpi} centralTrend={centralData?.chartData?.[selectedKpi]?.trend ?? null} />
         </div>
       </main>
     </div>

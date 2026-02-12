@@ -210,202 +210,198 @@ export function CalendarView() {
         </section>
       )}
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1fr,320px]">
-        <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
-          <header className="border-b border-gray-100 px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-lg font-bold text-gray-900">{monthLabel}</h3>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => monthShift(-1)}
-                    className="rounded border border-gray-200 p-1 text-gray-600 hover:bg-gray-50"
-                  >
-                    <ChevronLeft size={15} />
-                  </button>
-                  <button
-                    onClick={() => monthShift(1)}
-                    className="rounded border border-gray-200 p-1 text-gray-600 hover:bg-gray-50"
-                  >
-                    <ChevronRight size={15} />
-                  </button>
-                </div>
+      <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <header className="border-b border-gray-100 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <h3 className="text-lg font-bold text-gray-900">{monthLabel}</h3>
+              <div className="flex items-center gap-1">
                 <button
-                  onClick={() => {
-                    const now = new Date();
-                    setBaseMonth(new Date(now.getFullYear(), now.getMonth(), 1));
-                    setSelectedDate(dateKey(now));
-                  }}
-                  className="text-xs font-semibold text-gray-500 hover:text-gray-800"
+                  onClick={() => monthShift(-1)}
+                  className="rounded border border-gray-200 p-1 text-gray-600 hover:bg-gray-50"
                 >
-                  오늘
+                  <ChevronLeft size={15} />
+                </button>
+                <button
+                  onClick={() => monthShift(1)}
+                  className="rounded border border-gray-200 p-1 text-gray-600 hover:bg-gray-50"
+                >
+                  <ChevronRight size={15} />
                 </button>
               </div>
-
-              <div className="flex items-center gap-2">
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-1 text-[11px] font-semibold">
-                  {(["month", "week", "day"] as ViewMode[]).map((mode) => (
-                    <button
-                      key={mode}
-                      onClick={() => setViewMode(mode)}
-                      className={cn(
-                        "rounded-md px-2.5 py-1",
-                        viewMode === mode ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"
-                      )}
-                    >
-                      {mode === "month" ? "월" : mode === "week" ? "주" : "일"}
-                    </button>
-                  ))}
-                </div>
-                <button className="inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white">
-                  <Plus size={13} />
-                  일정 생성
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <div className="px-3 pb-3 pt-2">
-            <div className="grid grid-cols-7 border-b border-gray-100 pb-2 text-center text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              {["일", "월", "화", "수", "목", "금", "토"].map((day) => (
-                <div key={day}>{day}</div>
-              ))}
+              <button
+                onClick={() => {
+                  const now = new Date();
+                  setBaseMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+                  setSelectedDate(dateKey(now));
+                }}
+                className="text-xs font-semibold text-gray-500 hover:text-gray-800"
+              >
+                오늘
+              </button>
             </div>
 
-            <div className="grid grid-cols-7 gap-1 pt-2">
-              {monthCells.map((day, idx) => {
-                if (!day) {
-                  return <div key={`empty-${idx}`} className="min-h-[110px] rounded-lg border border-transparent bg-gray-50/40" />;
-                }
-
-                const key = `${baseMonth.getFullYear()}-${pad(baseMonth.getMonth() + 1)}-${pad(day)}`;
-                const dayItems = schedulesByDate.get(key) ?? [];
-                const isToday = key === todayKey;
-                const isSelected = key === selectedDate;
-
-                return (
+            <div className="flex items-center gap-2">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-1 text-[11px] font-semibold">
+                {(["month", "week", "day"] as ViewMode[]).map((mode) => (
                   <button
-                    key={key}
-                    onClick={() => setSelectedDate(key)}
+                    key={mode}
+                    onClick={() => setViewMode(mode)}
                     className={cn(
-                      "min-h-[110px] rounded-lg border p-2 text-left transition-colors",
-                      isSelected ? "border-blue-300 bg-blue-50" : "border-gray-100 bg-white hover:border-gray-200 hover:bg-gray-50",
-                      isToday && !isSelected ? "border-emerald-300" : ""
+                      "rounded-md px-2.5 py-1",
+                      viewMode === mode ? "bg-white text-gray-900 shadow-sm" : "text-gray-500"
                     )}
                   >
-                    <div className="mb-1 flex items-center justify-between">
-                      <span
-                        className={cn(
-                          "inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold",
-                          isToday ? "bg-emerald-500 text-white" : "text-gray-600"
-                        )}
-                      >
-                        {day}
-                      </span>
-                      <span className="text-[10px] text-gray-400">{dayItems.length ? `${dayItems.length}건` : ""}</span>
-                    </div>
-                    <div className="space-y-1">
-                      {dayItems.slice(0, 3).map((item) => {
-                        const meta = typeMeta(item.type);
-                        const Icon = meta.icon;
-                        return (
-                          <div key={item.id} className={cn("flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold", meta.chip)}>
-                            <Icon size={9} />
-                            <span className="truncate">{item.time} {item.caseId}</span>
-                          </div>
-                        );
-                      })}
-                      {dayItems.length > 3 ? (
-                        <p className="text-[10px] text-gray-500">+{dayItems.length - 3}건</p>
-                      ) : null}
-                    </div>
+                    {mode === "month" ? "월" : mode === "week" ? "주" : "일"}
                   </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] md:grid-cols-4">
-              {(["연락", "예약", "방문", "의뢰"] as ScheduleType[]).map((type) => {
-                const meta = typeMeta(type);
-                const Icon = meta.icon;
-                return (
-                  <div key={type} className="inline-flex items-center gap-1 rounded border border-gray-100 bg-gray-50 px-2 py-1 text-gray-600">
-                    <Icon size={11} />
-                    {type}
-                  </div>
-                );
-              })}
+                ))}
+              </div>
+              <button className="inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white">
+                <Plus size={13} />
+                일정 생성
+              </button>
             </div>
           </div>
-        </section>
+        </header>
 
-        <aside className="space-y-4">
-          <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-              <Clock3 size={14} className="text-blue-600" />
-              오늘의 일정
-            </h3>
-            <div className="mt-3 space-y-2">
-              {todaySchedules.length === 0 ? (
-                <p className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                  오늘 일정이 없습니다.
-                </p>
-              ) : (
-                todaySchedules.map((item) => (
-                  <div key={item.id} className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <p className="font-semibold text-gray-800">{item.time} · {item.title}</p>
-                      <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold", statusTone(item.status))}>
-                        {item.status}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[11px] text-gray-500">{item.caseId} · {item.assignee}</p>
+        <div className="px-3 pb-3 pt-2">
+          <div className="grid grid-cols-7 border-b border-gray-100 pb-2 text-center text-[10px] font-bold uppercase tracking-wider text-gray-400">
+            {["일", "월", "화", "수", "목", "금", "토"].map((day) => (
+              <div key={day}>{day}</div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-1 pt-2">
+            {monthCells.map((day, idx) => {
+              if (!day) {
+                return <div key={`empty-${idx}`} className="min-h-[96px] rounded-lg border border-transparent bg-gray-50/40" />;
+              }
+
+              const key = `${baseMonth.getFullYear()}-${pad(baseMonth.getMonth() + 1)}-${pad(day)}`;
+              const dayItems = schedulesByDate.get(key) ?? [];
+              const isToday = key === todayKey;
+              const isSelected = key === selectedDate;
+
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelectedDate(key)}
+                  className={cn(
+                    "min-h-[96px] rounded-lg border p-2 text-left transition-colors",
+                    isSelected ? "border-blue-300 bg-blue-50" : "border-gray-100 bg-white hover:border-gray-200 hover:bg-gray-50",
+                    isToday && !isSelected ? "border-emerald-300" : ""
+                  )}
+                >
+                  <div className="mb-1 flex items-center justify-between">
+                    <span
+                      className={cn(
+                        "inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold",
+                        isToday ? "bg-emerald-500 text-white" : "text-gray-600"
+                      )}
+                    >
+                      {day}
+                    </span>
+                    <span className="text-[10px] text-gray-400">{dayItems.length ? `${dayItems.length}건` : ""}</span>
                   </div>
-                ))
-              )}
-            </div>
-          </section>
+                  <div className="space-y-1">
+                    {dayItems.slice(0, 2).map((item) => {
+                      const meta = typeMeta(item.type);
+                      const Icon = meta.icon;
+                      return (
+                        <div key={item.id} className={cn("flex items-center gap-1 rounded px-1 py-0.5 text-[10px] font-semibold", meta.chip)}>
+                          <Icon size={9} />
+                          <span className="truncate">{item.time} {item.caseId}</span>
+                        </div>
+                      );
+                    })}
+                    {dayItems.length > 2 ? (
+                      <p className="text-[10px] text-gray-500">+{dayItems.length - 2}건</p>
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
 
-          <section className="rounded-xl border border-red-200 bg-red-50 p-4">
-            <h3 className="text-sm font-bold text-red-800 flex items-center gap-2">
-              <AlertCircle size={14} />
-              지연 일정
-            </h3>
-            <div className="mt-3 space-y-2">
-              {delayedSchedules.map((item) => (
-                <div key={item.id} className="rounded-md border border-red-100 bg-white px-3 py-2 text-xs">
-                  <p className="font-semibold text-gray-900">{item.caseId}</p>
-                  <p className="mt-0.5 text-red-700">{item.title}</p>
-                  <p className="mt-1 text-[11px] text-gray-500">{item.date} {item.time}</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 border-t border-gray-100 pt-3 text-[11px] md:grid-cols-4">
+            {(["연락", "예약", "방문", "의뢰"] as ScheduleType[]).map((type) => {
+              const meta = typeMeta(type);
+              const Icon = meta.icon;
+              return (
+                <div key={type} className="inline-flex items-center gap-1 rounded border border-gray-100 bg-gray-50 px-2 py-1 text-gray-600">
+                  <Icon size={11} />
+                  {type}
                 </div>
-              ))}
-            </div>
-          </section>
+              );
+            })}
+          </div>
+        </div>
+      </section>
 
-          <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-            <h3 className="text-sm font-bold text-gray-900">선택 날짜 상세</h3>
-            <p className="mt-1 text-[11px] text-gray-500">{selectedDate}</p>
-            <div className="mt-3 space-y-2">
-              {selectedSchedules.length === 0 ? (
-                <p className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                  선택 날짜 일정이 없습니다.
-                </p>
-              ) : (
-                selectedSchedules.map((item) => (
-                  <article key={item.id} className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
-                    <p className="font-semibold text-gray-900">{item.time} · {item.type}</p>
-                    <p className="mt-1 text-gray-700">{item.title}</p>
-                    <p className="mt-1 text-[11px] text-gray-500">
-                      {item.caseId} · 담당 {item.assignee}
-                      {item.location ? ` · ${item.location}` : ""}
-                    </p>
-                  </article>
-                ))
-              )}
+      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+          <Clock3 size={14} className="text-blue-600" />
+          오늘의 일정
+        </h3>
+        <div className="mt-3 space-y-2">
+          {todaySchedules.length === 0 ? (
+            <p className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+              오늘 일정이 없습니다.
+            </p>
+          ) : (
+            todaySchedules.map((item) => (
+              <div key={item.id} className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <p className="font-semibold text-gray-800">{item.time} · {item.title}</p>
+                  <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold", statusTone(item.status))}>
+                    {item.status}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-gray-500">{item.caseId} · {item.assignee}</p>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-red-200 bg-red-50 p-4">
+        <h3 className="text-sm font-bold text-red-800 flex items-center gap-2">
+          <AlertCircle size={14} />
+          지연 일정
+        </h3>
+        <div className="mt-3 space-y-2">
+          {delayedSchedules.map((item) => (
+            <div key={item.id} className="rounded-md border border-red-100 bg-white px-3 py-2 text-xs">
+              <p className="font-semibold text-gray-900">{item.caseId}</p>
+              <p className="mt-0.5 text-red-700">{item.title}</p>
+              <p className="mt-1 text-[11px] text-gray-500">{item.date} {item.time}</p>
             </div>
-          </section>
-        </aside>
-      </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <h3 className="text-sm font-bold text-gray-900">선택 날짜 상세</h3>
+        <p className="mt-1 text-[11px] text-gray-500">{selectedDate}</p>
+        <div className="mt-3 space-y-2">
+          {selectedSchedules.length === 0 ? (
+            <p className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+              선택 날짜 일정이 없습니다.
+            </p>
+          ) : (
+            selectedSchedules.map((item) => (
+              <article key={item.id} className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
+                <p className="font-semibold text-gray-900">{item.time} · {item.type}</p>
+                <p className="mt-1 text-gray-700">{item.title}</p>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  {item.caseId} · 담당 {item.assignee}
+                  {item.location ? ` · ${item.location}` : ""}
+                </p>
+              </article>
+            ))
+          )}
+        </div>
+      </section>
     </div>
   );
 }

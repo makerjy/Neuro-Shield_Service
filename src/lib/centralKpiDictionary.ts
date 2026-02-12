@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════════
-   중앙센터(보건복지부) KPI 사전 — Stage0~3 + L0~L2 운영감사형
+   중앙센터(보건복지부) KPI 사전 — 5대 거버넌스 KPI
    ═══════════════════════════════════════════════════════════════════════════════
    - 5개 핵심 KPI: 단일 진실 공급원 (Single Source of Truth)
    - 모든 KPI는 numerator / denominator / window / drillToken 필수
@@ -9,87 +9,88 @@
 import type { CentralKpiDefinition, CentralKpiId } from './kpi.types';
 
 export const CENTRAL_KPI_DICTIONARY: Record<CentralKpiId, CentralKpiDefinition> = {
-  /* ── 1. 위험 신호 탐지율 ──────────────────────────────────── */
-  RISK_SIGNAL_DETECTION: {
-    id: 'RISK_SIGNAL_DETECTION',
-    name: '위험 신호 탐지율',
-    shortName: '신호 탐지',
-    description: 'Stage0 처리 건수 중 Stage1 위험 신호로 플래그된 비율',
-    formula: 'Stage1Flagged / Stage0Processed × 100',
-    numeratorField: 'stage1Flagged',
-    denominatorField: 'stage0Processed',
-    unit: '%',
-    higherBetter: false,    // 높으면 위험 신호 많다는 뜻 → 감시 지표
-    baseline: 12,
-    target: 15,             // 15% 이하 유지 권장
-    drillToken: 'STAGE1_FLAGGED',
-  },
-
-  /* ── 2. 동의 전환율 ──────────────────────────────────────── */
-  CONSENT_CONVERSION: {
-    id: 'CONSENT_CONVERSION',
-    name: '동의 전환율',
-    shortName: '동의 전환',
-    description: 'Stage1 플래그 건 중 동의(ConsentGranted)로 전환된 비율 + median(Flagged→Granted) 리드타임',
-    formula: 'ConsentGranted / Stage1Flagged × 100',
-    numeratorField: 'consentGranted',
-    denominatorField: 'stage1Flagged',
+  /* ── 1. 신호 품질 ──────────────────────────────────── */
+  SIGNAL_QUALITY: {
+    id: 'SIGNAL_QUALITY',
+    name: '신호 품질',
+    shortName: '신호 품질',
+    description: '유효 신호 비율: 행정적으로 활용 가능한 신호의 비율 (중복·철회·무효 제외)',
+    formula: 'ValidSignals / TotalSignals × 100',
+    numeratorField: 'validSignals',
+    denominatorField: 'totalSignals',
     unit: '%',
     higherBetter: true,
-    baseline: 55,
-    target: 70,
-    drillToken: 'CONSENT_GRANTED',
-    auxiliaryKeys: ['medianFlaggedToGrantedDays'],
+    baseline: 88,
+    target: 95,
+    drillToken: 'VALID_SIGNALS',
   },
 
-  /* ── 3. L2 적체율 ────────────────────────────────────────── */
-  L2_QUEUE_BACKLOG: {
-    id: 'L2_QUEUE_BACKLOG',
-    name: 'L2 적체율',
-    shortName: 'L2 적체',
-    description: 'L2 대기열 잔여 건수 / L2 배정 건수 + first-action latency 분포',
-    formula: 'L2QueueBacklog / L2Assigned × 100',
-    numeratorField: 'l2QueueBacklog',
-    denominatorField: 'l2Assigned',
+  /* ── 2. 정책 영향 ──────────────────────────────────── */
+  POLICY_IMPACT: {
+    id: 'POLICY_IMPACT',
+    name: '정책 영향',
+    shortName: '정책 영향',
+    description: '정책/규칙 변경 후 KPI 변동지수 (정규화 스코어 0-100)',
+    formula: 'PolicyChangeImpactScore (정규화)',
+    numeratorField: 'impactScore',
+    denominatorField: 'maxScore',
+    unit: '%',
+    higherBetter: false,   // 높으면 변동이 크다 = 불안정
+    baseline: 35,
+    target: 20,
+    drillToken: 'POLICY_IMPACT_SCORE',
+    auxiliaryKeys: ['rollbackCount', 'warningRegions'],
+  },
+
+  /* ── 3. 병목 위험 ──────────────────────────────────── */
+  BOTTLENECK_RISK: {
+    id: 'BOTTLENECK_RISK',
+    name: '병목 위험',
+    shortName: '병목 위험',
+    description: 'SLA 위반·적체·재접촉 필요의 가중합 (0-100 스케일)',
+    formula: '(SLAViolation×0.4 + L2Backlog×0.35 + RecontactNeed×0.25)',
+    numeratorField: 'weightedRisk',
+    denominatorField: 'maxRisk',
     unit: '%',
     higherBetter: false,
-    baseline: 25,
-    target: 15,
-    drillToken: 'L2_FIRST_ACTION_TAKEN',
-    auxiliaryKeys: ['firstActionLatencyMedianHours', 'backlogCount'],
+    baseline: 45,
+    target: 30,
+    drillToken: 'BOTTLENECK_SCORE',
+    auxiliaryKeys: ['slaViolationRate', 'l2BacklogCount'],
   },
 
-  /* ── 4. 2차 연결률 ───────────────────────────────────────── */
-  STAGE2_LINKAGE: {
-    id: 'STAGE2_LINKAGE',
-    name: '2차 연결률',
-    shortName: '2차 연결',
-    description: 'Stage2 신청 건 중 실제 연결(LinkedOutcome) 비율 + 병목 원인 + median 리드타임',
-    formula: 'Stage2LinkedOutcome / Stage2Applied × 100',
-    numeratorField: 'stage2Linked',
-    denominatorField: 'stage2Applied',
+  /* ── 4. 데이터 준비도 ──────────────────────────────── */
+  DATA_READINESS: {
+    id: 'DATA_READINESS',
+    name: '데이터 준비도',
+    shortName: '데이터 준비',
+    description: '필수 데이터 기준을 충족하는 케이스 비율',
+    formula: 'ReadyCases / TotalCases × 100',
+    numeratorField: 'readyCases',
+    denominatorField: 'totalCases',
     unit: '%',
     higherBetter: true,
-    baseline: 60,
-    target: 75,
-    drillToken: 'STAGE2_LINKED',
-    auxiliaryKeys: ['medianAppliedToLinkedDays', 'blockedCount', 'blockedReasons'],
+    baseline: 85,
+    target: 95,
+    drillToken: 'DATA_READY_CASES',
+    auxiliaryKeys: ['missingFieldRate', 'linkagePendingRate'],
   },
 
-  /* ── 5. MCI 추적등록률 ───────────────────────────────────── */
-  MCI_FOLLOWUP_ENROLL: {
-    id: 'MCI_FOLLOWUP_ENROLL',
-    name: 'MCI 추적등록률',
-    shortName: 'MCI 등록',
-    description: 'Stage2 관리 경로(MCI_TRACK) 설정 건 중 추적등록(FollowupEnrolled) 비율',
-    formula: 'FollowupEnrolled / Stage2CarePathway(MCI_TRACK) × 100',
-    numeratorField: 'followupEnrolled',
-    denominatorField: 'stage2MciTrack',
+  /* ── 5. 거버넌스 안전 ──────────────────────────────── */
+  GOVERNANCE_SAFETY: {
+    id: 'GOVERNANCE_SAFETY',
+    name: '거버넌스 안전',
+    shortName: '거버넌스',
+    description: '감사·민원 대응 시 필수 근거가 확보된 비율 (로그·설명근거·책임자)',
+    formula: 'AuditReady / TotalAuditable × 100',
+    numeratorField: 'auditReady',
+    denominatorField: 'totalAuditable',
     unit: '%',
     higherBetter: true,
-    baseline: 40,
-    target: 60,
-    drillToken: 'FOLLOWUP_ENROLLED',
+    baseline: 90,
+    target: 98,
+    drillToken: 'AUDIT_READY',
+    auxiliaryKeys: ['missingResponsible', 'missingExplanation'],
   },
 };
 
@@ -121,10 +122,10 @@ export const FUNNEL_STAGE_LABELS: { stage: string; label: string; color: string 
 ];
 
 /** KPI 카드 색상 매핑 */
-export const CENTRAL_KPI_COLORS: Record<CentralKpiId, { bg: string; text: string; border: string; icon: string }> = {
-  RISK_SIGNAL_DETECTION: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-300', icon: '🔍' },
-  CONSENT_CONVERSION:    { bg: 'bg-violet-50', text: 'text-violet-700', border: 'border-violet-300', icon: '✅' },
-  L2_QUEUE_BACKLOG:      { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-300', icon: '⏳' },
-  STAGE2_LINKAGE:        { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300', icon: '🔗' },
-  MCI_FOLLOWUP_ENROLL:   { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-300', icon: '📋' },
+export const CENTRAL_KPI_COLORS: Record<CentralKpiId, { bg: string; text: string; border: string; icon: string; hex: string }> = {
+  SIGNAL_QUALITY:     { bg: 'bg-blue-50',    text: 'text-blue-700',    border: 'border-blue-300',    icon: '📡', hex: '#2563eb' },
+  POLICY_IMPACT:      { bg: 'bg-violet-50',  text: 'text-violet-700',  border: 'border-violet-300',  icon: '📋', hex: '#7c3aed' },
+  BOTTLENECK_RISK:    { bg: 'bg-red-50',     text: 'text-red-700',     border: 'border-red-300',     icon: '⚠️', hex: '#dc2626' },
+  DATA_READINESS:     { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-300', icon: '📊', hex: '#059669' },
+  GOVERNANCE_SAFETY:  { bg: 'bg-amber-50',   text: 'text-amber-700',   border: 'border-amber-300',   icon: '🛡️', hex: '#d97706' },
 };

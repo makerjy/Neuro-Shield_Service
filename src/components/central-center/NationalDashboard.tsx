@@ -833,11 +833,11 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 const CENTRAL_KPI_ICONS: Record<CentralKpiId, React.ReactNode> = {
-  RISK_SIGNAL_DETECTION: <AlertTriangle className="h-4 w-4" />,
-  CONSENT_CONVERSION: <Users className="h-4 w-4" />,
-  L2_QUEUE_BACKLOG: <Clock className="h-4 w-4" />,
-  STAGE2_LINKAGE: <Link2 className="h-4 w-4" />,
-  MCI_FOLLOWUP_ENROLL: <ClipboardList className="h-4 w-4" />,
+  SIGNAL_QUALITY: <AlertTriangle className="h-4 w-4" />,
+  POLICY_IMPACT: <ClipboardList className="h-4 w-4" />,
+  BOTTLENECK_RISK: <Clock className="h-4 w-4" />,
+  DATA_READINESS: <Link2 className="h-4 w-4" />,
+  GOVERNANCE_SAFETY: <Users className="h-4 w-4" />,
 };
 
 /* ── Sparkline 미니 차트 ── */
@@ -1043,11 +1043,11 @@ function RegionalComparisonPanel({ rows }: { rows: RegionComparisonRow[] }) {
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="px-1.5 py-1 text-left font-medium text-gray-600 sticky left-0 bg-gray-50 z-10">지역</th>
-              <th className="px-1.5 py-1 text-right font-medium text-gray-600">신호탐지</th>
-              <th className="px-1.5 py-1 text-right font-medium text-gray-600">동의전환</th>
-              <th className="px-1.5 py-1 text-right font-medium text-gray-600">L2적체</th>
-              <th className="px-1.5 py-1 text-right font-medium text-gray-600">2차연결</th>
-              <th className="px-1.5 py-1 text-right font-medium text-gray-600">MCI등록</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">신호품질</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">정책영향</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">병목위험</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">데이터준비</th>
+              <th className="px-1.5 py-1 text-right font-medium text-gray-600">거버넌스</th>
               <th className="px-1.5 py-1 text-right font-medium text-gray-600">차단%</th>
               <th className="px-1.5 py-1 text-right font-medium text-gray-600">적체건</th>
             </tr>
@@ -1056,11 +1056,11 @@ function RegionalComparisonPanel({ rows }: { rows: RegionComparisonRow[] }) {
             {rows.map((r, i) => (
               <tr key={r.regionCode} className={`border-b border-gray-100 hover:bg-amber-50/30 ${i < 3 ? 'bg-red-50/30' : ''}`}>
                 <td className="px-1.5 py-1 font-medium text-gray-800 sticky left-0 bg-inherit z-10">{shortRegion(r.regionName)}</td>
-                <td className="px-1.5 py-1 text-right tabular-nums">{r.riskSignalDetection}%</td>
-                <td className="px-1.5 py-1 text-right tabular-nums">{r.consentConversion}%</td>
-                <td className={`px-1.5 py-1 text-right tabular-nums font-medium ${r.l2QueueBacklog > 25 ? 'text-red-600' : ''}`}>{r.l2QueueBacklog}%</td>
-                <td className="px-1.5 py-1 text-right tabular-nums">{r.stage2Linkage}%</td>
-                <td className="px-1.5 py-1 text-right tabular-nums">{r.mciFollowupEnroll}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.signalQuality}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.policyImpact}%</td>
+                <td className={`px-1.5 py-1 text-right tabular-nums font-medium ${r.bottleneckRisk > 40 ? 'text-red-600' : ''}`}>{r.bottleneckRisk}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.dataReadiness}%</td>
+                <td className="px-1.5 py-1 text-right tabular-nums">{r.governanceSafety}%</td>
                 <td className={`px-1.5 py-1 text-right tabular-nums font-medium ${r.blockedPct > 20 ? 'text-red-600' : r.blockedPct > 15 ? 'text-amber-600' : 'text-green-600'}`}>{r.blockedPct}%</td>
                 <td className="px-1.5 py-1 text-right tabular-nums">{r.backlogCount}</td>
               </tr>

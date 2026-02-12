@@ -9,6 +9,8 @@ import {
   formatTimeMMSS
 } from '../utils/format';
 import { REGIONAL_THRESHOLDS, THRESHOLDS } from '../styles/tokens';
+import type { CentralKpiKey, CentralDashboardData } from '../lib/centralKpiTheme';
+import { getCentralKpiTheme, getCentralKpiStatus } from '../lib/centralKpiTheme';
 
 type LeftKpiPanelProps = {
   variant?: 'national' | 'regional';
@@ -17,6 +19,7 @@ type LeftKpiPanelProps = {
   partial?: boolean;
   selectedKpi?: string;
   onSelectKpi?: (key: string) => void;
+  centralData?: CentralDashboardData | null;
 };
 
 type CardItem = {
@@ -33,7 +36,7 @@ const statusClass = (status?: 'normal' | 'warn' | 'risk') => {
   return 'border-gray-200 text-gray-900';
 };
 
-export function LeftKpiPanel({ variant = 'national', kpi, loading, partial, selectedKpi, onSelectKpi }: LeftKpiPanelProps) {
+export function LeftKpiPanel({ variant = 'national', kpi, loading, partial, selectedKpi, onSelectKpi, centralData }: LeftKpiPanelProps) {
   const [expanded, setExpanded] = useState(false);
 
   if (loading) {
@@ -126,57 +129,134 @@ export function LeftKpiPanel({ variant = 'national', kpi, loading, partial, sele
     );
   }
 
-  const data = kpi as NationalKpi | null;
-  const cards: CardItem[] = [
-    {
-      key: 'throughputNow',
-      title: '전국 운영 처리건수',
-      value: data ? formatCount(data.throughputNow) : '-',
-      sub: '현재 기준'
-    },
-    {
-      key: 'slaViolationRateNow',
-      title: 'SLA 위반률',
-      value: data ? formatPercent(data.slaViolationRateNow, 2) : '-',
-      sub: '임계 3%',
-      status: data && data.slaViolationRateNow >= THRESHOLDS.slaViolationRate ? 'risk' : 'normal'
-    },
-    {
-      key: 'dataShortageRateNow',
-      title: '데이터 부족률',
-      value: data ? formatPercent(data.dataShortageRateNow, 2) : '-',
-      sub: '임계 5%',
-      status: data && data.dataShortageRateNow >= THRESHOLDS.dataShortageRate ? 'warn' : 'normal'
-    },
-    {
-      key: 'activeIncidentsNow',
-      title: '활성 이슈',
-      value: data ? `${data.activeIncidentsNow}건` : '-',
-      sub: data ? `전주 대비 ${formatSignedPercent(data.activeIncidentsWoW, 1)}` : '-'
-    }
-  ];
+  /* ── National: 5 KPI 요약 카드 ── */
+  const summaries = centralData?.kpiSummaries ?? [];
+  const regionMetrics = centralData?.regionMetrics;
+  const currentKpiKey = (selectedKpi ?? 'signalQuality') as CentralKpiKey;
+  const currentRegionData = regionMetrics?.[currentKpiKey] ?? [];
+  const sortedAsc = [...currentRegionData].sort((a, b) => a.value - b.value);
+  const sortedDesc = [...currentRegionData].sort((a, b) => b.value - a.value);
+  const currentTheme = getCentralKpiTheme(currentKpiKey);
+
+  // higherIsWorse인 경우: Top = 가장 높은(위험), Bottom = 가장 낮은(양호) → 역순
+  const topRegions = currentTheme.higherIsWorse ? sortedDesc.slice(0, 3) : sortedDesc.slice(0, 3);
+  const bottomRegions = currentTheme.higherIsWorse ? sortedAsc.slice(0, 3) : sortedAsc.slice(0, 3);
 
   return (
     <div className="space-y-3">
-      {cards.map((card) => (
-        <div
-          key={card.key}
-          className={`rounded-md border bg-white p-4 cursor-pointer transition-shadow hover:shadow-md ${
-            selectedKpi === card.key
-              ? 'ring-2 ring-blue-500 border-blue-400'
-              : statusClass(card.status)
-          }`}
-          onClick={() => onSelectKpi?.(card.key)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => e.key === 'Enter' && onSelectKpi?.(card.key)}
-        >
-          <div className="text-xs text-gray-500">{card.title}</div>
-          <div className="mt-2 text-2xl font-bold">{card.value}</div>
-          <div className={`mt-1 text-xs ${partial ? 'text-gray-400' : 'text-gray-500'}`}>{card.sub}</div>
-          {partial && <div className="mt-2 text-[11px] text-gray-400">일부 값 누락</div>}
+      {/* 5 KPI 요약 카드 */}
+      {summaries.map((summary) => {
+        const theme = getCentralKpiTheme(summary.key);
+        const isActive = selectedKpi === summary.key;
+        const status = getCentralKpiStatus(summary.key, summary.value);
+
+        return (
+          <div
+            key={summary.key}
+            className={`rounded-md border-2 bg-white p-4 cursor-pointer transition-all hover:shadow-md ${
+              isActive ? 'shadow-md' : ''
+            }`}
+            style={{
+              borderColor: isActive ? theme.primaryColor : '#e5e7eb',
+              backgroundColor: isActive ? theme.softBg : '#ffffff',
+            }}
+            onClick={() => onSelectKpi?.(summary.key)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => e.key === 'Enter' && onSelectKpi?.(summary.key)}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-block h-2 w-2 rounded-full flex-shrink-0"
+                style={{ backgroundColor: theme.primaryColor }}
+              />
+              <span className="text-xs text-gray-500">{theme.label}</span>
+              {status !== 'good' && (
+                <span
+                  className={`ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                    status === 'risk'
+                      ? 'bg-red-100 text-red-700'
+                      : 'bg-amber-100 text-amber-700'
+                  }`}
+                >
+                  {status === 'risk' ? '위험' : '주의'}
+                </span>
+              )}
+            </div>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-2xl font-bold" style={{ color: isActive ? theme.primaryColor : '#111827' }}>
+                {theme.valueFormatter(summary.value)}
+              </span>
+              <span
+                className={`text-xs ${
+                  summary.delta > 0
+                    ? theme.higherIsWorse
+                      ? 'text-red-500'
+                      : 'text-emerald-500'
+                    : summary.delta < 0
+                      ? theme.higherIsWorse
+                        ? 'text-emerald-500'
+                        : 'text-red-500'
+                      : 'text-gray-400'
+                }`}
+              >
+                {summary.delta > 0 ? '▲' : summary.delta < 0 ? '▼' : '─'} {Math.abs(summary.delta).toFixed(1)}
+              </span>
+            </div>
+            <div className="mt-1.5 flex items-center gap-3 text-[11px] text-gray-400">
+              <span>{summary.sub1Label}: {summary.sub1Value}</span>
+              <span>{summary.sub2Label}: {summary.sub2Value}</span>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* 선택된 KPI 기준 Top/Bottom 지역 */}
+      {currentRegionData.length > 0 && (
+        <div className="rounded-md border border-gray-200 bg-white p-4">
+          <div className="text-xs font-semibold text-gray-700 mb-2">
+            {currentTheme.label} — 지역 Top / Bottom
+          </div>
+
+          {/* Top 3 */}
+          <div className="mb-2">
+            <div className="text-[10px] text-gray-400 mb-1">
+              {currentTheme.higherIsWorse ? '▲ 위험 상위' : '▲ 우수 상위'} 3
+            </div>
+            {topRegions.map((r, i) => (
+              <div key={r.regionCode} className="flex items-center justify-between py-0.5 text-xs">
+                <span className="text-gray-700">
+                  <span className="inline-block w-4 font-semibold" style={{ color: currentTheme.primaryColor }}>
+                    {i + 1}
+                  </span>
+                  {r.regionName}
+                </span>
+                <span className="font-medium" style={{ color: currentTheme.primaryColor }}>
+                  {currentTheme.valueFormatter(r.value)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Bottom 3 */}
+          <div className="border-t border-gray-100 pt-2">
+            <div className="text-[10px] text-gray-400 mb-1">
+              {currentTheme.higherIsWorse ? '▼ 양호 하위' : '▼ 취약 하위'} 3
+            </div>
+            {bottomRegions.map((r, i) => (
+              <div key={r.regionCode} className="flex items-center justify-between py-0.5 text-xs">
+                <span className="text-gray-700">
+                  <span className="inline-block w-4 font-semibold text-gray-400">{i + 1}</span>
+                  {r.regionName}
+                </span>
+                <span className="font-medium text-gray-500">
+                  {currentTheme.valueFormatter(r.value)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-      ))}
+      )}
     </div>
   );
 }

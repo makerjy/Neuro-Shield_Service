@@ -31,12 +31,6 @@ export function LocalCenterApp({
   const [selectedCaseStage, setSelectedCaseStage] = useState<StageType>('Stage 1');
   const [currentFilter, setCurrentFilter] = useState<string | null>(null);
   const [caseSubView, setCaseSubView] = useState<'detail' | 'consultation' | 'sms' | 'stage-workflow'>('detail');
-  const [globalFilter, setGlobalFilter] = useState({
-    period: 'today',
-    manager: 'all',
-    stage: 'all',
-    quality: 'all',
-  });
 
   const handleCaseSelect = (caseId: string, stage: StageType) => {
     setSelectedCaseId(caseId);
@@ -166,11 +160,7 @@ export function LocalCenterApp({
 
       <div className="flex-1 flex flex-col min-w-0">
         {!isCaseDetailView && (
-          <Header
-            activeTab={activeTab}
-            globalFilter={globalFilter}
-            setGlobalFilter={setGlobalFilter}
-          />
+          <Header activeTab={activeTab} />
         )}
 
         <main className="flex-1 overflow-y-auto p-6">

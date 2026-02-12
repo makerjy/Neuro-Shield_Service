@@ -140,11 +140,11 @@ export type CentralTimeWindow = 'LAST_24H' | 'LAST_7D' | 'LAST_30D' | 'LAST_90D'
 
 /** 중앙 KPI ID 리터럴 (5개 핵심 지표) */
 export type CentralKpiId =
-  | 'RISK_SIGNAL_DETECTION'
-  | 'CONSENT_CONVERSION'
-  | 'L2_QUEUE_BACKLOG'
-  | 'STAGE2_LINKAGE'
-  | 'MCI_FOLLOWUP_ENROLL';
+  | 'SIGNAL_QUALITY'
+  | 'POLICY_IMPACT'
+  | 'BOTTLENECK_RISK'
+  | 'DATA_READINESS'
+  | 'GOVERNANCE_SAFETY';
 
 /** 중앙 KPI 정의 (감사형 — numerator/denominator/window/drillToken 필수) */
 export interface CentralKpiDefinition {
@@ -239,11 +239,11 @@ export interface LinkageResponse {
 export interface RegionComparisonRow {
   regionCode: string;
   regionName: string;
-  riskSignalDetection: number;
-  consentConversion: number;
-  l2QueueBacklog: number;
-  stage2Linkage: number;
-  mciFollowupEnroll: number;
+  signalQuality: number;
+  policyImpact: number;
+  bottleneckRisk: number;
+  dataReadiness: number;
+  governanceSafety: number;
   blockedPct: number;
   consentPct: number;
   backlogCount: number;

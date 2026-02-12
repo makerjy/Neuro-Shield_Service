@@ -2,30 +2,17 @@ import React from "react";
 import { 
   Bell, 
   Search, 
-  Filter,
   CheckCircle2,
 } from "lucide-react";
 import { type TabType } from "./shared";
 
 interface HeaderProps {
   activeTab: TabType;
-  globalFilter: {
-    period: string;
-    manager: string;
-    stage: string;
-    quality: string;
-  };
-  setGlobalFilter: (filter: {
-    period: string;
-    manager: string;
-    stage: string;
-    quality: string;
-  }) => void;
 }
 
-export function Header({ activeTab, globalFilter, setGlobalFilter }: HeaderProps) {
+export function Header({ activeTab }: HeaderProps) {
   const tabNames: Record<string, string> = {
-    main: "운영 지휘본부 (Main)",
+    main: "운영 대시보드",
     cases: "케이스 관리 (Cases)",
     calendar: "업무 일정 (Calendar)",
     reports: "성과 분석 (Reports)",
@@ -36,31 +23,6 @@ export function Header({ activeTab, globalFilter, setGlobalFilter }: HeaderProps
     <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0 z-10">
       <div className="flex items-center gap-6">
         <h2 className="text-xl font-bold text-gray-800">{tabNames[activeTab]}</h2>
-        
-        {/* Global Filters */}
-        <div className="flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-lg p-1">
-          <select 
-            className="bg-transparent text-xs font-semibold px-2 py-1 outline-none border-r border-gray-200"
-            value={globalFilter.period}
-            onChange={(e) => setGlobalFilter({ ...globalFilter, period: e.target.value })}
-          >
-            <option value="today">오늘</option>
-            <option value="week">이번 주</option>
-            <option value="month">이번 달</option>
-          </select>
-          <select 
-            className="bg-transparent text-xs font-semibold px-2 py-1 outline-none border-r border-gray-200"
-            value={globalFilter.manager}
-            onChange={(e) => setGlobalFilter({ ...globalFilter, manager: e.target.value })}
-          >
-            <option value="all">전체 담당자</option>
-            <option value="me">내 업무</option>
-          </select>
-          <div className="flex items-center gap-1 px-2 text-xs text-gray-500">
-            <Filter size={14} />
-            <span className="font-medium">상세 필터</span>
-          </div>
-        </div>
       </div>
 
       <div className="flex items-center gap-4">

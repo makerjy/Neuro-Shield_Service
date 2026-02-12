@@ -61,6 +61,7 @@ export async function sendSmsApi(request: SmsSendRequest): Promise<SmsSendResult
     variables: {
       template: request.renderedMessage,
       link_url: citizenLink,
+      guideLink: citizenLink,
     },
     dedupe_key: request.dedupeKey || `${request.caseId}-${Date.now()}`,
     guardian_phone: request.guardianPhone,

@@ -4,6 +4,9 @@ node_modules
 build
 coverage
 dist
-citizen_sms_service
+citizen_sms_service/node_modules
+citizen_sms_service/src
+citizen_sms_service/.env
+citizen_sms_service/tmp_*
 instance-team6.key
 *.log

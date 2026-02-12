@@ -74,6 +74,7 @@ const MCI_SUBCLASS_LABEL: Record<Exclude<MciSubClass, null>, string> = {
 };
 
 const STAGE2_SMS_TEMPLATES: SmsTemplate[] = [
+  /* ── 접촉: 시민화면 링크 포함 ── */
   {
     id: "S2_CONTACT_BASE",
     type: "CONTACT",
@@ -85,36 +86,38 @@ const STAGE2_SMS_TEMPLATES: SmsTemplate[] = [
     id: "S2_CONTACT_RELIEF",
     type: "CONTACT",
     label: "2차 접촉(불안 완화)",
-    body: ({ centerName, guideLink }) =>
-      `[치매안심센터:${centerName}] 추가 확인을 위한 2차 평가 안내입니다. 결과는 의료진 평가를 통해 최종 확인됩니다. 예약/상담 요청: ${guideLink}`,
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 추가 확인을 위한 2차 평가 안내입니다. 결과는 의료진 평가를 통해 최종 확인됩니다. 예약/상담 요청: ${guideLink} / 문의: ${centerPhone}`,
   },
+  /* ── 예약안내: 시민링크 없음, 센터 안내만 ── */
   {
     id: "S2_BOOKING_STEP1",
     type: "BOOKING",
     label: "2차 예약안내(1단계 신경심리)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 2차 1단계 인지검사(신경심리검사) 예약 안내드립니다. 가능한 일정 선택: ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 2차 1단계 인지검사(신경심리검사) 예약 안내드립니다. 가능한 일정을 선택해주세요. 예약/변경 문의: ${centerPhone}`,
   },
   {
     id: "S2_BOOKING_STEP2",
     type: "BOOKING",
     label: "2차 예약안내(2단계 임상평가)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 2차 2단계 임상평가(전문의 상담/의료 연계) 안내드립니다. 일정 선택 또는 상담 요청: ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 2차 2단계 임상평가(전문의 상담/의료 연계) 안내드립니다. 일정 선택 또는 상담 요청 문의: ${centerPhone}`,
   },
+  /* ── 리마인더: 시민링크 없음, 센터 안내만 ── */
   {
     id: "S2_REMINDER_BOOKING",
     type: "REMINDER",
     label: "2차 리마인더(미예약)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 2차 평가 예약이 아직 완료되지 않았습니다. 추가 확인 절차 진행을 위해 일정 선택 부탁드립니다. ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 2차 평가 예약이 아직 완료되지 않았습니다. 추가 확인 절차 진행을 위해 일정 선택 부탁드립니다. 문의: ${centerPhone}`,
   },
   {
     id: "S2_REMINDER_NOSHOW",
     type: "REMINDER",
     label: "2차 리마인더(노쇼 재예약)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 예약 일정에 참석이 어려우셨다면 재예약이 가능합니다. 편한 시간으로 다시 선택해주세요. ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 예약 일정에 참석이 어려우셨다면 재예약이 가능합니다. 편한 시간으로 다시 선택해주세요. 문의: ${centerPhone}`,
   },
 ];
 
@@ -433,6 +436,7 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
   const [programDraftNote, setProgramDraftNote] = useState("");
   const [authorizeModalOpen, setAuthorizeModalOpen] = useState(false);
   const [authorizeReason, setAuthorizeReason] = useState("");
+  const [smsModalOpen, setSmsModalOpen] = useState(false);
 
   const healthRef = useRef<HTMLDivElement>(null);
   const neuroRef = useRef<HTMLDivElement>(null);
@@ -1439,18 +1443,41 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
             </CardContent>
           </Card>
 
-          <SmsPanel
-            stageLabel="2차"
-            templates={STAGE2_SMS_TEMPLATES}
-            defaultVars={{
-              centerName: caseData.centerName ?? "강남구 치매안심센터",
-            }}
-            caseId={caseData.caseId}
-            citizenPhone={caseData.pii.maskedPhone}
-            guardianPhone={caseData.pii.guardianMasked ?? undefined}
-            onSmsSent={handleStage2SmsSent}
-            onConsultation={handleStage2Consultation}
-          />
+          {/* SMS 트리거 버튼 */}
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardContent className="px-4 py-4">
+              <Button
+                className="h-11 w-full gap-2 bg-[#15386a] text-sm font-semibold text-white hover:bg-[#102b4e]"
+                onClick={() => setSmsModalOpen(true)}
+              >
+                <MessageSquare className="h-4 w-4" />
+                상담/문자 실행 (2차)
+              </Button>
+              <p className="mt-2 text-center text-[11px] text-slate-500">
+                접촉 · 예약안내 · 리마인더 문자 발송
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* SMS 모달 */}
+          <Dialog open={smsModalOpen} onOpenChange={setSmsModalOpen}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-0">
+              <SmsPanel
+                stageLabel="2차"
+                templates={STAGE2_SMS_TEMPLATES}
+                defaultVars={{
+                  centerName: caseData.centerName ?? "강남구 치매안심센터",
+                }}
+                caseId={caseData.caseId}
+                citizenPhone={caseData.pii.maskedPhone}
+                guardianPhone={caseData.pii.guardianMasked ?? undefined}
+                onSmsSent={(item) => {
+                  handleStage2SmsSent(item);
+                }}
+                onConsultation={handleStage2Consultation}
+              />
+            </DialogContent>
+          </Dialog>
 
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardHeader className="border-b border-slate-100 px-4 py-3">

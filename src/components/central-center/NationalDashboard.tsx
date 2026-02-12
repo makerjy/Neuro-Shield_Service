@@ -1408,21 +1408,24 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     const maxSize = Math.max(...rawData.map(d => d.size));
     const minSize = Math.min(...rawData.map(d => d.size));
     
-    // 히트맵 색상 함수 (오렌지 -> 레드)
+    // KPI 테마 palette(7단계) 사용 → KPI 버튼에 따라 색상 변경
+    const pal = activeTheme.palette;
     const getHeatmapColor = (value: number) => {
-      const ratio = (value - minSize) / (maxSize - minSize);
-      // 노란 -> 오렌지 -> 빨간색 그라데이션
-      if (ratio < 0.25) return '#fcd34d'; // yellow-300
-      if (ratio < 0.5) return '#fb923c';  // orange-400
-      if (ratio < 0.75) return '#f97316'; // orange-500
-      return '#dc2626';                    // red-600
+      const ratio = (value - minSize) / (maxSize - minSize || 1);
+      if (ratio < 0.14) return pal[0];
+      if (ratio < 0.28) return pal[1];
+      if (ratio < 0.42) return pal[2];
+      if (ratio < 0.57) return pal[3];
+      if (ratio < 0.71) return pal[4];
+      if (ratio < 0.85) return pal[5];
+      return pal[6];
     };
     
     return rawData.map(item => ({
       ...item,
       fill: getHeatmapColor(item.size),
     }));
-  }, [statsScopeKey, analyticsPeriod]);
+  }, [statsScopeKey, analyticsPeriod, activeTheme.palette]);
 
   const totalCases = useMemo(() => treemapData.reduce((sum, item) => sum + item.size, 0), [treemapData]);
   
@@ -1471,48 +1474,32 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     const maxValue = Math.max(...rawData.map((d) => d.value));
     const minValue = Math.min(...rawData.map((d) => d.value));
 
-    const getBlueHeatmapColor = (value: number) => {
+    // activeTheme.palette (7단계)를 직접 사용 → KPI 버튼 변경 시 히트맵 색상도 연동
+    const pal = activeTheme.palette; // 7색 배열 from centralKpiTheme
+    const getKpiHeatmapColor = (value: number) => {
       const ratio = (value - minValue) / (maxValue - minValue || 1);
-      // KPI 색상에 맞는 컬러 팔레트 매핑
-      const kpiColor = selectedMapCard.color;
-      const palettes: Record<string, string[]> = {
-        blue:   ['#eff6ff', '#bfdbfe', '#60a5fa', '#2563eb', '#1d4ed8', '#1e3a8a'],
-        green:  ['#f0fdf4', '#bbf7d0', '#4ade80', '#16a34a', '#15803d', '#14532d'],
-        red:    ['#fef2f2', '#fecaca', '#f87171', '#dc2626', '#b91c1c', '#7f1d1d'],
-        orange: ['#fffbeb', '#fed7aa', '#fb923c', '#ea580c', '#c2410c', '#7c2d12'],
-        purple: ['#faf5ff', '#e9d5ff', '#c084fc', '#9333ea', '#7e22ce', '#581c87'],
-      };
-      const pal = palettes[kpiColor] || palettes.blue;
-      if (ratio < 0.15) return pal[0];
-      if (ratio < 0.3) return pal[1];
-      if (ratio < 0.5) return pal[2];
-      if (ratio < 0.7) return pal[3];
-      if (ratio < 0.85) return pal[4];
-      return pal[5];
+      if (ratio < 0.14) return pal[0];
+      if (ratio < 0.28) return pal[1];
+      if (ratio < 0.42) return pal[2];
+      if (ratio < 0.57) return pal[3];
+      if (ratio < 0.71) return pal[4];
+      if (ratio < 0.85) return pal[5];
+      return pal[6];
     };
 
-    const isLightColor = (hex: string) => {
-      const pal = {
-        blue: ['#eff6ff', '#bfdbfe'],
-        green: ['#f0fdf4', '#bbf7d0'],
-        red: ['#fef2f2', '#fecaca'],
-        orange: ['#fffbeb', '#fed7aa'],
-        purple: ['#faf5ff', '#e9d5ff'],
-      };
-      const lightColors = pal[selectedMapCard.color as keyof typeof pal] || pal.blue;
-      return lightColors.includes(hex);
-    };
+    // 연한 색상(palette 앞 2개)이면 어두운 텍스트, 아니면 흰색 텍스트
+    const lightSet = new Set([pal[0], pal[1]]);
 
     return rawData.map((item) => {
-      const fill = getBlueHeatmapColor(item.value);
+      const fill = getKpiHeatmapColor(item.value);
       return {
         name: item.name,
         size: Math.round(item.value),
         fill,
-        textColor: isLightColor(fill) ? '#1e3a8a' : '#ffffff',
+        textColor: lightSet.has(fill) ? '#1e293b' : '#ffffff',
       };
     });
-  }, [statsScopeKey, selectedMapKpiId]);
+  }, [statsScopeKey, selectedMapKpiId, activeTheme.palette]);
 
   /* ─────────────────────────────────────────────────────────────
      SLA × 데이터 충족률 2×2 리스크 매트릭스 데이터
@@ -1746,11 +1733,13 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
      커스텀 트리맵 컨텐트
   ───────────────────────────────────────────────────────────── */
   const CustomTreemapContent = (props: any) => {
-    const { x, y, width, height, name, fill } = props;
+    const { x, y, width, height, name, fill, textColor } = props;
     if (!name || width < 25 || height < 18) return null;
     
     // 짧은 이름으로 변환 (예: 강원특별자치도 -> 강원특별자치도 또는 짧게)
     const shortName = name.length > 5 ? name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim() || name.slice(0, 4) : name;
+    
+    const labelColor = textColor || '#fff';
     
     return (
       <g>
@@ -1771,10 +1760,10 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             y={y + height / 2} 
             textAnchor="middle" 
             dominantBaseline="middle" 
-            fill="#fff" 
+            fill={labelColor} 
             fontSize={width > 70 ? 10 : 8} 
             fontWeight="600"
-            style={{ textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}
+            style={{ textShadow: labelColor === '#ffffff' ? '0 1px 2px rgba(0,0,0,0.4)' : 'none' }}
           >
             {shortName}
           </text>

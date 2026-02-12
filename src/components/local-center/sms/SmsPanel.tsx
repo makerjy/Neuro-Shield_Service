@@ -26,7 +26,6 @@ import {
 } from "lucide-react";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../ui/card";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
 import {
@@ -88,11 +87,21 @@ const TYPE_COLORS: Record<SmsMessageType, string> = {
   REMINDER: "bg-amber-100 text-amber-800",
 };
 
+/** 배포 환경의 시민화면 링크 자동 생성 */
+function getDefaultCitizenUrl(): string {
+  if (typeof window !== "undefined") {
+    const base = window.location.origin;
+    const basePath = import.meta.env.VITE_BASE_PATH || "/neuro-shield/";
+    return `${base}${basePath.replace(/\/$/, "")}/#citizen`;
+  }
+  return "http://146.56.162.226/neuro-shield/#citizen";
+}
+
 const DEFAULT_VARS: SmsTemplateVars = {
   centerName: "강남구 치매안심센터",
   centerPhone: "02-555-0199",
-  guideLink: "https://neuro-shield.kr/guide",
-  bookingLink: "https://neuro-shield.kr/booking",
+  guideLink: getDefaultCitizenUrl(),
+  bookingLink: "(센터 예약 안내)",
 };
 
 export function SmsPanel({
@@ -202,43 +211,44 @@ export function SmsPanel({
   };
 
   return (
-    <Card className="border-slate-200 bg-white shadow-sm">
-      <CardHeader className="border-b border-slate-100 px-4 py-3">
+    <div className="bg-white rounded-xl">
+      {/* ── 헤더 ── */}
+      <div className="border-b border-slate-100 px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-sm font-bold text-slate-900">
+            <h3 className="text-base font-bold text-slate-900">
               상담/문자 실행 ({stageLabel})
-            </CardTitle>
-            <p className="text-[11px] text-slate-500 mt-0.5">
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
               접촉 · 예약안내 · 리마인더 | 데모: 환경변수 지정 번호로 발송
             </p>
           </div>
           {history.length > 0 && (
-            <Badge variant="outline" className="text-[10px]">
-              {history.length}건
+            <Badge variant="outline" className="text-xs px-2 py-0.5">
+              {history.length}건 발송
             </Badge>
           )}
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className="space-y-3 px-4 py-4">
+      <div className="px-6 py-5 space-y-5">
         {/* 가이드 배너 */}
-        <div className="rounded-md border border-amber-200 bg-amber-50/80 px-2.5 py-2 text-[11px] text-amber-800">
+        <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-4 py-2.5 text-xs text-amber-800">
           <strong>운영 규칙:</strong> 문자에 확진/AI 판단 표현 금지. 안내·확인·연계 톤 사용.
         </div>
 
         {/* ── 유형 탭 ── */}
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
+        <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1.5">
           {(["CONTACT", "BOOKING", "REMINDER"] as const).map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => onChangeType(t)}
               className={cn(
-                "rounded-md px-2 py-1.5 text-[11px] font-semibold transition-all",
+                "rounded-lg px-3 py-2 text-xs font-semibold transition-all",
                 type === t
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700",
+                  ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  : "text-slate-500 hover:text-slate-700 hover:bg-white/50",
               )}
             >
               {TYPE_LABELS[t]}
@@ -250,71 +260,89 @@ export function SmsPanel({
         <select
           value={templateId}
           onChange={(e) => setTemplateId(e.target.value)}
-          className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
         >
           {templatesByType.map((t) => (
             <option key={t.id} value={t.id}>{t.label}</option>
           ))}
         </select>
 
-        {/* ── 수신자 선택 ── */}
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => setRecipient("본인")}
-            className={cn(
-              "flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px] font-medium transition-all",
-              recipient === "본인"
-                ? "border-blue-300 bg-blue-50 text-blue-800"
-                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
-            )}
-          >
-            <User className="h-3 w-3" />
-            본인 {citizenPhone && <span className="text-[10px] opacity-70">{citizenPhone}</span>}
-          </button>
-          <button
-            type="button"
-            onClick={() => setRecipient("보호자")}
-            disabled={!guardianPhone}
-            className={cn(
-              "flex-1 flex items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px] font-medium transition-all",
-              recipient === "보호자"
-                ? "border-blue-300 bg-blue-50 text-blue-800"
-                : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
-              !guardianPhone && "opacity-40 cursor-not-allowed",
-            )}
-          >
-            <Users className="h-3 w-3" />
-            보호자 {guardianPhone ? <span className="text-[10px] opacity-70">{guardianPhone}</span> : <span className="text-[10px]">(미등록)</span>}
-          </button>
+        {/* ── 수신자 + 발송 모드 (한 줄) ── */}
+        <div className="grid grid-cols-2 gap-4">
+          {/* 수신자 선택 */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-600">수신자</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setRecipient("본인")}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-all",
+                  recipient === "본인"
+                    ? "border-blue-300 bg-blue-50 text-blue-800 ring-1 ring-blue-200"
+                    : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                )}
+              >
+                <User className="h-3.5 w-3.5" />
+                본인
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecipient("보호자")}
+                disabled={!guardianPhone}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-all",
+                  recipient === "보호자"
+                    ? "border-blue-300 bg-blue-50 text-blue-800 ring-1 ring-blue-200"
+                    : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50",
+                  !guardianPhone && "opacity-40 cursor-not-allowed",
+                )}
+              >
+                <Users className="h-3.5 w-3.5" />
+                보호자
+              </button>
+            </div>
+          </div>
+
+          {/* 발송 모드 */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-600">발송 모드</label>
+            <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-slate-200 bg-slate-50 p-1.5">
+              <button
+                type="button"
+                onClick={() => setMode("NOW")}
+                className={cn(
+                  "flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold transition-all",
+                  mode === "NOW"
+                    ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    : "text-slate-500",
+                )}
+              >
+                <Send className="h-3.5 w-3.5" /> 즉시
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("SCHEDULE")}
+                className={cn(
+                  "flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold transition-all",
+                  mode === "SCHEDULE"
+                    ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    : "text-slate-500",
+                )}
+              >
+                <CalendarClock className="h-3.5 w-3.5" /> 예약
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* ── 발송 모드 ── */}
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
-          <button
-            type="button"
-            onClick={() => setMode("NOW")}
-            className={cn(
-              "flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-semibold transition-all",
-              mode === "NOW"
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500",
-            )}
-          >
-            <Send className="h-3 w-3" /> 즉시 발송
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("SCHEDULE")}
-            className={cn(
-              "flex items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-semibold transition-all",
-              mode === "SCHEDULE"
-                ? "bg-white text-slate-900 shadow-sm"
-                : "text-slate-500",
-            )}
-          >
-            <CalendarClock className="h-3 w-3" /> 예약 발송
-          </button>
+        {/* 수신자 정보 표시 */}
+        <div className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-2">
+          <span className="text-xs text-slate-500">수신:</span>
+          <span className="text-xs font-medium text-slate-700">
+            {recipient === "보호자" && guardianPhone ? `보호자 ${guardianPhone}` : `본인 ${citizenPhone}`}
+          </span>
+          <span className="text-[10px] text-slate-400 ml-auto">(데모: TEST_SMS_TO 번호로 발송)</span>
         </div>
 
         {mode === "SCHEDULE" && (
@@ -322,7 +350,7 @@ export function SmsPanel({
             type="datetime-local"
             value={scheduledAt}
             onChange={(e) => setScheduledAt(e.target.value)}
-            className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
           />
         )}
 
@@ -330,14 +358,14 @@ export function SmsPanel({
         <button
           type="button"
           onClick={() => setShowVarEditor(!showVarEditor)}
-          className="flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800"
+          className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 font-medium"
         >
-          {showVarEditor ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          {showVarEditor ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           변수 편집 {showVarEditor ? "접기" : "열기"}
         </button>
 
         {showVarEditor && (
-          <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50/50 p-2.5">
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
             {([
               ["centerName", "센터명"],
               ["centerPhone", "센터 전화"],
@@ -345,60 +373,67 @@ export function SmsPanel({
               ["bookingLink", "예약 링크"],
             ] as const).map(([key, label]) => (
               <div key={key}>
-                <label className="text-[10px] font-medium text-slate-500">{label}</label>
+                <label className="text-[11px] font-semibold text-slate-500">{label}</label>
                 <input
                   type="text"
                   value={editVars[key]}
                   onChange={(e) => setEditVars((v) => ({ ...v, [key]: e.target.value }))}
-                  className="mt-0.5 w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] outline-none focus:border-blue-400"
+                  className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs outline-none focus:border-blue-400"
                 />
               </div>
             ))}
           </div>
         )}
 
-        {/* ── 미리보기 ── */}
-        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-medium text-slate-500">미리보기</span>
-            <Badge variant="outline" className={cn("text-[9px]", TYPE_COLORS[type])}>
-              {TYPE_LABELS[type]}
-            </Badge>
+        {/* ── 미리보기 + 메모 (2열) ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* 미리보기 */}
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] font-semibold text-slate-500">미리보기</span>
+              <Badge variant="outline" className={cn("text-[10px]", TYPE_COLORS[type])}>
+                {TYPE_LABELS[type]}
+              </Badge>
+            </div>
+            <p className="whitespace-pre-wrap text-xs leading-relaxed text-slate-700 min-h-[80px]">
+              {preview}
+            </p>
+            <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400 border-t border-slate-200 pt-2">
+              <span>{preview.length}자 · {preview.length > 90 ? "LMS" : "SMS"}</span>
+              <span>수신: {recipient}</span>
+            </div>
           </div>
-          <p className="mt-1.5 whitespace-pre-wrap text-[11px] leading-relaxed text-slate-700">
-            {preview}
-          </p>
-          <p className="mt-1.5 text-[10px] text-slate-400">
-            {preview.length}자 · {preview.length > 90 ? "LMS" : "SMS"} · 수신: {recipient}
-          </p>
-        </div>
 
-        {/* ── 메모 ── */}
-        <Textarea
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          className="min-h-[60px] text-xs"
-          placeholder="상담/문자 메모 (선택)"
-        />
+          {/* 메모 */}
+          <div className="flex flex-col">
+            <label className="text-[11px] font-semibold text-slate-500 mb-1">상담/문자 메모</label>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              className="flex-1 min-h-[120px] text-xs rounded-lg"
+              placeholder="상담 내용이나 특이사항을 기록하세요 (선택)"
+            />
+          </div>
+        </div>
 
         {/* ── 발송 결과 피드백 ── */}
         {lastResult && (
           <div className={cn(
-            "rounded-md border px-3 py-2 text-[11px]",
+            "rounded-lg border px-4 py-3 text-xs",
             lastResult.success
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
               : "border-red-200 bg-red-50 text-red-800",
           )}>
             {lastResult.success ? (
-              <div className="flex items-center gap-1.5">
-                <CheckCircle2 className="h-3.5 w-3.5" />
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
                 <span>
                   발송 성공 {lastResult.actualTo && `(수신: ${lastResult.actualTo})`}
                 </span>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5">
-                <XCircle className="h-3.5 w-3.5" />
+              <div className="flex items-center gap-2">
+                <XCircle className="h-4 w-4 shrink-0" />
                 <span>{lastResult.error ?? "발송 실패"}</span>
               </div>
             )}
@@ -406,21 +441,21 @@ export function SmsPanel({
         )}
 
         {/* ── 실행 버튼 ── */}
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-3 pt-1">
           <Button
             variant="outline"
-            className="h-9 text-xs font-semibold"
+            className="h-10 text-sm font-semibold gap-2"
             onClick={handleConsultation}
           >
-            <Phone className="h-3.5 w-3.5" />
+            <Phone className="h-4 w-4" />
             상담 기록
           </Button>
           <Button
-            className="h-9 bg-[#15386a] text-xs font-semibold text-white hover:bg-[#102b4e]"
+            className="h-10 bg-[#15386a] text-sm font-semibold text-white hover:bg-[#102b4e] gap-2"
             onClick={handleSend}
             disabled={sending}
           >
-            <MessageSquare className="h-3.5 w-3.5" />
+            <MessageSquare className="h-4 w-4" />
             {sending
               ? "발송 중..."
               : mode === "NOW" ? "문자 발송" : "문자 예약"}
@@ -429,36 +464,36 @@ export function SmsPanel({
 
         {/* ── 발송 이력 ── */}
         {history.length > 0 && (
-          <div className="border-t border-slate-100 pt-3">
+          <div className="border-t border-slate-100 pt-4">
             <button
               type="button"
               onClick={() => setShowHistory(!showHistory)}
-              className="flex items-center gap-1 text-[11px] font-medium text-slate-600"
+              className="flex items-center gap-1.5 text-xs font-semibold text-slate-600"
             >
-              {showHistory ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              {showHistory ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
               발송 이력 ({history.length}건)
             </button>
 
             {showHistory && (
-              <div className="mt-2 space-y-2 max-h-[240px] overflow-y-auto">
+              <div className="mt-3 space-y-2 max-h-[240px] overflow-y-auto">
                 {history.map((item) => (
                   <div
                     key={item.id}
                     className={cn(
-                      "rounded-md border p-2 text-[11px]",
+                      "rounded-lg border p-3 text-xs",
                       item.status === "SENT" ? "border-emerald-200 bg-emerald-50/50" :
                       item.status === "SCHEDULED" ? "border-blue-200 bg-blue-50/50" :
                       "border-red-200 bg-red-50/50",
                     )}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-medium text-slate-800">
+                      <span className="font-semibold text-slate-800">
                         {item.templateLabel}
                       </span>
                       <Badge
                         variant="outline"
                         className={cn(
-                          "text-[9px]",
+                          "text-[10px]",
                           item.status === "SENT" ? "text-emerald-700 border-emerald-300" :
                           item.status === "SCHEDULED" ? "text-blue-700 border-blue-300" :
                           "text-red-700 border-red-300",
@@ -467,11 +502,11 @@ export function SmsPanel({
                         {item.status === "SENT" ? "발송완료" : item.status === "SCHEDULED" ? "예약됨" : "실패"}
                       </Badge>
                     </div>
-                    <p className="mt-1 text-[10px] text-slate-500">
+                    <p className="mt-1 text-[11px] text-slate-500">
                       {item.at} · {item.recipient} · {TYPE_LABELS[item.type]}
                     </p>
                     {item.note && (
-                      <p className="mt-1 text-[10px] text-slate-600 italic">메모: {item.note}</p>
+                      <p className="mt-1 text-[11px] text-slate-600 italic">메모: {item.note}</p>
                     )}
                   </div>
                 ))}
@@ -479,7 +514,7 @@ export function SmsPanel({
             )}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

@@ -105,11 +105,21 @@ type SmsTemplate = {
 const STAGE1_PANEL_OPERATOR = "김성실";
 const DEFAULT_CENTER_NAME = "강남구 치매안심센터";
 const DEFAULT_CENTER_PHONE = "02-555-0199";
-const DEFAULT_GUIDE_LINK = "https://neuro-shield.local/guide";
-const DEFAULT_BOOKING_URL = "https://neuro-shield.local/booking";
+/** 시민화면 링크 (배포 환경 자동 감지) */
+function getCitizenUrl(): string {
+  if (typeof window !== "undefined") {
+    const base = window.location.origin;
+    const basePath = import.meta.env.VITE_BASE_PATH || "/neuro-shield/";
+    return `${base}${basePath.replace(/\/$/, "")}/#citizen`;
+  }
+  return "http://146.56.162.226/neuro-shield/#citizen";
+}
+const DEFAULT_GUIDE_LINK = getCitizenUrl();
+const DEFAULT_BOOKING_URL = "(센터 예약 안내)";
 const DEFAULT_UNSUBSCRIBE = "수신거부 080-000-0000";
 
 const SMS_TEMPLATES: SmsTemplate[] = [
+  /* ── 접촉: 시민화면 링크 포함 ── */
   {
     id: "S1_CONTACT_BASE",
     messageType: "CONTACT",
@@ -124,33 +134,35 @@ const SMS_TEMPLATES: SmsTemplate[] = [
     body: ({ centerName, guideLink, centerPhone }) =>
       `[치매안심센터:${centerName}] 안내 확인 후 본인 응답이 어렵다면 보호자 연락처(선택)를 남길 수 있습니다. 안내 확인/연락시간 선택: ${guideLink} / 문의: ${centerPhone}`,
   },
+  /* ── 예약안내: 시민링크 없음, 센터 전화만 ── */
   {
     id: "S1_BOOKING_BASE",
     messageType: "BOOKING",
     label: "1차 예약안내(선별/상담)",
-    body: ({ centerName, reservationLink, centerPhone }) =>
-      `[치매안심센터:${centerName}] 인지 선별검사/상담 예약 안내드립니다. 가능한 날짜·시간을 선택해주세요. 예약/변경: ${reservationLink} / 문의: ${centerPhone}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 인지 선별검사/상담 예약 안내드립니다. 가능한 날짜·시간을 선택해주세요. 예약/변경 문의: ${centerPhone}`,
   },
   {
     id: "S1_BOOKING_CHANNEL",
     messageType: "BOOKING",
     label: "1차 예약안내(방문/전화 선택)",
-    body: ({ centerName, reservationLink }) =>
-      `[치매안심센터:${centerName}] 상담/선별검사는 방문 또는 전화로 진행될 수 있습니다. 희망 방식을 선택해 예약해주세요. ${reservationLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 상담/선별검사는 방문 또는 전화로 진행될 수 있습니다. 희망 방식을 선택해 예약해주세요. 문의: ${centerPhone}`,
   },
+  /* ── 리마인더: 시민링크 없음, 센터 전화만 ── */
   {
     id: "S1_REMINDER_FIRST",
     messageType: "REMINDER",
     label: "1차 리마인더(1차 안내)",
-    body: ({ centerName, guideLink, centerPhone, unsubscribe }) =>
-      `[치매안심센터:${centerName}] 이전에 안내드린 인지건강 확인 링크가 아직 미확인 상태입니다. 원치 않으시면 수신거부 가능하며, 확인은 아래 링크에서 가능합니다. ${guideLink} / 문의: ${centerPhone} / ${unsubscribe}`,
+    body: ({ centerName, centerPhone, unsubscribe }) =>
+      `[치매안심센터:${centerName}] 이전에 안내드린 인지건강 확인이 아직 미확인 상태입니다. 원치 않으시면 수신거부 가능합니다. 문의: ${centerPhone} / ${unsubscribe}`,
   },
   {
     id: "S1_REMINDER_FINAL",
     messageType: "REMINDER",
     label: "1차 리마인더(최종)",
-    body: ({ centerName, guideLink, centerPhone }) =>
-      `[치매안심센터:${centerName}] 확인이 없어 마지막으로 안내드립니다. 필요 시 아래 링크에서 확인/예약할 수 있습니다. ${guideLink} / 문의: ${centerPhone}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 확인이 없어 마지막으로 안내드립니다. 필요 시 센터로 연락 주시면 안내해드리겠습니다. 문의: ${centerPhone}`,
   },
 ];
 

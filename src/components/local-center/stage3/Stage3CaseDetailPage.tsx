@@ -47,6 +47,7 @@ type UiNotice = {
 };
 
 const STAGE3_SMS_TEMPLATES: SmsTemplate[] = [
+  /* ── 접촉: 시민화면 링크 포함 ── */
   {
     id: "S3_CONTACT_BASE",
     type: "CONTACT",
@@ -58,43 +59,45 @@ const STAGE3_SMS_TEMPLATES: SmsTemplate[] = [
     id: "S3_CONTACT_GUARDIAN",
     type: "CONTACT",
     label: "3차 접촉(보호자 동반 옵션)",
-    body: ({ centerName, guideLink }) =>
-      `[치매안심센터:${centerName}] 추적관리는 보호자 동반/연락처 등록(선택)도 가능합니다. 등록/일정 확인: ${guideLink}`,
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 추적관리는 보호자 동반/연락처 등록(선택)도 가능합니다. 등록/일정 확인: ${guideLink} / 문의: ${centerPhone}`,
   },
+  /* ── 예약안내: 시민링크 없음, 센터 안내만 ── */
   {
     id: "S3_BOOKING_TRACK",
     type: "BOOKING",
     label: "3차 예약안내(정기 추적)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 추적관리 정기 점검 예약 안내드립니다. 희망 일정 선택: ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 추적관리 정기 점검 예약 안내드립니다. 희망 일정을 선택해주세요. 문의: ${centerPhone}`,
   },
   {
     id: "S3_BOOKING_REEVAL",
     type: "BOOKING",
     label: "3차 예약안내(재평가)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 최근 상태 확인을 위해 재평가(인지검사/상담) 안내드립니다. 예약: ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 최근 상태 확인을 위해 재평가(인지검사/상담) 안내드립니다. 예약/문의: ${centerPhone}`,
   },
   {
     id: "S3_BOOKING_EXTRA_EXAM",
     type: "BOOKING",
     label: "3차 예약안내(추가검사 권유)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 상담 결과에 따라 추가 검사가 도움이 될 수 있어 안내드립니다(예: 영상검사 등). 자세한 내용은 상담 후 결정됩니다. 상담/예약: ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 상담 결과에 따라 추가 검사가 도움이 될 수 있어 안내드립니다(예: 영상검사 등). 자세한 내용은 상담 후 결정됩니다. 상담/예약 문의: ${centerPhone}`,
   },
+  /* ── 리마인더: 시민링크 없음, 센터 안내만 ── */
   {
     id: "S3_REMINDER_REGULAR",
     type: "REMINDER",
     label: "3차 리마인더(정기 알림)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 추적관리 일정이 다가왔습니다. 일정 확인/변경: ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 추적관리 일정이 다가왔습니다. 일정 확인/변경 문의: ${centerPhone}`,
   },
   {
     id: "S3_REMINDER_RETURN",
     type: "REMINDER",
     label: "3차 리마인더(장기 미참여 복귀)",
-    body: ({ centerName, bookingLink }) =>
-      `[치매안심센터:${centerName}] 추적관리가 일정 기간 진행되지 않았습니다. 필요 시 다시 등록/예약할 수 있습니다. ${bookingLink}`,
+    body: ({ centerName, centerPhone }) =>
+      `[치매안심센터:${centerName}] 추적관리가 일정 기간 진행되지 않았습니다. 필요 시 다시 등록/예약할 수 있습니다. 문의: ${centerPhone}`,
   },
 ];
 
@@ -202,6 +205,7 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
   const [supportModalOpen, setSupportModalOpen] = useState(false);
   const [supportReason, setSupportReason] = useState("");
   const [mriExpanded, setMriExpanded] = useState(false);
+  const [smsModalOpen, setSmsModalOpen] = useState(false);
   const [selectedFailTag, setSelectedFailTag] = useState<
     Stage3Case["communication"]["history"][number]["reasonTag"] | null
   >(null);
@@ -453,18 +457,43 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
             selectedFailTag={selectedFailTag}
             onSelectFailTag={setSelectedFailTag}
           />
-          <SmsPanel
-            stageLabel="3차"
-            templates={STAGE3_SMS_TEMPLATES}
-            defaultVars={{
-              centerName: stage3.owner.center ?? "강남구 치매안심센터",
-            }}
-            caseId={stage3.caseId}
-            citizenPhone={stage3.communication.history?.[0]?.note ? "010-****-1234" : "010-****-1234"}
-            guardianPhone={undefined}
-            onSmsSent={handleStage3SmsSent}
-            onConsultation={handleStage3Consultation}
-          />
+
+          {/* SMS 트리거 버튼 */}
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardContent className="px-4 py-4">
+              <Button
+                className="h-11 w-full gap-2 bg-[#15386a] text-sm font-semibold text-white hover:bg-[#102b4e]"
+                onClick={() => setSmsModalOpen(true)}
+              >
+                <MessageSquare className="h-4 w-4" />
+                상담/문자 실행 (3차)
+              </Button>
+              <p className="mt-2 text-center text-[11px] text-slate-500">
+                접촉 · 예약안내 · 리마인더 문자 발송
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* SMS 모달 */}
+          <Dialog open={smsModalOpen} onOpenChange={setSmsModalOpen}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto p-0">
+              <SmsPanel
+                stageLabel="3차"
+                templates={STAGE3_SMS_TEMPLATES}
+                defaultVars={{
+                  centerName: stage3.owner.center ?? "강남구 치매안심센터",
+                }}
+                caseId={stage3.caseId}
+                citizenPhone={stage3.communication.history?.[0]?.note ? "010-****-1234" : "010-****-1234"}
+                guardianPhone={undefined}
+                onSmsSent={(item) => {
+                  handleStage3SmsSent(item);
+                }}
+                onConsultation={handleStage3Consultation}
+              />
+            </DialogContent>
+          </Dialog>
+
           <ReferralPanel stage3={stage3} />
           <AuditTimeline
             stage3={stage3}

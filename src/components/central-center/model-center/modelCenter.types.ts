@@ -50,12 +50,18 @@ export interface ModelUseNode {
   group: "input" | "feature" | "model" | "output" | "ops";
   label: string;
   shortDesc: string;
+  /** 어느 Stage에 주로 소속되는지 (공통이면 "common") */
+  stageTag?: "stage1" | "stage2" | "stage3" | "common";
+  /** 기관 결과 등 외부 데이터 표시용 */
+  isExternal?: boolean;
 }
 
 export interface ModelUseEdge {
   from: string;
   to: string;
   label?: string;
+  /** 점선(dashed)은 기관 비교 / 참고 흐름에 사용 */
+  style?: "solid" | "dashed";
 }
 
 /* ─── Detail Inspector ─── */

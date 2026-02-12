@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   User,
   Phone,
@@ -42,6 +42,11 @@ import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
 import { Separator } from '../ui/separator';
 import { Alert, AlertDescription } from '../ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
+import {
+  getCaseRecordById,
+  getStage1ContactPriority,
+  toAgeBand,
+} from './v2/caseRecords';
 
 interface ConsultationPageProps {
   caseId: string;
@@ -76,6 +81,19 @@ interface ConsultationHistory {
   actions: string[];
 }
 
+function mapStageStatusToConsultationStatus(status?: string): CaseStatus {
+  if (status === '완료') return 'reconsultation';
+  if (status === '지연' || status === '임박') return 'dropout_recontact';
+  if (status === '진행중' || status === '대기') return 'contacted';
+  return 'new';
+}
+
+function mapRiskToScore(risk?: '고' | '중' | '저', priorityLabel?: '즉시' | '높음' | '보통' | '낮음') {
+  const priorityBase = priorityLabel === '즉시' ? 92 : priorityLabel === '높음' ? 78 : priorityLabel === '보통' ? 58 : 38;
+  const riskAdjust = risk === '고' ? 6 : risk === '저' ? -6 : 0;
+  return Math.max(1, Math.min(99, priorityBase + riskAdjust));
+}
+
 export function ConsultationPage({
   caseId,
   patientName,
@@ -85,6 +103,9 @@ export function ConsultationPage({
   onCancel,
   onBack,
 }: ConsultationPageProps) {
+  const linkedCase = useMemo(() => getCaseRecordById(caseId), [caseId]);
+  const linkedPriority = useMemo(() => getStage1ContactPriority(linkedCase), [linkedCase]);
+
   // Tab Management
   const [activeTab, setActiveTab] = useState<MainTab>(initialTab);
   
@@ -122,22 +143,45 @@ export function ConsultationPage({
   // 연락 대상 선택 (대상자 / 보호자)
   const [consultTarget, setConsultTarget] = useState<'citizen' | 'guardian'>('citizen');
   
-  // Mock Case Data
-  const caseData = {
-    id: caseId,
-    patientId: 'CASE-2026-0215',
-    ageGroup: '70대 초반',
-    gender: '남성',
-    phone: '010-1234-5678',
-    guardianPhone: '010-9876-3064',   // 시민 예약 시 입력된 보호자 번호
-    address: '서울시 강남구 **동',
-    riskLevel: 'high' as const,
-    riskScore: 78,
-    status: 'contacted',
-    counselor: '이상담',
-    registeredDate: '2026-01-15',
-    lastContact: '2026-02-01',
-  };
+  const caseData = useMemo(() => {
+    if (!linkedCase) {
+      return {
+        id: caseId,
+        patientId: caseId,
+        patientName: patientName ?? '대상자 정보 없음',
+        ageGroup: '연령대 미확인',
+        gender: '미확인',
+        phone: '010-0000-0000',
+        guardianPhone: '',
+        address: '주소 정보 미확인',
+        riskLevel: 'medium' as const,
+        riskScore: 60,
+        contactPriorityLabel: '보통' as const,
+        status: 'new' as CaseStatus,
+        counselor: '담당자 미지정',
+        registeredDate: new Date().toISOString().split('T')[0],
+        lastContact: new Date().toISOString().split('T')[0],
+      };
+    }
+
+    return {
+      id: linkedCase.id,
+      patientId: linkedCase.id,
+      patientName: linkedCase.profile.name,
+      ageGroup: toAgeBand(linkedCase.profile.age),
+      gender: '미확인',
+      phone: linkedCase.profile.phone,
+      guardianPhone: linkedCase.profile.guardianPhone ?? '',
+      address: '주소 정보는 운영 시스템에서 확인',
+      riskLevel: linkedCase.risk === '고' ? 'high' as const : linkedCase.risk === '중' ? 'medium' as const : 'low' as const,
+      riskScore: mapRiskToScore(linkedCase.risk, linkedPriority.label),
+      contactPriorityLabel: linkedPriority.label,
+      status: mapStageStatusToConsultationStatus(linkedCase.status),
+      counselor: linkedCase.manager,
+      registeredDate: linkedCase.updated.split(' ')[0],
+      lastContact: linkedCase.updated.split(' ')[0],
+    };
+  }, [caseId, linkedCase, linkedPriority.label, patientName]);
 
   // Mock Consultation History
   const [consultationHistory] = useState<ConsultationHistory[]>([
@@ -302,6 +346,10 @@ export function ConsultationPage({
       return () => clearInterval(interval);
     }
   }, [consultationNotes, autoSaveEnabled]);
+
+  useEffect(() => {
+    setCaseStatus(caseData.status);
+  }, [caseData.status]);
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -567,8 +615,9 @@ export function ConsultationPage({
         {/* Case Info Summary (Sticky) */}
         <div className="mt-4 grid grid-cols-6 gap-4 bg-gray-50 p-4 rounded-lg border border-gray-200">
           <div>
-            <p className="text-xs text-gray-500 mb-1">연령대 / 성별</p>
-            <p className="font-semibold text-sm">{caseData.ageGroup} / {caseData.gender}</p>
+            <p className="text-xs text-gray-500 mb-1">대상자</p>
+            <p className="font-semibold text-sm">{caseData.patientName}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{caseData.ageGroup} / {caseData.gender}</p>
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">연락처</p>
@@ -592,8 +641,16 @@ export function ConsultationPage({
           </div>
           <div>
             <p className="text-xs text-gray-500 mb-1">우선도</p>
-            <Badge variant="destructive" className="text-xs">
-              높음 ({caseData.riskScore})
+            <Badge className={`text-xs ${
+              caseData.contactPriorityLabel === '즉시'
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : caseData.contactPriorityLabel === '높음'
+                  ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                  : caseData.contactPriorityLabel === '보통'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+            }`}>
+              {caseData.contactPriorityLabel} ({caseData.riskScore})
             </Badge>
           </div>
           <div>

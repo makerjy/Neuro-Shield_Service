@@ -416,6 +416,13 @@ const GROUP_COLS: {
   { key: "ops",     label: "DOWNSTREAM OPS",  labelKo: "운영 활용",       color: "#ef4444", bg: "#fee2e2", bgSoft: "bg-red-50/40",     borderColor: "border-red-200", icon: Workflow },
 ];
 
+const STAGE_TAG_COLORS: Record<string, { bg: string; text: string; label: string }> = {
+  stage1: { bg: "bg-blue-100",    text: "text-blue-600",    label: "S1" },
+  stage2: { bg: "bg-amber-100",   text: "text-amber-600",   label: "S2" },
+  stage3: { bg: "bg-emerald-100", text: "text-emerald-600", label: "S3" },
+  common: { bg: "bg-slate-100",   text: "text-slate-500",   label: "공통" },
+};
+
 function UseMapNode({
   node,
   meta,
@@ -437,6 +444,8 @@ function UseMapNode({
   onHover: () => void;
   onLeave: () => void;
 }) {
+  const tagInfo = node.stageTag ? STAGE_TAG_COLORS[node.stageTag] : null;
+
   return (
     <button
       onClick={onSelect}
@@ -445,6 +454,7 @@ function UseMapNode({
       className={`
         group relative w-full text-left rounded-lg border px-3 py-2.5
         transition-all duration-150 ease-out
+        ${node.isExternal ? "border-dashed" : ""}
         ${isSelected
           ? "shadow-md ring-2 ring-offset-1 text-white"
           : isHovered || isConnected
@@ -456,19 +466,31 @@ function UseMapNode({
       `}
       style={{
         background: isSelected ? meta.color : isHovered ? meta.bg : "#ffffff",
-        borderColor: isSelected || isHovered || isConnected ? meta.color : "#e2e8f0",
-        ...(isSelected ? {} : {}),
+        borderColor: isSelected || isHovered || isConnected ? meta.color : node.isExternal ? "#f59e0b" : "#e2e8f0",
         ...(isConnected && !isSelected && !isHovered ? { borderColor: meta.color, borderWidth: 2 } : {}),
-        ...(isSelected ? { ringColor: meta.color } : {}),
       }}
     >
+      {/* Stage tag badge */}
+      {tagInfo && (
+        <span className={`absolute -top-1.5 -left-1 text-[7px] font-bold px-1 py-px rounded ${
+          isSelected ? "bg-white/30 text-white" : `${tagInfo.bg} ${tagInfo.text}`
+        }`}>
+          {tagInfo.label}
+        </span>
+      )}
+      {/* External badge (기관 결과) */}
+      {node.isExternal && !isSelected && (
+        <span className="absolute -top-1.5 -right-1 text-[7px] font-bold px-1 py-px rounded bg-amber-100 text-amber-600">
+          기관
+        </span>
+      )}
       <p className={`text-[11px] font-semibold leading-tight truncate ${isSelected ? "text-white" : "text-slate-700"}`}>
         {node.label}
       </p>
       <p className={`text-[9px] mt-0.5 leading-tight truncate ${isSelected ? "text-white/70" : "text-slate-400"}`}>
         {node.shortDesc}
       </p>
-      {/* Stage indicator dot */}
+      {/* Connected indicator dot */}
       {isConnected && !isSelected && (
         <span
           className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full ring-2 ring-white"
@@ -499,6 +521,27 @@ function ModelUseMap({
     for (const n of nodes) (g[n.group] ??= []).push(n);
     return g;
   }, [nodes]);
+
+  // Stage order for sub-grouping within columns
+  const stageOrder: (string | undefined)[] = ["stage1", "stage2", "stage3", "common", undefined];
+  const stageLabelMap: Record<string, string> = { stage1: "Stage 1", stage2: "Stage 2", stage3: "Stage 3", common: "공통" };
+
+  // Sub-group nodes by stageTag within each column
+  const groupedByStage = useMemo(() => {
+    const result: Record<string, { tag: string; label: string; nodes: ModelUseNode[] }[]> = {};
+    for (const col of GROUP_COLS) {
+      const list = grouped[col.key] ?? [];
+      const subGroups: { tag: string; label: string; nodes: ModelUseNode[] }[] = [];
+      for (const st of stageOrder) {
+        const filtered = list.filter((n) => (n.stageTag ?? undefined) === st);
+        if (filtered.length > 0) {
+          subGroups.push({ tag: st ?? "etc", label: stageLabelMap[st ?? ""] ?? "", nodes: filtered });
+        }
+      }
+      result[col.key] = subGroups;
+    }
+    return result;
+  }, [grouped]);
 
   // Connected nodes (1-hop from hovered/selected)
   const { connectedNodes, connectedEdgeKeys } = useMemo(() => {
@@ -547,35 +590,49 @@ function ModelUseMap({
         </svg>
 
         {/* ── Node Grid ── */}
-        <div className="grid grid-cols-5 min-h-[360px]">
+        <div className="grid grid-cols-5 min-h-[420px]">
           {GROUP_COLS.map((col, colIdx) => {
-            const list = grouped[col.key] ?? [];
+            const subGroups = groupedByStage[col.key] ?? [];
             return (
               <div
                 key={col.key}
-                className={`flex flex-col gap-2 p-3 ${col.bgSoft} ${
+                className={`flex flex-col gap-1.5 p-3 ${col.bgSoft} ${
                   colIdx < GROUP_COLS.length - 1 ? `border-r ${col.borderColor}` : ""
                 }`}
               >
-                {list.map((node) => {
-                  const isSel = selectedNode === node.id;
-                  const isHov = hoveredNode === node.id;
-                  const isCon = connectedNodes.has(node.id);
-                  return (
-                    <UseMapNode
-                      key={node.id}
-                      node={node}
-                      meta={col}
-                      isSelected={isSel}
-                      isHovered={isHov}
-                      isConnected={isCon && !isSel && !isHov}
-                      dimmed={hasFocus && !isCon && !isSel && !isHov}
-                      onSelect={() => onSelectNode(node.id)}
-                      onHover={() => setHoveredNode(node.id)}
-                      onLeave={() => setHoveredNode(null)}
-                    />
-                  );
-                })}
+                {subGroups.map((sg, sgIdx) => (
+                  <React.Fragment key={sg.tag}>
+                    {/* Stage sub-header */}
+                    {sg.label && (
+                      <div className={`flex items-center gap-1 ${sgIdx > 0 ? "mt-2 pt-2 border-t border-dashed border-slate-200/60" : ""}`}>
+                        <span className={`text-[8px] font-bold px-1 py-px rounded ${
+                          STAGE_TAG_COLORS[sg.tag]?.bg ?? "bg-slate-100"
+                        } ${STAGE_TAG_COLORS[sg.tag]?.text ?? "text-slate-400"}`}>
+                          {sg.label}
+                        </span>
+                      </div>
+                    )}
+                    {sg.nodes.map((node) => {
+                      const isSel = selectedNode === node.id;
+                      const isHov = hoveredNode === node.id;
+                      const isCon = connectedNodes.has(node.id);
+                      return (
+                        <UseMapNode
+                          key={node.id}
+                          node={node}
+                          meta={col}
+                          isSelected={isSel}
+                          isHovered={isHov}
+                          isConnected={isCon && !isSel && !isHov}
+                          dimmed={hasFocus && !isCon && !isSel && !isHov}
+                          onSelect={() => onSelectNode(node.id)}
+                          onHover={() => setHoveredNode(node.id)}
+                          onLeave={() => setHoveredNode(null)}
+                        />
+                      );
+                    })}
+                  </React.Fragment>
+                ))}
               </div>
             );
           })}

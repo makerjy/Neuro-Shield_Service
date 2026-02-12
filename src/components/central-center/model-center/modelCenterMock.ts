@@ -225,68 +225,152 @@ export const MOCK_STAGES: StageOverview[] = [
    C. Model Use Map (노드 + 엣지)
    ════════════════════════════════════════════════════════════ */
 export const MOCK_NODES: ModelUseNode[] = [
-  // ─ Inputs
-  { id: "in-health", group: "input", label: "건강검진", shortDesc: "국민건강보험공단 연계" },
-  { id: "in-survey", group: "input", label: "문진/생활습관", shortDesc: "안심센터 등록 시 수집" },
-  { id: "in-admin", group: "input", label: "행정정보", shortDesc: "연락처, 주소, 가구유형" },
-  { id: "in-history", group: "input", label: "과거검사이력", shortDesc: "이전 차수 선별 결과" },
-  { id: "in-exam", group: "input", label: "2차검사결과", shortDesc: "PET/MRI/바이오마커" },
-  { id: "in-followup", group: "input", label: "3차추적이력", shortDesc: "방문/상담/검사 이력" },
-  // ─ Features
-  { id: "ft-builder", group: "feature", label: "Feature Builder", shortDesc: "입력 데이터 전처리·변환" },
-  // ─ Models & Rules
-  { id: "md-s1-risk", group: "model", label: "Stage1 Risk Scoring", shortDesc: "위험도 추정 모델 v3.2.1" },
-  { id: "md-s1-rule", group: "model", label: "Eligibility Rules", shortDesc: "선별 기준 적합성 규칙 v1.4" },
-  { id: "md-s2-consist", group: "model", label: "Consistency Check", shortDesc: "모델↔기관 일관성 검증 v1.2" },
-  { id: "md-transition", group: "model", label: "Transition Policy", shortDesc: "단계 전환 정책 규칙 v1.3" },
-  { id: "md-s3-prio", group: "model", label: "MCI Prioritizer", shortDesc: "추적 우선순위 추천 v2.0" },
-  // ─ Outputs
-  { id: "out-score", group: "output", label: "risk_score", shortDesc: "위험도 추정 점수 0–100" },
-  { id: "out-band", group: "output", label: "risk_band", shortDesc: "정상/주의/고위험" },
-  { id: "out-reason", group: "output", label: "reason_codes", shortDesc: "상위 3–5 사유 코드" },
-  { id: "out-diag", group: "output", label: "diagnosis_class", shortDesc: "AD/MCI/정상 (기관 결과)" },
-  { id: "out-signal", group: "output", label: "model_support_signal", shortDesc: "일치/주의/검증필요 (참고)" },
-  { id: "out-priority", group: "output", label: "followup_priority", shortDesc: "High/Med/Low" },
-  { id: "out-actions", group: "output", label: "recommended_actions", shortDesc: "권고 액션 목록" },
-  { id: "out-quality", group: "output", label: "data_quality_flags", shortDesc: "데이터 품질 경고" },
-  // ─ Downstream Ops
-  { id: "ops-case", group: "ops", label: "케이스 생성", shortDesc: "안심센터 케이스 등록" },
-  { id: "ops-booking", group: "ops", label: "예약 유도", shortDesc: "2차 검사 예약 안내" },
-  { id: "ops-resource", group: "ops", label: "자원 배분", shortDesc: "센터별 자원 최적화" },
-  { id: "ops-tracking", group: "ops", label: "MCI 추적", shortDesc: "추적 일정 관리" },
+  /* ══════ Inputs ══════ */
+  // Stage 1 입력
+  { id: "in-health",   group: "input", label: "건강검진",       shortDesc: "국민건강보험공단 연계",       stageTag: "stage1" },
+  { id: "in-survey",   group: "input", label: "문진/생활습관",   shortDesc: "안심센터 등록 시 수집",       stageTag: "stage1" },
+  { id: "in-admin",    group: "input", label: "행정정보",       shortDesc: "연락처, 주소, 가구유형",     stageTag: "stage1" },
+  { id: "in-history",  group: "input", label: "과거검사이력",    shortDesc: "이전 차수 선별 결과",        stageTag: "stage1" },
+  // Stage 2 입력
+  { id: "in-cogtest",  group: "input", label: "인지검사 요약지표", shortDesc: "MMSE/MoCA/CDR 요약",       stageTag: "stage2" },
+  { id: "in-biomarker",group: "input", label: "혈액/바이오마커",  shortDesc: "Aβ42, p-tau, NfL 등",       stageTag: "stage2" },
+  { id: "in-survey2",  group: "input", label: "2차 사전설문",    shortDesc: "일상생활 평가 + 보호자 문진",  stageTag: "stage2" },
+  { id: "in-medhist",  group: "input", label: "약물/진료이력",   shortDesc: "처방전, 외래/입원 코드",      stageTag: "stage2" },
+  // Stage 3 입력
+  { id: "in-mri",      group: "input", label: "MRI 피처",      shortDesc: "해마 체적, 피질 두께 등",     stageTag: "stage3" },
+  { id: "in-pet",      group: "input", label: "PET 피처",      shortDesc: "Aβ/Tau SUVR, Centiloid",    stageTag: "stage3" },
+  { id: "in-imgderiv", group: "input", label: "영상 파생지표",   shortDesc: "ROI 비율, 위축 지수",        stageTag: "stage3" },
+  { id: "in-followup", group: "input", label: "추적이력",       shortDesc: "방문/상담/검사 이력",         stageTag: "stage3" },
+
+  /* ══════ Feature Builders ══════ */
+  { id: "ft-builder",  group: "feature", label: "S1 Feature Builder", shortDesc: "1차 입력 전처리·변환",    stageTag: "stage1" },
+  { id: "ft-s2-vec",   group: "feature", label: "S2 Vectorizer",     shortDesc: "인지+바이오+설문 벡터화",   stageTag: "stage2" },
+  { id: "ft-s3-enc",   group: "feature", label: "S3 Encoder",        shortDesc: "MRI/PET 피처 인코딩",     stageTag: "stage3" },
+
+  /* ══════ Models & Rules ══════ */
+  // Stage 1
+  { id: "md-s1-risk",    group: "model", label: "S1 Risk Scoring",    shortDesc: "위험도 추정 모델 v3.2.1",   stageTag: "stage1" },
+  { id: "md-s1-rule",    group: "model", label: "Eligibility Rules",  shortDesc: "선별 기준 적합성 규칙 v1.4", stageTag: "stage1" },
+  // Stage 2
+  { id: "md-s2-ann",     group: "model", label: "S2 ANN Classifier",  shortDesc: "ANN 분류 보조 모델 v1.0",   stageTag: "stage2" },
+  { id: "md-s2-consist", group: "model", label: "Consistency Check",  shortDesc: "모델↔기관 일관성 검증 v1.2", stageTag: "stage2" },
+  // Stage 3
+  { id: "md-s3-cnn",     group: "model", label: "S3 CNN Classifier",  shortDesc: "CNN 분류 보조 모델 v1.0",   stageTag: "stage3" },
+  { id: "md-s3-prio",    group: "model", label: "MCI Prioritizer",    shortDesc: "추적 우선순위 추천 v2.0",   stageTag: "stage3" },
+  // Cross-stage
+  { id: "md-guardrail",  group: "model", label: "Post-Model Guardrails", shortDesc: "신뢰구간·이상치 보정 v1.0", stageTag: "common" },
+  { id: "md-transition", group: "model", label: "Transition Policy",  shortDesc: "단계 전환 정책 규칙 v1.3", stageTag: "common" },
+
+  /* ══════ Outputs ══════ */
+  // Stage 1 산출물
+  { id: "out-score",    group: "output", label: "risk_score",        shortDesc: "위험도 추정 점수 0–100",      stageTag: "stage1" },
+  { id: "out-band",     group: "output", label: "risk_band",         shortDesc: "정상/주의/고위험",           stageTag: "stage1" },
+  { id: "out-reason",   group: "output", label: "reason_codes",      shortDesc: "상위 3–5 사유 코드",         stageTag: "stage1" },
+  { id: "out-quality",  group: "output", label: "data_quality_flags", shortDesc: "데이터 품질 경고",           stageTag: "stage1" },
+  // Stage 2 모델 보조 신호
+  { id: "out-s2-class", group: "output", label: "s2_support_class",   shortDesc: "모델 보조 분류 (참고)",      stageTag: "stage2" },
+  { id: "out-s2-conf",  group: "output", label: "s2_support_confidence", shortDesc: "모델 보조 신뢰도",       stageTag: "stage2" },
+  { id: "out-s2-reason",group: "output", label: "s2_reason_codes",   shortDesc: "S2 모델 사유 코드",          stageTag: "stage2" },
+  // Stage 2 기관 결과 (isExternal)
+  { id: "out-diag",     group: "output", label: "diagnosis_class",   shortDesc: "AD/MCI/정상 (기관 결과)",    stageTag: "stage2", isExternal: true },
+  { id: "out-signal",   group: "output", label: "model_support_signal", shortDesc: "일치/주의/검증필요 (참고)", stageTag: "stage2" },
+  // Stage 3 모델 보조 신호
+  { id: "out-s3-class", group: "output", label: "s3_support_class",   shortDesc: "모델 보조 분류 (참고)",     stageTag: "stage3" },
+  { id: "out-s3-conf",  group: "output", label: "s3_support_confidence", shortDesc: "모델 보조 신뢰도",      stageTag: "stage3" },
+  { id: "out-s3-reason",group: "output", label: "s3_reason_codes",   shortDesc: "S3 모델 사유 코드",          stageTag: "stage3" },
+  // Stage 3 운영 산출물
+  { id: "out-priority", group: "output", label: "followup_priority", shortDesc: "High/Med/Low",              stageTag: "stage3" },
+  { id: "out-actions",  group: "output", label: "recommended_actions", shortDesc: "권고 액션 목록",           stageTag: "stage3" },
+  // Post-Model Guardrails
+  { id: "out-guardrail",group: "output", label: "guardrail_flags",   shortDesc: "보정/이상치 경고 플래그",     stageTag: "common" },
+
+  /* ══════ Downstream Ops ══════ */
+  // Stage 1 OPS
+  { id: "ops-case",      group: "ops", label: "케이스 생성",       shortDesc: "안심센터 케이스 등록",       stageTag: "stage1" },
+  { id: "ops-booking",   group: "ops", label: "예약 유도",        shortDesc: "2차 검사 예약 안내",        stageTag: "stage1" },
+  // Stage 2 OPS
+  { id: "ops-s2-prio",   group: "ops", label: "2차 검사 우선순위", shortDesc: "2차 검사 우선순위 조정",    stageTag: "stage2" },
+  // Stage 3 OPS
+  { id: "ops-s3-route",  group: "ops", label: "정밀검사 경로추천",  shortDesc: "3차 정밀검사 경로 추천",    stageTag: "stage3" },
+  { id: "ops-s3-resched",group: "ops", label: "재검/추적 재조정",  shortDesc: "재검·추적 일정 재조정",     stageTag: "stage3" },
+  { id: "ops-resource",  group: "ops", label: "자원 배분",        shortDesc: "센터별 자원 최적화",        stageTag: "common" },
+  { id: "ops-tracking",  group: "ops", label: "MCI 추적",        shortDesc: "추적 일정 관리",           stageTag: "stage3" },
 ];
 
 export const MOCK_EDGES: ModelUseEdge[] = [
-  // Inputs → Feature Builder
-  { from: "in-health", to: "ft-builder", label: "건강검진 데이터" },
-  { from: "in-survey", to: "ft-builder", label: "문진 데이터" },
-  { from: "in-admin", to: "ft-builder", label: "행정 정보" },
-  { from: "in-history", to: "ft-builder", label: "검사 이력" },
-  // Feature Builder → Models
-  { from: "ft-builder", to: "md-s1-risk", label: "피처 벡터" },
-  { from: "ft-builder", to: "md-s1-rule", label: "기준 데이터" },
-  // Stage1 Models → Outputs
-  { from: "md-s1-risk", to: "out-score", label: "risk_score" },
-  { from: "md-s1-risk", to: "out-band", label: "risk_band" },
-  { from: "md-s1-risk", to: "out-reason", label: "reason_codes" },
-  { from: "md-s1-rule", to: "out-quality", label: "quality_flags" },
-  // Stage2
-  { from: "in-exam", to: "md-s2-consist" },
-  { from: "out-band", to: "md-s2-consist", label: "1차 결과 전달" },
-  { from: "md-s2-consist", to: "out-diag", label: "기관 연계 결과" },
-  { from: "md-s2-consist", to: "out-signal", label: "모델 참고 신호" },
+  /* ══════ Stage 1 Flow ══════ */
+  // Inputs → S1 Feature Builder
+  { from: "in-health",  to: "ft-builder",  label: "건강검진 데이터" },
+  { from: "in-survey",  to: "ft-builder",  label: "문진 데이터" },
+  { from: "in-admin",   to: "ft-builder",  label: "행정 정보" },
+  { from: "in-history", to: "ft-builder",  label: "검사 이력" },
+  // S1 Feature Builder → Models
+  { from: "ft-builder", to: "md-s1-risk",  label: "피처 벡터" },
+  { from: "ft-builder", to: "md-s1-rule",  label: "기준 데이터" },
+  // S1 Models → Outputs
+  { from: "md-s1-risk", to: "out-score",   label: "risk_score" },
+  { from: "md-s1-risk", to: "out-band",    label: "risk_band" },
+  { from: "md-s1-risk", to: "out-reason",  label: "reason_codes" },
+  { from: "md-s1-rule", to: "out-quality",  label: "quality_flags" },
+  // S1 Outputs → Guardrails
+  { from: "out-score",  to: "md-guardrail", label: "S1 검증" },
+  // S1 Outputs → Ops
+  { from: "out-score",  to: "ops-case",    label: "케이스 생성 트리거" },
+  { from: "out-band",   to: "ops-booking",  label: "예약 유도 조건" },
+
+  /* ══════ Stage 2 Flow ══════ */
+  // S2 Inputs → S2 Vectorizer
+  { from: "in-cogtest",   to: "ft-s2-vec", label: "인지검사 데이터" },
+  { from: "in-biomarker", to: "ft-s2-vec", label: "바이오마커" },
+  { from: "in-survey2",   to: "ft-s2-vec", label: "2차 설문" },
+  { from: "in-medhist",   to: "ft-s2-vec", label: "진료이력" },
+  // S1 결과 → S2 입력
+  { from: "out-band",     to: "ft-s2-vec", label: "1차 결과 전달", style: "dashed" },
+  // S2 Vectorizer → S2 ANN
+  { from: "ft-s2-vec",    to: "md-s2-ann", label: "S2 벡터" },
+  // S2 ANN → S2 Outputs
+  { from: "md-s2-ann",    to: "out-s2-class",  label: "보조 분류" },
+  { from: "md-s2-ann",    to: "out-s2-conf",   label: "신뢰도" },
+  { from: "md-s2-ann",    to: "out-s2-reason",  label: "사유 코드" },
+  // S2 Outputs → Guardrails
+  { from: "out-s2-class", to: "md-guardrail", label: "S2 검증" },
+  // 기관 결과(외부) → Consistency Check
+  { from: "out-diag",     to: "md-s2-consist", label: "기관 결과", style: "dashed" },
+  { from: "out-s2-class", to: "md-s2-consist", label: "모델 보조 분류" },
+  // Consistency Check → 출력
+  { from: "md-s2-consist",to: "out-signal",    label: "일관성 신호" },
+  // S2 Outputs → Transition
+  { from: "out-diag",     to: "md-transition", style: "dashed" },
+  // S2 → Ops
+  { from: "out-s2-conf",  to: "ops-s2-prio",   label: "우선순위 참고" },
+
+  /* ══════ Stage 3 Flow ══════ */
+  // S3 Inputs → S3 Encoder
+  { from: "in-mri",       to: "ft-s3-enc", label: "MRI 피처" },
+  { from: "in-pet",       to: "ft-s3-enc", label: "PET 피처" },
+  { from: "in-imgderiv",  to: "ft-s3-enc", label: "파생 지표" },
+  // 추적이력 → MCI Prioritizer
+  { from: "in-followup",  to: "md-s3-prio", label: "추적 이력" },
+  // S3 Encoder → S3 CNN
+  { from: "ft-s3-enc",    to: "md-s3-cnn", label: "S3 텐서" },
+  // S3 CNN → S3 Outputs
+  { from: "md-s3-cnn",    to: "out-s3-class",   label: "보조 분류" },
+  { from: "md-s3-cnn",    to: "out-s3-conf",    label: "신뢰도" },
+  { from: "md-s3-cnn",    to: "out-s3-reason",   label: "사유 코드" },
+  // S3 Outputs → Guardrails
+  { from: "out-s3-class", to: "md-guardrail", label: "S3 검증" },
+  // MCI Prioritizer → Outputs
+  { from: "md-s3-prio",   to: "out-priority",  label: "우선순위" },
+  { from: "md-s3-prio",   to: "out-actions",   label: "권고 액션" },
   // Transition
-  { from: "out-diag", to: "md-transition" },
-  { from: "md-transition", to: "md-s3-prio", label: "MCI 편입" },
-  // Stage3
-  { from: "in-followup", to: "md-s3-prio", label: "추적 이력" },
-  { from: "md-s3-prio", to: "out-priority", label: "우선순위" },
-  { from: "md-s3-prio", to: "out-actions", label: "권고 액션" },
-  // Outputs → Ops
-  { from: "out-score", to: "ops-case", label: "케이스 생성 트리거" },
-  { from: "out-band", to: "ops-booking", label: "예약 유도 조건" },
-  { from: "out-priority", to: "ops-tracking", label: "추적 우선순위" },
-  { from: "out-actions", to: "ops-resource", label: "자원 배분 입력" },
+  { from: "md-transition", to: "md-s3-prio",   label: "MCI 편입" },
+  // Guardrails → Output
+  { from: "md-guardrail", to: "out-guardrail",  label: "보정 플래그" },
+  // S3 → Ops
+  { from: "out-priority", to: "ops-tracking",   label: "추적 우선순위" },
+  { from: "out-actions",  to: "ops-resource",   label: "자원 배분 입력" },
+  { from: "out-s3-conf",  to: "ops-s3-route",   label: "경로 참고" },
+  { from: "out-guardrail",to: "ops-s3-resched", label: "재조정 트리거" },
 ];
 
 /* ════════════════════════════════════════════════════════════
@@ -439,7 +523,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
   "ft-builder": {
     id: "ft-builder",
     definition: {
-      what: "다양한 원천 데이터를 모델 입력에 적합한 피처 벡터로 전처리·변환합니다.",
+      what: "1차 선별용 원천 데이터를 모델 입력에 적합한 피처 벡터로 전처리·변환합니다.",
       why: "데이터 표준화와 결측치 처리를 통해 모델 입력 품질을 보장합니다.",
       whereUsed: ["Stage1 Risk Scoring 입력", "Eligibility Rules 입력"],
       responsibility: RESPONSIBILITY_LINE,
@@ -463,6 +547,61 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
       changeLog: [
         { version: "v2.1", date: "2025-12-01", summary: "BMI 파생 피처 추가" },
       ],
+    },
+  },
+  "ft-s2-vec": {
+    id: "ft-s2-vec",
+    definition: {
+      what: "인지검사·바이오마커·설문·진료이력 데이터를 ANN 모델 입력 벡터로 변환합니다.",
+      why: "다양한 형식의 2차 데이터를 일관된 수치 벡터로 정규화하여 ANN 입력 품질을 보장합니다.",
+      whereUsed: ["S2 ANN Classifier 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "cogtest_features", type: "number[6]", nullable: false, note: "인지검사 요약" },
+        { field: "biomarker_features", type: "number[4]", nullable: true, note: "혈액 바이오마커" },
+        { field: "survey2_features", type: "number[8]", nullable: true, note: "2차 설문 요약" },
+        { field: "medhist_features", type: "number[5]", nullable: true, note: "진료이력 요약" },
+      ],
+      outputs: [
+        { field: "s2_feature_vector", type: "number[64]", nullable: false },
+        { field: "missing_flags", type: "string[]", nullable: true },
+      ],
+      refreshCadence: "검사 접수 시점",
+    },
+    qualityAudit: {
+      missingRate: 8.3,
+      driftSignals: [{ name: "입력 분포 변화", level: "low", note: "PSI 0.03 (안정)" }],
+      biasAlerts: [],
+      changeLog: [{ version: "v1.0", date: "2026-01-15", summary: "초기 구축" }],
+    },
+  },
+  "ft-s3-enc": {
+    id: "ft-s3-enc",
+    definition: {
+      what: "MRI/PET 정량 피처를 CNN 모델 입력 텐서로 인코딩합니다.",
+      why: "영상 피처를 3D 텐서 형태로 변환하여 CNN 모델이 공간 패턴을 학습할 수 있게 합니다.",
+      whereUsed: ["S3 CNN Classifier 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "mri_features", type: "number[128]", nullable: false, note: "MRI 정량 피처" },
+        { field: "pet_features", type: "number[64]", nullable: true, note: "PET 정량 피처" },
+        { field: "derived_metrics", type: "number[16]", nullable: true, note: "영상 파생 지표" },
+      ],
+      outputs: [
+        { field: "s3_tensor", type: "tensor[1,208]", nullable: false },
+        { field: "missing_flags", type: "string[]", nullable: true },
+      ],
+      refreshCadence: "영상 수신 시점",
+    },
+    qualityAudit: {
+      missingRate: 18.7,
+      driftSignals: [{ name: "스캐너 프로토콜 차이", level: "mid", note: "기관 간 표준화 편차 ±4.2%" }],
+      biasAlerts: [],
+      changeLog: [{ version: "v1.0", date: "2026-01-20", summary: "초기 구축" }],
     },
   },
   /* ─ Input Nodes ─ */
@@ -559,27 +698,192 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
   },
   "in-exam": {
-    id: "in-exam",
+    id: "in-cogtest",
     definition: {
-      what: "의료기관에서 수행한 2차 검사(PET/MRI/바이오마커) 결과 데이터입니다.",
-      why: "기관 연계 결과를 수신하여 2차 진단 분류(AD/MCI/정상)의 근거를 제공합니다.",
-      whereUsed: ["Consistency Check 입력", "2차 분류 결과 산출"],
+      what: "인지기능검사(MMSE, MoCA, CDR 등)의 요약 점수 데이터입니다.",
+      why: "2차 ANN 모델의 핵심 입력으로, 인지기능 저하 정도를 수치화한 참고 데이터입니다.",
+      whereUsed: ["S2 Vectorizer 입력", "ANN Classifier 입력"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
       inputs: [
-        { field: "exam_type", type: "enum(PET|MRI|Biomarker)", nullable: false },
-        { field: "exam_result", type: "object", nullable: false },
+        { field: "mmse_score", type: "number(0-30)", nullable: false, note: "MMSE 점수" },
+        { field: "moca_score", type: "number(0-30)", nullable: true, note: "MoCA 점수" },
+        { field: "cdr_global", type: "number(0-3)", nullable: true, note: "CDR 전체 점수" },
         { field: "exam_date", type: "date", nullable: false },
-        { field: "institution_code", type: "string", nullable: false },
       ],
-      refreshCadence: "실시간 (기관 연계 시점)",
+      refreshCadence: "검사 시점 1회",
     },
     qualityAudit: {
-      missingRate: 8.9,
-      driftSignals: [{ name: "수신 지연 추이", level: "mid", note: "평균 18.3일 (목표 14일)" }],
-      biasAlerts: [{ group: "농어촌 지역", level: "mid", note: "수신 소요 +5.2일" }],
-      changeLog: [{ version: "v2.1", date: "2026-01-20", summary: "바이오마커 연계 추가" }],
+      missingRate: 6.4,
+      driftSignals: [{ name: "검사 도구 버전 차이", level: "low", note: "MoCA v8.1 ↔ v7.1 혼재 2.1%" }],
+      biasAlerts: [{ group: "저학력 대상자", level: "mid", note: "MMSE 문항별 오답률 편향 +6.2%p" }],
+      changeLog: [{ version: "v1.0", date: "2025-09-01", summary: "초기 연계 구축" }],
+    },
+  },
+  "in-cogtest": {
+    id: "in-cogtest",
+    definition: {
+      what: "인지기능검사(MMSE, MoCA, CDR 등)의 요약 점수 데이터입니다.",
+      why: "2차 ANN 모델의 핵심 입력으로, 인지기능 저하 정도를 수치화한 참고 데이터입니다.",
+      whereUsed: ["S2 Vectorizer 입력", "ANN Classifier 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "mmse_score", type: "number(0-30)", nullable: false, note: "MMSE 점수" },
+        { field: "moca_score", type: "number(0-30)", nullable: true, note: "MoCA 점수" },
+        { field: "cdr_global", type: "number(0-3)", nullable: true, note: "CDR 전체 점수" },
+        { field: "exam_date", type: "date", nullable: false },
+      ],
+      refreshCadence: "검사 시점 1회",
+    },
+    qualityAudit: {
+      missingRate: 6.4,
+      driftSignals: [{ name: "검사 도구 버전 차이", level: "low", note: "MoCA v8.1 ↔ v7.1 혼재 2.1%" }],
+      biasAlerts: [{ group: "저학력 대상자", level: "mid", note: "MMSE 문항별 오답률 편향 +6.2%p" }],
+      changeLog: [{ version: "v1.0", date: "2025-09-01", summary: "초기 연계 구축" }],
+    },
+  },
+  "in-biomarker": {
+    id: "in-biomarker",
+    definition: {
+      what: "혈액 기반 바이오마커(Aβ42, p-tau181, NfL 등) 수치 데이터입니다.",
+      why: "ANN 모델의 보조 입력으로, 신경퇴행 관련 혈액 지표를 제공합니다.",
+      whereUsed: ["S2 Vectorizer 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "ab42_ratio", type: "number", nullable: true, note: "Aβ42/40 비율" },
+        { field: "ptau181", type: "number", nullable: true, note: "pg/mL" },
+        { field: "nfl", type: "number", nullable: true, note: "Neurofilament light" },
+        { field: "sample_date", type: "date", nullable: false },
+      ],
+      refreshCadence: "검사 시점 1회",
+    },
+    qualityAudit: {
+      missingRate: 22.1,
+      driftSignals: [{ name: "검사 키트 변경", level: "mid", note: "Elecsys → Lumipulse 전환 중 2.3% 편차" }],
+      biasAlerts: [],
+      changeLog: [{ version: "v1.0", date: "2025-10-01", summary: "초기 연계" }],
+    },
+  },
+  "in-survey2": {
+    id: "in-survey2",
+    definition: {
+      what: "2차 검사 전 수집하는 일상생활 평가 및 보호자 문진 데이터입니다.",
+      why: "인지검사만으로 파악하기 어려운 일상 기능 저하를 보충하여 모델 입력 품질을 높입니다.",
+      whereUsed: ["S2 Vectorizer 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "adl_score", type: "number", nullable: true, note: "일상생활 수행능력" },
+        { field: "iadl_score", type: "number", nullable: true, note: "도구적 일상생활" },
+        { field: "guardian_responses", type: "object[]", nullable: true, note: "보호자 문진 응답" },
+      ],
+      refreshCadence: "2차 검사 전 1회",
+    },
+    qualityAudit: {
+      missingRate: 15.3,
+      driftSignals: [],
+      biasAlerts: [{ group: "독거 대상자", level: "high", note: "보호자 문진 미수집 42.1%" }],
+      changeLog: [{ version: "v1.0", date: "2025-11-01", summary: "초기 구축" }],
+    },
+  },
+  "in-medhist": {
+    id: "in-medhist",
+    definition: {
+      what: "대상자의 약물 처방 및 진료 이력(외래·입원) 데이터입니다.",
+      why: "공존 질환·약물 상호작용 등 인지기능에 영향을 줄 수 있는 임상 맥락을 제공합니다.",
+      whereUsed: ["S2 Vectorizer 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "rx_codes", type: "string[]", nullable: true, note: "처방 약물 ATC 코드" },
+        { field: "visit_history", type: "object[]", nullable: true, note: "외래/입원 코드" },
+        { field: "comorbidity_index", type: "number", nullable: true, note: "Charlson 동반질환 지수" },
+      ],
+      refreshCadence: "월 1회 배치",
+    },
+    qualityAudit: {
+      missingRate: 11.7,
+      driftSignals: [],
+      biasAlerts: [],
+      changeLog: [{ version: "v1.0", date: "2025-11-15", summary: "처방 데이터 연계 구축" }],
+    },
+  },
+  "in-mri": {
+    id: "in-mri",
+    definition: {
+      what: "구조적 MRI에서 추출한 해마 체적, 피질 두께, 뇌실 비율 등 정량 피처입니다.",
+      why: "3차 CNN 모델의 핵심 입력으로, 뇌 구조 변화를 정량화한 참고 데이터입니다.",
+      whereUsed: ["S3 Encoder 입력", "CNN Classifier 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "hippocampal_volume", type: "number", nullable: false, note: "해마 체적 (mm³)" },
+        { field: "cortical_thickness", type: "number[]", nullable: true, note: "ROI별 피질 두께" },
+        { field: "ventricular_ratio", type: "number", nullable: true, note: "뇌실 비율" },
+        { field: "scan_date", type: "date", nullable: false },
+      ],
+      refreshCadence: "검사 시점 1회",
+    },
+    qualityAudit: {
+      missingRate: 14.2,
+      driftSignals: [{ name: "스캐너 기종 차이", level: "mid", note: "3T/1.5T 혼재 시 체적 편차 ±3.1%" }],
+      biasAlerts: [],
+      changeLog: [{ version: "v1.0", date: "2025-12-01", summary: "FreeSurfer 파이프라인 적용" }],
+    },
+  },
+  "in-pet": {
+    id: "in-pet",
+    definition: {
+      what: "아밀로이드/타우 PET에서 추출한 SUVR, Centiloid 등 정량 피처입니다.",
+      why: "뇌 내 병리 단백질 축적 정도를 정량화하여 CNN 모델 입력으로 활용됩니다.",
+      whereUsed: ["S3 Encoder 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "amyloid_suvr", type: "number", nullable: true, note: "Aβ PET SUVR" },
+        { field: "centiloid", type: "number", nullable: true, note: "Centiloid 단위" },
+        { field: "tau_suvr", type: "number", nullable: true, note: "Tau PET SUVR" },
+        { field: "scan_date", type: "date", nullable: false },
+      ],
+      refreshCadence: "검사 시점 1회",
+    },
+    qualityAudit: {
+      missingRate: 31.4,
+      driftSignals: [{ name: "추적자 종류 차이", level: "mid", note: "Florbetaben vs Flutemetamol 혼재" }],
+      biasAlerts: [{ group: "농어촌 지역", level: "high", note: "PET 장비 접근성 낮음 — 미수집률 +18%p" }],
+      changeLog: [{ version: "v1.0", date: "2025-12-15", summary: "PET 정량 파이프라인 구축" }],
+    },
+  },
+  "in-imgderiv": {
+    id: "in-imgderiv",
+    definition: {
+      what: "MRI/PET 원시 피처에서 파생된 복합 지표(ROI 비율, 위축 지수 등)입니다.",
+      why: "단일 피처보다 높은 판별력을 가진 복합 지표를 생성하여 모델 정확도를 높입니다.",
+      whereUsed: ["S3 Encoder 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "atrophy_index", type: "number", nullable: true, note: "전체 뇌 위축 지수" },
+        { field: "roi_ratios", type: "number[]", nullable: true, note: "ROI 간 비율" },
+        { field: "asymmetry_score", type: "number", nullable: true, note: "좌우 비대칭 점수" },
+      ],
+      refreshCadence: "MRI/PET 수신 후 파생",
+    },
+    qualityAudit: {
+      missingRate: 16.8,
+      driftSignals: [],
+      biasAlerts: [],
+      changeLog: [{ version: "v1.0", date: "2026-01-05", summary: "파생 지표 파이프라인 구축" }],
     },
   },
   "in-followup": {
@@ -633,6 +937,34 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
       ],
     },
   },
+  "md-s2-ann": {
+    id: "md-s2-ann",
+    definition: {
+      what: "인지검사·바이오마커·설문 벡터를 입력받아 2차 분류 보조 신호를 산출하는 ANN 모델입니다.",
+      why: "기관 연계 결과 수신 전 분류 보조 신호를 제공하여, 기관 결과와의 일관성 검증에 참고합니다.",
+      whereUsed: ["S2 분류 보조 신호 생성", "Consistency Check 참고 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "s2_feature_vector", type: "number[64]", nullable: false, note: "S2 Vectorizer 출력" },
+      ],
+      outputs: [
+        { field: "s2_support_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "보조 분류 (참고)" },
+        { field: "s2_support_confidence", type: "number(0-1)", nullable: false, note: "분류 신뢰도" },
+        { field: "s2_reason_codes", type: "string[3-5]", nullable: false, note: "상위 기여 피처" },
+      ],
+      refreshCadence: "검사 접수 시점",
+    },
+    qualityAudit: {
+      missingRate: 0.5,
+      driftSignals: [{ name: "입력 피처 분포", level: "low", note: "PSI 0.04 (안정)" }],
+      biasAlerts: [{ group: "75세+ 연령대", level: "mid", note: "AD 보조 분류 비율 +5.4%p" }],
+      changeLog: [
+        { version: "v1.0", date: "2026-01-15", summary: "ANN Classifier 초기 배포" },
+      ],
+    },
+  },
   "md-s2-consist": {
     id: "md-s2-consist",
     definition: {
@@ -679,6 +1011,34 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
       changeLog: [
         { version: "v1.3", date: "2026-01-10", summary: "MCI 편입 기준 세분화" },
         { version: "v1.2", date: "2025-10-01", summary: "AD 전문 의료 연계 규칙 추가" },
+      ],
+    },
+  },
+  "md-s3-cnn": {
+    id: "md-s3-cnn",
+    definition: {
+      what: "MRI/PET 인코딩 텐서를 입력받아 3차 분류 보조 신호를 산출하는 CNN 모델입니다.",
+      why: "영상 기반 분류 보조 신호를 제공하여, 기관 결과 해석 시 참고 정보를 부여합니다.",
+      whereUsed: ["S3 분류 보조 신호 생성", "Post-Model Guardrails 입력"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "s3_tensor", type: "tensor[1,208]", nullable: false, note: "S3 Encoder 출력" },
+      ],
+      outputs: [
+        { field: "s3_support_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "보조 분류 (참고)" },
+        { field: "s3_support_confidence", type: "number(0-1)", nullable: false, note: "분류 신뢰도" },
+        { field: "s3_reason_codes", type: "string[3-5]", nullable: false, note: "상위 기여 영역" },
+      ],
+      refreshCadence: "영상 수신 시점",
+    },
+    qualityAudit: {
+      missingRate: 0.8,
+      driftSignals: [{ name: "텐서 분포 변화", level: "low", note: "KL divergence 0.02 (안정)" }],
+      biasAlerts: [{ group: "1.5T 스캐너", level: "mid", note: "3T 대비 신뢰도 -0.08 편차" }],
+      changeLog: [
+        { version: "v1.0", date: "2026-02-01", summary: "CNN Classifier 초기 배포" },
       ],
     },
   },
@@ -823,6 +1183,134 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
+  /* ─ Stage 2 Output Nodes ─ */
+  "out-s2-class": {
+    id: "out-s2-class",
+    definition: {
+      what: "ANN 모델의 2차 분류 보조 신호(AD/MCI/NORMAL)입니다. 기관 결과가 아닌 모델 참고 신호입니다.",
+      why: "기관 결과와의 일관성 검증(Consistency Check)의 비교 대상으로 활용됩니다.",
+      whereUsed: ["Consistency Check 입력", "S2 품질 모니터링"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "s2_support_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "모델 보조 분류 (참고)" }],
+      refreshCadence: "검사 접수 시점",
+    },
+    qualityAudit: { missingRate: 0.5, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "out-s2-conf": {
+    id: "out-s2-conf",
+    definition: {
+      what: "ANN 모델의 분류 신뢰도(0–1)입니다.",
+      why: "모델 보조 신호의 확신 정도를 수치화하여, 낮은 신뢰도 건은 추가 검토를 유도합니다.",
+      whereUsed: ["2차 검사 우선순위 참고", "품질 보고"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "s2_support_confidence", type: "number(0-1)", nullable: false }],
+      refreshCadence: "검사 접수 시점",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "out-s2-reason": {
+    id: "out-s2-reason",
+    definition: {
+      what: "ANN 모델의 상위 3–5개 기여 피처 코드입니다.",
+      why: "모델이 왜 해당 보조 분류를 산출했는지 근거를 제공합니다.",
+      whereUsed: ["Inspector 상세", "품질 감사"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "s2_reason_codes", type: "string[3-5]", nullable: false }],
+      refreshCadence: "검사 접수 시점",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  /* ─ Stage 3 Output Nodes ─ */
+  "out-s3-class": {
+    id: "out-s3-class",
+    definition: {
+      what: "CNN 모델의 3차 분류 보조 신호(AD/MCI/NORMAL)입니다. 기관 결과가 아닌 모델 참고 신호입니다.",
+      why: "정밀 검사 후 기관 결과와의 비교 참고 자료로 활용됩니다.",
+      whereUsed: ["3차 품질 모니터링", "Guardrails 검증"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "s3_support_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "모델 보조 분류 (참고)" }],
+      refreshCadence: "영상 수신 시점",
+    },
+    qualityAudit: { missingRate: 0.8, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "out-s3-conf": {
+    id: "out-s3-conf",
+    definition: {
+      what: "CNN 모델의 분류 신뢰도(0–1)입니다.",
+      why: "모델 보조 신호의 확신 정도를 수치화합니다.",
+      whereUsed: ["정밀검사 경로 추천 참고", "품질 보고"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "s3_support_confidence", type: "number(0-1)", nullable: false }],
+      refreshCadence: "영상 수신 시점",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "out-s3-reason": {
+    id: "out-s3-reason",
+    definition: {
+      what: "CNN 모델의 상위 3–5개 기여 영역 코드입니다.",
+      why: "모델이 왜 해당 보조 분류를 산출했는지 영상 ROI 근거를 제공합니다.",
+      whereUsed: ["Inspector 상세", "품질 감사"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "s3_reason_codes", type: "string[3-5]", nullable: false }],
+      refreshCadence: "영상 수신 시점",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  /* ─ Post-Model Guardrails ─ */
+  "md-guardrail": {
+    id: "md-guardrail",
+    definition: {
+      what: "S1/S2/S3 모델 출력에 대한 신뢰구간 검증, 이상치 탐지, 편향 보정을 수행하는 후처리 모듈입니다.",
+      why: "모델 출력이 통계적 이상 범위에 있거나 편향이 감지될 때 경고 플래그를 발행합니다.",
+      whereUsed: ["guardrail_flags 생성", "재검/추적 일정 재조정 트리거"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "risk_score", type: "number", nullable: true, note: "S1 출력" },
+        { field: "s2_support_class", type: "enum", nullable: true, note: "S2 출력" },
+        { field: "s3_support_class", type: "enum", nullable: true, note: "S3 출력" },
+      ],
+      outputs: [
+        { field: "guardrail_flags", type: "string[]", nullable: false, note: "보정/이상치 경고" },
+        { field: "confidence_adjusted", type: "boolean", nullable: false },
+      ],
+      refreshCadence: "모델 출력 생성 시점",
+    },
+    qualityAudit: {
+      missingRate: 0,
+      driftSignals: [{ name: "플래그 발행률", level: "low", note: "2.1% (정상 범위)" }],
+      biasAlerts: [],
+      changeLog: [{ version: "v1.0", date: "2026-02-01", summary: "Guardrails 초기 배포" }],
+    },
+  },
+  "out-guardrail": {
+    id: "out-guardrail",
+    definition: {
+      what: "Post-Model Guardrails에서 발행한 보정/이상치 경고 플래그입니다.",
+      why: "모델 출력의 신뢰성 문제를 운영자에게 알려 추가 검토를 유도합니다.",
+      whereUsed: ["재검/추적 일정 재조정", "품질 대시보드"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "guardrail_flags", type: "string[]", nullable: false, note: "보정/이상치 경고" }],
+      refreshCadence: "모델 출력 생성 시점",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
   /* ─ Ops Nodes ─ */
   "ops-case": {
     id: "ops-case",
@@ -877,6 +1365,48 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     dataContract: {
       inputs: [{ field: "followup_priority", type: "enum(High|Med|Low)", nullable: false }],
       refreshCadence: "주 1회",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "ops-s2-prio": {
+    id: "ops-s2-prio",
+    definition: {
+      what: "모델 보조 신뢰도를 참고하여 2차 검사 우선순위를 조정하는 운영 프로세스입니다.",
+      why: "제한된 2차 검사 슬롯을 모델 보조 신호 기반으로 효율 배분합니다.",
+      whereUsed: ["2차 검사 예약 대기열 조정"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [{ field: "s2_support_confidence", type: "number(0-1)", nullable: false }],
+      refreshCadence: "실시간",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "ops-s3-route": {
+    id: "ops-s3-route",
+    definition: {
+      what: "3차 정밀검사 대상자의 검사 경로(PET/MRI/기타)를 추천하는 운영 프로세스입니다.",
+      why: "CNN 모델 보조 신뢰도와 가용 장비를 참고하여 검사 경로를 제안합니다.",
+      whereUsed: ["3차 정밀검사 경로 배정"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [{ field: "s3_support_confidence", type: "number(0-1)", nullable: false }],
+      refreshCadence: "실시간",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "ops-s3-resched": {
+    id: "ops-s3-resched",
+    definition: {
+      what: "Guardrails 플래그에 따라 재검·추적 일정을 재조정하는 운영 프로세스입니다.",
+      why: "모델 신뢰성 이슈 발생 시 추가 검토 또는 재검을 스케줄링합니다.",
+      whereUsed: ["재검 일정 관리", "추적 스케줄 재배정"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [{ field: "guardrail_flags", type: "string[]", nullable: false }],
+      refreshCadence: "플래그 발행 시점",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },

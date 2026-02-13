@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { useResizeObserver } from './useResizeObserver';
 import { RegionStat } from './geoStats';
+import { normalizeRegionCode } from '../../lib/regionKey';
 
 export type Level = 'ctprvn' | 'sig' | 'emd';
 
@@ -21,8 +22,16 @@ export type KoreaDrilldownMapProps = {
 const MIN_SIZE = 50;
 
 function getFeatureCode(feature: any): string {
-  return String(
+  return normalizeRegionCode(
     feature?.properties?.code ??
+      feature?.properties?.adm_cd ??
+      feature?.properties?.ADM_CD ??
+      feature?.properties?.sggnm_cd ??
+      feature?.properties?.SGGNM_CD ??
+      feature?.properties?.sigungu_cd ??
+      feature?.properties?.SIGUNGU_CD ??
+      feature?.properties?.emd_cd ??
+      feature?.properties?.EMD_CD ??
       feature?.properties?.CTPRVN_CD ??
       feature?.properties?.SIG_CD ??
       feature?.properties?.EMD_CD ??
@@ -59,6 +68,10 @@ export function KoreaDrilldownMap({
   const gRef = useRef<SVGGElement | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [zoomState, setZoomState] = useState(d3.zoomIdentity);
+  const TOOLTIP_OFFSET = 12;
+  const TOOLTIP_MARGIN = 8;
+  const TOOLTIP_ESTIMATED_WIDTH = 260;
+  const TOOLTIP_ESTIMATED_HEIGHT = 140;
 
   const statsMap = useMemo(() => new Map(stats.map((s) => [s.code, s.value])), [stats]);
 
@@ -186,9 +199,21 @@ export function KoreaDrilldownMap({
                     ...(isHovered ? { filter: 'drop-shadow(0 3px 6px rgba(15, 23, 42, 0.35))' } : {}),
                   }}
                   onMouseMove={(event) => {
+                    const containerRect = ref.current?.getBoundingClientRect();
+                    if (!containerRect) return;
+                    const rawX = event.clientX - containerRect.left + TOOLTIP_OFFSET;
+                    const rawY = event.clientY - containerRect.top + TOOLTIP_OFFSET;
+                    const x = Math.min(
+                      Math.max(TOOLTIP_MARGIN, rawX),
+                      Math.max(TOOLTIP_MARGIN, width - TOOLTIP_ESTIMATED_WIDTH - TOOLTIP_MARGIN),
+                    );
+                    const y = Math.min(
+                      Math.max(TOOLTIP_MARGIN, rawY),
+                      Math.max(TOOLTIP_MARGIN, height - TOOLTIP_ESTIMATED_HEIGHT - TOOLTIP_MARGIN),
+                    );
                     setTooltip({
-                      x: event.clientX + 12,
-                      y: event.clientY + 12,
+                      x,
+                      y,
                       name: getFeatureName(feature),
                       value,
                       code
@@ -223,7 +248,7 @@ export function KoreaDrilldownMap({
 
       {tooltip && (
         <div
-          className="fixed z-[9999] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-2xl"
+          className="pointer-events-none absolute z-[80] max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-2xl"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
           <div className="text-sm font-semibold mb-1">{tooltip.name}</div>

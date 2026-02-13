@@ -1,17 +1,20 @@
-import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useRef, useEffect, startTransition } from 'react';
 import {
   Download,
   HelpCircle,
   ChevronLeft,
-  Home,
   AlertTriangle,
   BarChart3,
   Shield,
   Database,
   Phone,
+  Brain,
+  Clock3,
+  TrendingUp,
   ChevronDown,
   ChevronUp,
   ChevronRight,
+  MoreHorizontal,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -21,6 +24,7 @@ import { GeoMapPanel, type MapColorScheme } from '../geomap/GeoMapPanel';
 import { COLOR_PALETTES } from '../../lib/choroplethScale';
 import type { RegionalScope } from '../geomap/regions';
 import { safeOpsText } from '../../lib/uiTextGuard';
+import { SIGUNGU_OPTIONS } from '../../mocks/mockGeo';
 import {
   OPS_TABLE_COLUMNS,
   loadRegionalSettings,
@@ -39,6 +43,17 @@ import {
   type DrillViewMode,
 } from '../../hooks/useDrillNav';
 import {
+  type ScopeDrillNode,
+} from '../../selectors/scopeSelectors';
+import { getChildrenScope } from '../../lib/dashboardChildrenScope';
+import type { DrillLevel as DashboardDrillLevel } from '../../lib/kpi.types';
+import {
+  makeRegionId,
+  normalizeRegionCode,
+  parseRegionIdCode,
+  type AdminLevel,
+} from '../../lib/regionKey';
+import {
   ChartCard,
   ChartSkeleton,
   DeltaScatterOrBar,
@@ -47,6 +62,17 @@ import {
   StageContribution,
   TopNHorizontalBar,
 } from '../chart-kit/ChartKit';
+import type {
+  AdTransitionSignal,
+  AlertSummary,
+  DifferentialDelay,
+  MapLayer,
+  OperationalTopItem,
+  RegionalKpiBlock,
+  StageConversionRate,
+  WorkQueueItem,
+  WorkStatus,
+} from './opsContracts';
 
 type AnalyticsPeriod = 'week' | 'month' | 'quarter';
 type RangePreset = '24h' | '7d' | '30d' | '90d';
@@ -75,12 +101,22 @@ type StageImpact = {
 
 type AlertLevel = 'normal' | 'attention' | 'warning';
 type RightEvidenceTab = 'drivers' | 'data' | 'trend';
+type LoadingPhase = 'Initial' | 'RegionChange' | 'PartialData' | 'Empty' | 'Error' | 'Ready';
+
+type RegionalTaskType = WorkQueueItem['taskType'];
 
 type DistrictOpsData = {
+  regionId: string;
   name: string;
   volume: number;
   kpi: Record<RegionalKpiKey, number>;
   mapMetric: Record<RegionalKpiKey, number>;
+  adTransitionSignal: AdTransitionSignal;
+  differentialDelay: DifferentialDelay;
+  stageConversionRate: StageConversionRate;
+  adTransitionDrivers: NamedValue[];
+  dxDelayDrivers: NamedValue[];
+  screenToDxDrivers: NamedValue[];
   policyImpactLocal: number;
   slaStageContribution: NamedValue[];
   queueTypeBacklog: NamedValue[];
@@ -93,6 +129,64 @@ type DistrictOpsData = {
   governanceMissingTypes: NamedValue[];
   governanceActionStatus: GovernanceStatus[];
   stageImpact: StageImpact;
+};
+
+type MapChildRegion = {
+  code: string;
+  name: string;
+  regionId: string;
+  regionKey: {
+    level: AdminLevel;
+    code: string;
+    name: string;
+  };
+};
+
+const MAP_LAYER_BY_KPI: Record<RegionalKpiKey, MapLayer> = {
+  regionalSla: 'LOAD',
+  regionalQueueRisk: 'BOTTLENECK',
+  regionalRecontact: 'BOTTLENECK',
+  regionalDataReadiness: 'LOAD',
+  regionalGovernance: 'LOAD',
+  regionalAdTransitionHotspot: 'RISK',
+  regionalDxDelayHotspot: 'BOTTLENECK',
+  regionalScreenToDxRate: 'GAP',
+};
+
+const PRIMARY_KPI_BY_LAYER: Record<MapLayer, RegionalKpiKey> = {
+  RISK: 'regionalAdTransitionHotspot',
+  BOTTLENECK: 'regionalDxDelayHotspot',
+  GAP: 'regionalScreenToDxRate',
+  LOAD: 'regionalQueueRisk',
+};
+
+const ISSUE_BY_KPI: Record<RegionalKpiKey, OperationalTopItem['issueType']> = {
+  regionalSla: 'SLA',
+  regionalQueueRisk: 'QUEUE',
+  regionalRecontact: 'QUEUE',
+  regionalDataReadiness: 'DATA_GAP',
+  regionalGovernance: 'LOAD',
+  regionalAdTransitionHotspot: 'CONVERSION_GAP',
+  regionalDxDelayHotspot: 'EXAM_DELAY',
+  regionalScreenToDxRate: 'CONVERSION_GAP',
+};
+
+const TASK_BY_ISSUE: Record<OperationalTopItem['issueType'], RegionalTaskType> = {
+  SLA: 'STAFF_SUPPORT',
+  EXAM_DELAY: 'EXAM_SLOT',
+  QUEUE: 'FOLLOWUP',
+  CONVERSION_GAP: 'HOSPITAL_LINK',
+  LOAD: 'STAFF_SUPPORT',
+  DATA_GAP: 'DATA_FIX',
+};
+
+const ACTION_LABEL_BY_ISSUE: Record<OperationalTopItem['issueType'], string> = {
+  SLA: '배치 조정',
+  EXAM_DELAY: '연계 요청',
+  QUEUE: '작업 큐에 추가',
+  CONVERSION_GAP: '작업 큐에 추가',
+  LOAD: '배치 조정',
+  DATA_GAP: '작업 큐에 추가',
 };
 
 interface RegionalDashboardProps {
@@ -205,6 +299,9 @@ const KPI_RANGE: Record<RegionalKpiKey, [number, number]> = {
   regionalRecontact: [3, 21],
   regionalDataReadiness: [4, 24],
   regionalGovernance: [22, 78],
+  regionalAdTransitionHotspot: [18, 92],
+  regionalDxDelayHotspot: [8, 68],
+  regionalScreenToDxRate: [34, 91],
 };
 
 const KPI_ICON: Record<RegionalKpiKey, React.ReactNode> = {
@@ -213,7 +310,14 @@ const KPI_ICON: Record<RegionalKpiKey, React.ReactNode> = {
   regionalRecontact: <Phone className="h-4 w-4" />,
   regionalDataReadiness: <Database className="h-4 w-4" />,
   regionalGovernance: <Shield className="h-4 w-4" />,
+  regionalAdTransitionHotspot: <Brain className="h-4 w-4" />,
+  regionalDxDelayHotspot: <Clock3 className="h-4 w-4" />,
+  regionalScreenToDxRate: <TrendingUp className="h-4 w-4" />,
 };
+
+const AD_TOP5_WEIGHTS = { density: 0.45, transition: 0.35, delta: 0.20 } as const;
+const DX_DELAY_TOP5_WEIGHTS = { wait: 0.45, delayed: 0.30, backlog: 0.25 } as const;
+const SCREEN_TO_DX_TOP5_WEIGHTS = { gapRate: 0.45, deltaGap: 0.35, support: 0.20 } as const;
 
 const DISTRICT_MAP: Record<string, string[]> = {
   seoul: ['강남구', '서초구', '송파구', '강동구', '마포구', '영등포구', '용산구', '종로구', '중구', '성동구', '광진구', '동대문구', '중랑구', '성북구', '강북구', '도봉구', '노원구', '은평구', '서대문구', '양천구', '구로구', '금천구', '동작구', '관악구', '강서구'],
@@ -237,10 +341,24 @@ const DISTRICT_MAP: Record<string, string[]> = {
 
 const RECONTACT_TIME_SLOTS = ['08-10', '10-12', '12-14', '14-16', '16-18', '18-20'];
 
+function normalizeRegionLabel(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[()]/g, '');
+}
+
+function getChildAdminLevel(level: 'REGION' | 'SIGUNGU' | 'EUPMYEONDONG'): AdminLevel {
+  if (level === 'REGION') return 'SIGUNGU';
+  if (level === 'SIGUNGU') return 'EUPMYEONDONG';
+  return 'EUPMYEONDONG';
+}
+
 function formatKpiValue(key: RegionalKpiKey, value: number): string {
   const cfg = REGIONAL_DASHBOARD_KPI_MAP[key];
   if (cfg.unit === '건') return `${Math.round(value).toLocaleString()}건`;
   if (cfg.unit === '점') return `${Math.round(value)}점`;
+  if (cfg.unit === '일') return `${Math.round(value)}일`;
   return `${value.toFixed(1)}%`;
 }
 
@@ -256,11 +374,18 @@ function mergeNamed(values: NamedValue[][]): NamedValue[] {
     .sort((a, b) => b.value - a.value);
 }
 
+function normalizeValue(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value) || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) return 0.5;
+  const ratio = (value - min) / (max - min);
+  return Math.max(0, Math.min(1, ratio));
+}
+
 function buildDistrictData(
   name: string,
   scopeKey: string,
   period: AnalyticsPeriod,
   rangePreset: RangePreset,
+  regionId?: string,
 ): DistrictOpsData {
   const seed = `${scopeKey}-${period}-${name}`;
   const periodMul = PERIOD_MUL[period];
@@ -304,6 +429,54 @@ function buildDistrictData(
       ),
     ).toFixed(1),
   );
+  const adDensityScore = Number(
+    Math.max(
+      KPI_RANGE.regionalAdTransitionHotspot[0],
+      Math.min(
+        KPI_RANGE.regionalAdTransitionHotspot[1],
+        sv(
+          `${seed}-ad-density`,
+          KPI_RANGE.regionalAdTransitionHotspot[0],
+          KPI_RANGE.regionalAdTransitionHotspot[1],
+        ) + rateBias * 3,
+      ),
+    ).toFixed(1),
+  );
+  const adHighRiskCount = Math.round(sv(`${seed}-ad-highrisk`, 28, 240) * countMul);
+  const adTransition30d = Math.round(sv(`${seed}-ad-tr30`, 8, 88) * countMul);
+  const adTransition90d = Math.round(sv(`${seed}-ad-tr90`, 22, 210) * countMul);
+
+  const dxAvgWaitDays = Number(
+    Math.max(
+      KPI_RANGE.regionalDxDelayHotspot[0],
+      Math.min(
+        KPI_RANGE.regionalDxDelayHotspot[1],
+        sv(
+          `${seed}-dx-wait`,
+          KPI_RANGE.regionalDxDelayHotspot[0],
+          KPI_RANGE.regionalDxDelayHotspot[1],
+        ) + rateBias * 2.5,
+      ),
+    ).toFixed(1),
+  );
+  const dxDelayedRatio = Number(Math.max(0.04, Math.min(0.42, sv(`${seed}-dx-delayed-ratio`, 0.08, 0.36) + rateBias * 0.01)).toFixed(3));
+  const dxBacklogCount = Math.round(sv(`${seed}-dx-backlog`, 20, 210) * queueMul);
+
+  const screenToDxRate = Number(
+    Math.max(
+      KPI_RANGE.regionalScreenToDxRate[0],
+      Math.min(
+        KPI_RANGE.regionalScreenToDxRate[1],
+        sv(
+          `${seed}-screen-dx-rate`,
+          KPI_RANGE.regionalScreenToDxRate[0],
+          KPI_RANGE.regionalScreenToDxRate[1],
+        ) - rateBias,
+      ),
+    ).toFixed(1),
+  );
+  const screenToDxRecontactSupport = Number(sv(`${seed}-screen-dx-recontact`, 6, 24).toFixed(1));
+  const screenToDxDelaySupport = Number(sv(`${seed}-screen-dx-delay`, 8, 46).toFixed(1));
 
   const stageRaw = {
     접촉: sv(`${seed}-sla-contact`, 12, 34),
@@ -376,6 +549,24 @@ function buildDistrictData(
     { status: '완료', value: Math.round(sv(`${seed}-gact-done`, 4, 30) * queueMul) },
   ];
 
+  const adTransitionDrivers = [
+    { name: '고위험 밀집', value: adHighRiskCount },
+    { name: '최근 30일 전환 신호', value: adTransition30d },
+    { name: '평균 대비 위험 편차', value: Number((adDensityScore - 45).toFixed(1)) },
+  ];
+
+  const dxDelayDrivers = [
+    { name: '평균 대기일', value: dxAvgWaitDays },
+    { name: '지연 비율', value: Number((dxDelayedRatio * 100).toFixed(1)) },
+    { name: '대기 인원', value: dxBacklogCount },
+  ];
+
+  const screenToDxDrivers = [
+    { name: '전환율 역격차', value: Number((100 - screenToDxRate).toFixed(1)) },
+    { name: '재접촉 보조율', value: screenToDxRecontactSupport },
+    { name: '지연 보조지표', value: screenToDxDelaySupport },
+  ];
+
   const stageImpact: StageImpact = {
     stage1SignalDelta: Number(sv(`${seed}-s1-signal`, -18, 24).toFixed(1)),
     stage1QueueDelta: Math.round(sv(`${seed}-s1-queue`, -14, 36) * queueMul),
@@ -386,6 +577,7 @@ function buildDistrictData(
   };
 
   return {
+    regionId: regionId ?? name,
     name,
     volume,
     kpi: {
@@ -394,6 +586,9 @@ function buildDistrictData(
       regionalRecontact: slaRiskRate,
       regionalDataReadiness: recontactNeedRate,
       regionalGovernance: centerRiskScore,
+      regionalAdTransitionHotspot: adDensityScore,
+      regionalDxDelayHotspot: dxAvgWaitDays,
+      regionalScreenToDxRate: screenToDxRate,
     },
     mapMetric: {
       regionalSla: inflowCount,
@@ -401,7 +596,36 @@ function buildDistrictData(
       regionalRecontact: slaRiskRate,
       regionalDataReadiness: recontactNeedRate,
       regionalGovernance: centerRiskScore,
+      regionalAdTransitionHotspot: adDensityScore,
+      regionalDxDelayHotspot: dxAvgWaitDays,
+      regionalScreenToDxRate: screenToDxRate,
     },
+    adTransitionSignal: {
+      regionId: `${scopeKey}-${name}`,
+      regionName: name,
+      highRiskCount: adHighRiskCount,
+      transition30d: adTransition30d,
+      transition90d: adTransition90d,
+      densityScore: adDensityScore,
+      deltaFromAvg: Number((adDensityScore - 45).toFixed(1)),
+    },
+    differentialDelay: {
+      regionId: `${scopeKey}-${name}`,
+      regionName: name,
+      avgWaitDays: dxAvgWaitDays,
+      delayedRatio: dxDelayedRatio,
+      backlogCount: dxBacklogCount,
+      deltaFromAvg: Number((dxAvgWaitDays - 24).toFixed(1)),
+    },
+    stageConversionRate: {
+      regionId: `${scopeKey}-${name}`,
+      regionName: name,
+      conversionRate: Number((screenToDxRate / 100).toFixed(3)),
+      deltaFromRegional: Number((screenToDxRate - 64).toFixed(1)),
+    },
+    adTransitionDrivers,
+    dxDelayDrivers,
+    screenToDxDrivers,
     policyImpactLocal: Number(sv(`${seed}-policy-impact`, 42, 88).toFixed(1)),
     slaStageContribution,
     queueTypeBacklog,
@@ -419,7 +643,7 @@ function buildDistrictData(
 
 function aggregateDistrictData(rows: DistrictOpsData[]): DistrictOpsData {
   if (!rows.length) {
-    return buildDistrictData('기준없음', 'empty', 'week', '7d');
+    return buildDistrictData('기준없음', 'empty', 'week', '7d', 'empty');
   }
 
   const totalVolume = rows.reduce((sum, row) => sum + row.volume, 0);
@@ -466,7 +690,18 @@ function aggregateDistrictData(rows: DistrictOpsData[]): DistrictOpsData {
     stage3QueueDelta: Math.round(rows.reduce((sum, row) => sum + row.stageImpact.stage3QueueDelta * weightOf(row), 0)),
   };
 
+  const adSignalAvg = Number(
+    rows.reduce((sum, row) => sum + row.adTransitionSignal.densityScore * weightOf(row), 0).toFixed(1),
+  );
+  const dxDelayAvg = Number(
+    rows.reduce((sum, row) => sum + row.differentialDelay.avgWaitDays * weightOf(row), 0).toFixed(1),
+  );
+  const screenToDxAvg = Number(
+    rows.reduce((sum, row) => sum + row.stageConversionRate.conversionRate * weightOf(row), 0).toFixed(3),
+  );
+
   return {
+    regionId: 'regional-avg',
     name: '광역 평균',
     volume: totalVolume,
     kpi: {
@@ -475,6 +710,9 @@ function aggregateDistrictData(rows: DistrictOpsData[]): DistrictOpsData {
       regionalRecontact: weightedKpi('regionalRecontact'),
       regionalDataReadiness: weightedKpi('regionalDataReadiness'),
       regionalGovernance: weightedKpi('regionalGovernance'),
+      regionalAdTransitionHotspot: weightedKpi('regionalAdTransitionHotspot'),
+      regionalDxDelayHotspot: weightedKpi('regionalDxDelayHotspot'),
+      regionalScreenToDxRate: weightedKpi('regionalScreenToDxRate'),
     },
     mapMetric: {
       regionalSla: weightedMap('regionalSla'),
@@ -482,7 +720,38 @@ function aggregateDistrictData(rows: DistrictOpsData[]): DistrictOpsData {
       regionalRecontact: weightedMap('regionalRecontact'),
       regionalDataReadiness: weightedMap('regionalDataReadiness'),
       regionalGovernance: weightedMap('regionalGovernance'),
+      regionalAdTransitionHotspot: weightedMap('regionalAdTransitionHotspot'),
+      regionalDxDelayHotspot: weightedMap('regionalDxDelayHotspot'),
+      regionalScreenToDxRate: weightedMap('regionalScreenToDxRate'),
     },
+    adTransitionSignal: {
+      regionId: 'regional-avg',
+      regionName: '광역 평균',
+      highRiskCount: Math.round(rows.reduce((sum, row) => sum + row.adTransitionSignal.highRiskCount, 0)),
+      transition30d: Math.round(rows.reduce((sum, row) => sum + row.adTransitionSignal.transition30d, 0)),
+      transition90d: Math.round(rows.reduce((sum, row) => sum + (row.adTransitionSignal.transition90d ?? 0), 0)),
+      densityScore: adSignalAvg,
+      deltaFromAvg: 0,
+    },
+    differentialDelay: {
+      regionId: 'regional-avg',
+      regionName: '광역 평균',
+      avgWaitDays: dxDelayAvg,
+      delayedRatio: Number(rows.reduce((sum, row) => sum + row.differentialDelay.delayedRatio * weightOf(row), 0).toFixed(3)),
+      backlogCount: Math.round(rows.reduce((sum, row) => sum + row.differentialDelay.backlogCount, 0)),
+      deltaFromAvg: 0,
+    },
+    stageConversionRate: {
+      regionId: 'regional-avg',
+      regionName: '광역 평균',
+      conversionRate: screenToDxAvg,
+      bestRate: Number(Math.max(...rows.map((row) => row.stageConversionRate.conversionRate)).toFixed(3)),
+      worstRate: Number(Math.min(...rows.map((row) => row.stageConversionRate.conversionRate)).toFixed(3)),
+      deltaFromRegional: 0,
+    },
+    adTransitionDrivers: mergeNamed(rows.map((row) => row.adTransitionDrivers)),
+    dxDelayDrivers: mergeNamed(rows.map((row) => row.dxDelayDrivers)),
+    screenToDxDrivers: mergeNamed(rows.map((row) => row.screenToDxDrivers)),
     policyImpactLocal: Number(rows.reduce((sum, row) => sum + row.policyImpactLocal * weightOf(row), 0).toFixed(1)),
     slaStageContribution: mergeNamed(rows.map((row) => row.slaStageContribution)),
     queueTypeBacklog: mergeNamed(rows.map((row) => row.queueTypeBacklog)),
@@ -503,10 +772,17 @@ function determineDirection(kpiKey: RegionalKpiKey): 'higherWorse' | 'higherBett
   return REGIONAL_DASHBOARD_KPI_MAP[kpiKey]?.direction ?? 'higherWorse';
 }
 
+function toDashboardDrillLevel(level: ScopeDrillNode['level']): DashboardDrillLevel {
+  if (level === 'REGION') return 'sido';
+  if (level === 'SIGUNGU') return 'sigungu';
+  return 'center';
+}
+
 function formatDeltaValue(kpiKey: RegionalKpiKey, delta: number): string {
   const cfg = REGIONAL_DASHBOARD_KPI_MAP[kpiKey];
   if (cfg?.unit === '건') return `${delta > 0 ? '+' : ''}${Math.round(delta)}건`;
   if (cfg?.unit === '점') return `${delta > 0 ? '+' : ''}${Math.round(delta)}점`;
+  if (cfg?.unit === '일') return `${delta > 0 ? '+' : ''}${Math.round(delta)}일`;
   return `${delta > 0 ? '+' : ''}${delta.toFixed(1)}%p`;
 }
 
@@ -544,17 +820,54 @@ export function RegionalDashboard({
   const [visualizationMode, setVisualizationMode] = useState<DrillViewMode>('geomap');
   const [containerRef, containerSize] = useResizeObserver<HTMLDivElement>();
   const [selectedDistrictNameState, setSelectedDistrictNameState] = useState<string | null>(null);
+  const [selectedRegionIdState, setSelectedRegionIdState] = useState<string | null>(null);
   const [tooltipTarget, setTooltipTarget] = useState<string | null>(null);
   const [mapDrillLevel, setMapDrillLevel] = useState<'ctprvn' | 'sig' | 'emd' | undefined>(undefined);
   const [mapDrillCode, setMapDrillCode] = useState<string | undefined>(undefined);
-  const [sigunguRegions, setSigunguRegions] = useState<Array<{ code: string; name: string }>>([]);
+  const [mapSubRegionsByScope, setMapSubRegionsByScope] = useState<Record<string, MapChildRegion[]>>({});
   const [stageImpactOpen, setStageImpactOpen] = useState(false);
   const [showLeftDetails, setShowLeftDetails] = useState(false);
   const [showBottomTable, setShowBottomTable] = useState(false);
   const [selectedCauseName, setSelectedCauseName] = useState<string | null>(null);
   const [rightEvidenceTab, setRightEvidenceTab] = useState<RightEvidenceTab>('drivers');
-  const [isVizLoading, setIsVizLoading] = useState(false);
+  const [top5MenuRegionId, setTop5MenuRegionId] = useState<string | null>(null);
   const [showExtendedTopN, setShowExtendedTopN] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>('Initial');
+  const [workQueue, setWorkQueue] = useState<WorkQueueItem[]>(() => [
+    {
+      id: 'rq-1',
+      priority: 1,
+      regionName: '영등포구',
+      taskType: 'EXAM_SLOT',
+      status: 'IN_PROGRESS',
+      assignee: '광역 운영 A',
+      dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    },
+    {
+      id: 'rq-2',
+      priority: 2,
+      regionName: '동작구',
+      taskType: 'STAFF_SUPPORT',
+      status: 'TODO',
+      assignee: '광역 운영 B',
+      dueAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+      createdAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
+    },
+  ]);
+  const lastFilterSignatureRef = useRef<string>('');
+  const filterSyncTimerRef = useRef<number | null>(null);
+  const lastLoadingTransitionRef = useRef<string>('');
+  const prevSelectedRegionSggPropRef = useRef<string | null | undefined>(undefined);
+  const selectedRegionSggPropRef = useRef<string | null | undefined>(selectedRegionSggProp);
+  const onSelectedRegionSggChangeRef = useRef(onSelectedRegionSggChange);
+  const subRegionSignatureByScopeRef = useRef<Record<string, string>>({});
+  const isVizLoading = loadingPhase === 'RegionChange';
+
+  useEffect(() => {
+    selectedRegionSggPropRef.current = selectedRegionSggProp;
+    onSelectedRegionSggChangeRef.current = onSelectedRegionSggChange;
+  }, [onSelectedRegionSggChange, selectedRegionSggProp]);
 
   const settings = useMemo(() => loadRegionalSettings(region.id), [region.id]);
 
@@ -563,7 +876,7 @@ export function RegionalDashboard({
     analyticsPeriod === 'month' ? '30d' : analyticsPeriod === 'quarter' ? '90d' : rangePresetState;
   const selectedKpiKey = selectedKpiKeyProp ?? selectedKpiKeyState;
   const selectedDistrictName = selectedRegionSggProp ?? selectedDistrictNameState;
-
+  const selectedRegionId = selectedRegionIdState;
   const drillNav = useDrillNav({
     root: {
       level: 'REGION',
@@ -586,6 +899,49 @@ export function RegionalDashboard({
     reset: resetDrill,
     syncFilters: syncDrillFilters,
   } = drillNav;
+  const scopePathKey = useMemo(
+    () => drillStack.map((item) => `${item.level}:${item.id}`).join('>'),
+    [drillStack],
+  );
+  const mapSubRegions = useMemo(() => {
+    const direct = mapSubRegionsByScope[scopePathKey];
+    const fallback = !direct?.length
+      ? Object.entries(mapSubRegionsByScope)
+          .filter(([key, regions]) => regions.length > 0 && scopePathKey.startsWith(key))
+          .sort((a, b) => b[0].length - a[0].length)[0]?.[1]
+      : undefined;
+    const source = direct?.length ? direct : fallback ?? [];
+    if (!source.length) return [] as MapChildRegion[];
+
+    const deduped = new Map<string, MapChildRegion>();
+    source.forEach((item) => {
+      const code =
+        normalizeRegionCode(item.code) ||
+        normalizeRegionCode(parseRegionIdCode(item.regionId));
+      const name = String(item.name ?? '').trim();
+      if (!code || !name) return;
+      if (deduped.has(code)) return;
+      deduped.set(code, {
+        ...item,
+        code,
+        name,
+        regionKey: {
+          ...item.regionKey,
+          code,
+          name,
+        },
+        regionId:
+          item.regionId ||
+          makeRegionId({
+            level: item.regionKey.level,
+            code,
+            name,
+          }),
+      });
+    });
+
+    return [...deduped.values()];
+  }, [mapSubRegionsByScope, scopePathKey]);
 
   const updateSelectedKpiKey = useCallback(
     (next: RegionalKpiKey) => {
@@ -611,21 +967,27 @@ export function RegionalDashboard({
     [updateSelectedRange],
   );
 
-  const updateSelectedDistrict = useCallback(
-    (next: string | null) => {
-      if (selectedRegionSggProp == null) setSelectedDistrictNameState(next);
-      onSelectedRegionSggChange?.(next);
-    },
-    [onSelectedRegionSggChange, selectedRegionSggProp],
-  );
+  const updateSelectedDistrict = useCallback((next: string | null) => {
+    setSelectedDistrictNameState((prev) => (prev === next ? prev : next));
+    const currentExternal = selectedRegionSggPropRef.current ?? null;
+    if (currentExternal === next) return;
+    onSelectedRegionSggChangeRef.current?.(next);
+  }, []);
+
+  const updateSelectedRegionId = useCallback((next: string | null) => {
+    setSelectedRegionIdState(next);
+  }, []);
 
   useEffect(() => {
-    updateSelectedDistrict(null);
+    setSelectedDistrictNameState(null);
+    updateSelectedRegionId(null);
     setMapDrillLevel(undefined);
     setMapDrillCode(undefined);
+    setMapSubRegionsByScope({});
+    subRegionSignatureByScopeRef.current = {};
     setStageImpactOpen(false);
     setRightEvidenceTab('drivers');
-  }, [region.id, updateSelectedDistrict]);
+  }, [region.id, updateSelectedRegionId]);
 
   useEffect(() => {
     if (analyticsPeriod === 'month' && rangePresetState !== '30d') setRangePresetState('30d');
@@ -639,24 +1001,32 @@ export function RegionalDashboard({
   useEffect(() => {
     setRightEvidenceTab('drivers');
     setShowExtendedTopN(false);
+    setTop5MenuRegionId(null);
   }, [selectedDistrictName, selectedKpiKey]);
 
   useEffect(() => {
-    syncDrillFilters(
-      {
-        kpi: selectedKpiKey,
-        range: rangePreset,
-        view: visualizationMode,
-      },
-      'replace',
-    );
-  }, [rangePreset, selectedKpiKey, syncDrillFilters, visualizationMode]);
+    const signature = `${selectedKpiKey}|${rangePreset}|${visualizationMode}`;
+    if (signature === lastFilterSignatureRef.current) return;
 
-  useEffect(() => {
-    setIsVizLoading(true);
-    const timer = window.setTimeout(() => setIsVizLoading(false), 180);
-    return () => window.clearTimeout(timer);
-  }, [rangePreset, selectedKpiKey, selectedDistrictName, visualizationMode]);
+    if (filterSyncTimerRef.current) {
+      window.clearTimeout(filterSyncTimerRef.current);
+    }
+    filterSyncTimerRef.current = window.setTimeout(() => {
+      syncDrillFilters(
+        {
+          kpi: selectedKpiKey,
+          range: rangePreset,
+          view: visualizationMode,
+        },
+        'replace',
+      );
+      lastFilterSignatureRef.current = signature;
+    }, 180);
+
+    return () => {
+      if (filterSyncTimerRef.current) window.clearTimeout(filterSyncTimerRef.current);
+    };
+  }, [rangePreset, selectedKpiKey, syncDrillFilters, visualizationMode]);
 
   useEffect(() => {
     if (drillCurrent.filters.view === visualizationMode) return;
@@ -677,20 +1047,66 @@ export function RegionalDashboard({
   }, [containerSize.height, layoutMode]);
 
   const districts = useMemo(() => DISTRICT_MAP[region.id] ?? DISTRICT_MAP.seoul, [region.id]);
-  const districtNameSet = useMemo(() => new Set(districts), [districts]);
+  const normalizedDistrictMap = useMemo(() => {
+    const map = new Map<string, string>();
+    districts.forEach((name) => map.set(normalizeRegionLabel(name), name));
+    return map;
+  }, [districts]);
+  const sigunguRegions = useMemo(
+    () => mapSubRegions.filter((regionInfo) => regionInfo.regionKey.level === 'SIGUNGU'),
+    [mapSubRegions],
+  );
+  const sigunguByNormalizedName = useMemo(() => {
+    const map = new Map<string, { code: string; name: string }>();
+    sigunguRegions.forEach((item) => map.set(normalizeRegionLabel(item.name), item));
+    return map;
+  }, [sigunguRegions]);
+  const districtRegionEntries = useMemo(
+    () =>
+      districts.map((name) => {
+        const normalized = normalizeRegionLabel(name);
+        const mapped = sigunguByNormalizedName.get(normalized);
+        return {
+          name,
+          code: mapped?.code ?? '',
+        };
+      }).filter((entry) => entry.code),
+    [districts, sigunguByNormalizedName],
+  );
+  const emdRegions = useMemo(
+    () => mapSubRegions.filter((regionInfo) => regionInfo.regionKey.level === 'EUPMYEONDONG'),
+    [mapSubRegions],
+  );
+  const sigunguByCode = useMemo(() => {
+    const map = new Map<string, string>();
+    sigunguRegions.forEach((item) => map.set(String(item.code), item.name));
+    return map;
+  }, [sigunguRegions]);
+  const emdByCode = useMemo(() => {
+    const map = new Map<string, { code: string; name: string }>();
+    emdRegions.forEach((item) => map.set(String(item.code), { code: String(item.code), name: item.name }));
+    return map;
+  }, [emdRegions]);
   const activeSigunguFromDrill = useMemo(() => {
     for (let idx = drillStack.length - 1; idx >= 0; idx -= 1) {
       const item = drillStack[idx];
-      if (item.level !== 'SIGUNGU') continue;
-      if (districtNameSet.has(item.label)) return item.label;
+      if (item.level === 'SIGUNGU') {
+        return sigunguByCode.get(String(item.id)) ?? item.label;
+      }
+      if (item.level === 'EUPMYEONDONG') {
+        const parentSigCode = String(item.id).slice(0, 5);
+        const parentSigName = sigunguByCode.get(parentSigCode);
+        if (parentSigName) return parentSigName;
+      }
     }
     return null;
-  }, [districtNameSet, drillStack]);
+  }, [drillStack, sigunguByCode]);
 
   // 운영 화면의 단일 컨텍스트는 drill stack이며, 지도/패널 상태를 여기서 동기화한다.
   useEffect(() => {
     if (drillCurrent.level === 'REGION') {
       if (selectedDistrictName !== null) updateSelectedDistrict(null);
+      if (selectedRegionId !== null) updateSelectedRegionId(null);
       setMapDrillLevel('sig');
       setMapDrillCode(region.ctprvnCode);
       return;
@@ -701,71 +1117,359 @@ export function RegionalDashboard({
     }
 
     if (drillCurrent.level === 'SIGUNGU') {
+      const nextRegionId = makeRegionId({
+        level: 'SIGUNGU',
+        code: String(drillCurrent.id),
+        name: drillCurrent.label,
+      });
+      if (selectedRegionId !== nextRegionId) updateSelectedRegionId(nextRegionId);
       setMapDrillLevel('emd');
       setMapDrillCode(drillCurrent.id);
       return;
     }
 
+    const nextRegionId = makeRegionId({
+      level: 'EUPMYEONDONG',
+      code: String(drillCurrent.id),
+      name: drillCurrent.label,
+    });
+    if (selectedRegionId !== nextRegionId) updateSelectedRegionId(nextRegionId);
     setMapDrillLevel('emd');
     setMapDrillCode(drillCurrent.id);
   }, [
     activeSigunguFromDrill,
     drillCurrent.id,
+    drillCurrent.label,
     drillCurrent.level,
     region.ctprvnCode,
     selectedDistrictName,
+    selectedRegionId,
     updateSelectedDistrict,
+    updateSelectedRegionId,
   ]);
 
   useEffect(() => {
+    const hasPropChanged = prevSelectedRegionSggPropRef.current !== selectedRegionSggProp;
+    prevSelectedRegionSggPropRef.current = selectedRegionSggProp;
+    if (!hasPropChanged) return;
     if (!selectedRegionSggProp) return;
+    if (drillCurrent.level !== 'REGION') return;
     const hasSigungu = drillStack.some(
-      (item) => item.level === 'SIGUNGU' && item.label === selectedRegionSggProp,
+      (item) =>
+        item.level === 'SIGUNGU' &&
+        normalizeRegionLabel(item.label) === normalizeRegionLabel(selectedRegionSggProp),
     );
     if (hasSigungu) return;
-    const matched = sigunguRegions.find(
-      (item) =>
-        item.name.includes(selectedRegionSggProp) || selectedRegionSggProp.includes(item.name),
-    );
-    pushDrill(
-      {
+    const matched = sigunguByNormalizedName.get(normalizeRegionLabel(selectedRegionSggProp));
+    if (!matched?.code) return;
+    const resolvedLabel = normalizedDistrictMap.get(normalizeRegionLabel(selectedRegionSggProp)) ?? selectedRegionSggProp;
+    updateSelectedRegionId(
+      makeRegionId({
         level: 'SIGUNGU',
-        id: matched?.code ?? selectedRegionSggProp,
-        label: selectedRegionSggProp,
-        filters: {
-          kpi: selectedKpiKey,
-          range: rangePreset,
-          view: visualizationMode,
-        },
-      },
-      'replace',
+        code: matched.code,
+        name: resolvedLabel,
+      }),
     );
+    startTransition(() => {
+      pushDrill(
+        {
+          level: 'SIGUNGU',
+          id: matched.code,
+          label: resolvedLabel,
+          filters: {
+            kpi: selectedKpiKey,
+            range: rangePreset,
+            view: visualizationMode,
+          },
+        },
+        'replace',
+      );
+    });
   }, [
+    drillCurrent.level,
     drillStack,
+    normalizedDistrictMap,
     pushDrill,
     rangePreset,
     selectedKpiKey,
     selectedRegionSggProp,
-    sigunguRegions,
+    sigunguByNormalizedName,
+    updateSelectedRegionId,
     visualizationMode,
   ]);
 
+  const currentScopeNode = useMemo<ScopeDrillNode>(() => {
+    const level =
+      drillCurrent.level === 'REGION' || drillCurrent.level === 'SIGUNGU' || drillCurrent.level === 'EUPMYEONDONG'
+        ? drillCurrent.level
+        : 'REGION';
+    return {
+      level,
+      id: String(drillCurrent.id),
+      name: drillCurrent.label,
+    };
+  }, [drillCurrent.id, drillCurrent.label, drillCurrent.level]);
+  const expectedChildAdminLevel = useMemo(
+    () => getChildAdminLevel(currentScopeNode.level),
+    [currentScopeNode.level],
+  );
+  const scopeMatchedMapSubRegions = useMemo(
+    () => mapSubRegions.filter((item) => item.regionKey.level === expectedChildAdminLevel),
+    [expectedChildAdminLevel, mapSubRegions],
+  );
+
+  const districtSourceRegions = useMemo(
+    () => {
+      if (sigunguRegions.length >= 3) {
+        return sigunguRegions.map((item) => ({ code: String(item.code), name: item.name }));
+      }
+
+      const fallbackSigungu = SIGUNGU_OPTIONS[region.ctprvnCode] ?? [];
+      if (fallbackSigungu.length) {
+        return fallbackSigungu.map((item) => ({ code: String(item.code), name: item.label }));
+      }
+
+      return districtRegionEntries.map((entry) => ({ code: String(entry.code), name: entry.name }));
+    },
+    [districtRegionEntries, region.ctprvnCode, sigunguRegions],
+  );
+
   const districtRows = useMemo(
-    () => districts.map((name) => buildDistrictData(name, `${region.id}-${rangePreset}`, analyticsPeriod, rangePreset)),
-    [districts, region.id, analyticsPeriod, rangePreset],
+    () =>
+      districtSourceRegions.map((entry) =>
+        buildDistrictData(entry.name, `${region.id}-${rangePreset}`, analyticsPeriod, rangePreset, entry.code),
+      ),
+    [districtSourceRegions, region.id, analyticsPeriod, rangePreset],
   );
 
-  const selectedDistrictData = useMemo(
-    () => (selectedDistrictName ? districtRows.find((row) => row.name === selectedDistrictName) ?? null : null),
-    [districtRows, selectedDistrictName],
+  const emdRows = useMemo(() => {
+    if (!emdRegions.length) return [] as DistrictOpsData[];
+    return emdRegions.map((regionInfo) =>
+      buildDistrictData(
+        regionInfo.name,
+        `${region.id}-${drillCurrent.level}-${drillCurrent.id}-${rangePreset}`,
+        analyticsPeriod,
+        rangePreset,
+        regionInfo.code,
+      ),
+    );
+  }, [analyticsPeriod, drillCurrent.id, drillCurrent.level, emdRegions, rangePreset, region.id]);
+
+  const sigunguChildRowsFromMap = useMemo(() => {
+    if (drillCurrent.level !== 'SIGUNGU') return [] as DistrictOpsData[];
+    if (!scopeMatchedMapSubRegions.length) return [] as DistrictOpsData[];
+    const strictChildren = scopeMatchedMapSubRegions.filter((regionInfo) => {
+      const code = String(regionInfo.code);
+      return code.startsWith(String(drillCurrent.id)) && code.length > String(drillCurrent.id).length;
+    });
+    const candidateRegions =
+      strictChildren.length > 0
+        ? strictChildren
+        : scopeMatchedMapSubRegions.filter((regionInfo) => String(regionInfo.code) !== String(drillCurrent.id));
+    return candidateRegions.map((regionInfo) =>
+      buildDistrictData(
+        regionInfo.name,
+        `${region.id}-${drillCurrent.level}-${drillCurrent.id}-${rangePreset}-map-fallback`,
+        analyticsPeriod,
+        rangePreset,
+        regionInfo.code,
+      ),
+    );
+  }, [analyticsPeriod, drillCurrent.id, drillCurrent.level, rangePreset, region.id, scopeMatchedMapSubRegions]);
+
+  const candidateSubRegions = useMemo<{ code: string; name: string }[]>(() => {
+    if (currentScopeNode.level === 'REGION') {
+      if (scopeMatchedMapSubRegions.length > 0) {
+        return scopeMatchedMapSubRegions.map((item) => ({ code: String(item.code), name: item.name }));
+      }
+      return districtRows.map((row) => ({ code: String(row.regionId), name: row.name }));
+    }
+
+    if (currentScopeNode.level === 'SIGUNGU') {
+      const strictCandidates = scopeMatchedMapSubRegions
+        .filter((item) => {
+          const code = String(item.code);
+          return code.startsWith(String(currentScopeNode.id)) && code.length > String(currentScopeNode.id).length;
+        })
+        .map((item) => ({ code: String(item.code), name: item.name }));
+      const mapCandidates = (strictCandidates.length > 0 ? strictCandidates : scopeMatchedMapSubRegions
+        .filter((item) => String(item.code) !== String(currentScopeNode.id))
+        .map((item) => ({ code: String(item.code), name: item.name })));
+      if (mapCandidates.length > 0) return mapCandidates;
+      return emdRows.map((row) => ({ code: String(row.regionId), name: row.name }));
+    }
+
+    return [];
+  }, [currentScopeNode.id, currentScopeNode.level, districtRows, emdRows, scopeMatchedMapSubRegions]);
+
+  const childrenScope = useMemo(
+    () =>
+      getChildrenScope({
+        level: toDashboardDrillLevel(currentScopeNode.level),
+        parentRegionCode: String(currentScopeNode.id),
+        candidates: candidateSubRegions,
+      }),
+    [candidateSubRegions, currentScopeNode.id, currentScopeNode.level],
   );
 
-  const aggregated = useMemo(() => aggregateDistrictData(districtRows), [districtRows]);
-  const focusData = selectedDistrictData ?? aggregated;
+  const scopedRowsByCode = useMemo(() => {
+    const rowMap = new Map<string, DistrictOpsData>();
+    [...districtRows, ...emdRows, ...sigunguChildRowsFromMap].forEach((row) => {
+      rowMap.set(String(row.regionId), row);
+    });
+
+    return childrenScope.children.map((child) => {
+      const existing = rowMap.get(child.code);
+      if (existing) return existing;
+      return buildDistrictData(
+        child.name,
+        `${region.id}-${currentScopeNode.level}-${currentScopeNode.id}-${rangePreset}-scope-fill`,
+        analyticsPeriod,
+        rangePreset,
+        child.code,
+      );
+    });
+  }, [
+    analyticsPeriod,
+    childrenScope.children,
+    currentScopeNode.id,
+    currentScopeNode.level,
+    districtRows,
+    emdRows,
+    rangePreset,
+    region.id,
+    sigunguChildRowsFromMap,
+  ]);
+
+  const computedRankingRows = useMemo(() => {
+    if (currentScopeNode.level === 'EUPMYEONDONG') {
+      const leafRow =
+        emdRows.find((row) => String(row.regionId) === String(currentScopeNode.id)) ??
+        sigunguChildRowsFromMap.find((row) => String(row.regionId) === String(currentScopeNode.id));
+      if (leafRow) return [leafRow];
+      return [
+        buildDistrictData(
+          currentScopeNode.name,
+          `${region.id}-${currentScopeNode.level}-${currentScopeNode.id}-${rangePreset}-leaf`,
+          analyticsPeriod,
+          rangePreset,
+          currentScopeNode.id,
+        ),
+      ];
+    }
+
+    if (scopedRowsByCode.length > 0) return scopedRowsByCode;
+    if (currentScopeNode.level === 'REGION') return districtRows;
+    if (currentScopeNode.level === 'SIGUNGU') {
+      if (sigunguChildRowsFromMap.length > 0) return sigunguChildRowsFromMap;
+      if (emdRows.length > 0) return emdRows;
+      return [];
+    }
+    return [];
+  }, [
+    analyticsPeriod,
+    currentScopeNode.id,
+    currentScopeNode.level,
+    currentScopeNode.name,
+    districtRows,
+    emdRows,
+    rangePreset,
+    region.id,
+    scopedRowsByCode,
+    sigunguChildRowsFromMap,
+  ]);
+
+  const scopeRowsCacheRef = useRef<Record<string, DistrictOpsData[]>>({});
+  useEffect(() => {
+    if (!computedRankingRows.length) return;
+    scopeRowsCacheRef.current[scopePathKey] = computedRankingRows;
+  }, [computedRankingRows, scopePathKey]);
+
+  const rankingRowsSource = useMemo(() => {
+    if (computedRankingRows.length) return computedRankingRows;
+    const cached = scopeRowsCacheRef.current[scopePathKey];
+    if (cached?.length) return cached;
+    if (currentScopeNode.level === 'REGION') return districtRows;
+    if (currentScopeNode.level === 'SIGUNGU' && sigunguChildRowsFromMap.length) return sigunguChildRowsFromMap;
+    if (currentScopeNode.level === 'SIGUNGU' && emdRows.length) return emdRows;
+    return [];
+  }, [computedRankingRows, currentScopeNode.level, districtRows, emdRows, scopePathKey, sigunguChildRowsFromMap]);
+  const hasScopedRows = rankingRowsSource.length > 0;
+  const loadingTransitionKey = `${scopePathKey}|${selectedKpiKey}|${rangePreset}|${visualizationMode}`;
+
+  useEffect(() => {
+    if (loadingTransitionKey === lastLoadingTransitionRef.current) return;
+    lastLoadingTransitionRef.current = loadingTransitionKey;
+    if (loadingPhase === 'Initial') return;
+    setLoadingPhase('RegionChange');
+  }, [loadingPhase, loadingTransitionKey]);
+
+  useEffect(() => {
+    if (loadingPhase !== 'RegionChange') return;
+    const timer = window.setTimeout(() => {
+      setLoadingPhase(hasScopedRows ? 'Ready' : 'PartialData');
+    }, 140);
+    return () => window.clearTimeout(timer);
+  }, [hasScopedRows, loadingPhase]);
+
+  useEffect(() => {
+    if (loadingPhase !== 'Initial') return;
+    setLoadingPhase(hasScopedRows ? 'Ready' : 'Empty');
+  }, [hasScopedRows, loadingPhase]);
+
+  useEffect(() => {
+    if (!hasScopedRows) return;
+    if (loadingPhase === 'Ready' || loadingPhase === 'RegionChange') return;
+    setLoadingPhase('Ready');
+  }, [hasScopedRows, loadingPhase]);
+
+  const panelFadeClass =
+    loadingPhase === 'RegionChange'
+      ? 'transition-[opacity,transform] duration-200 ease-out opacity-60 translate-y-[2px] pointer-events-none'
+      : 'transition-[opacity,transform] duration-200 ease-out opacity-100 translate-y-0';
+
+  const selectedSigunguCode = useMemo(() => {
+    if (drillCurrent.level === 'SIGUNGU') return String(drillCurrent.id);
+    if (drillCurrent.level === 'EUPMYEONDONG') return String(drillCurrent.id).slice(0, 5);
+    return null;
+  }, [drillCurrent.id, drillCurrent.level]);
+
+  const selectedDistrictData = useMemo(() => {
+    if (selectedSigunguCode) {
+      const byCode = districtRows.find((row) => String(row.regionId) === selectedSigunguCode);
+      if (byCode) return byCode;
+    }
+    if (!selectedDistrictName) return null;
+    return (
+      districtRows.find((row) => normalizeRegionLabel(row.name) === normalizeRegionLabel(selectedDistrictName)) ?? null
+    );
+  }, [districtRows, selectedDistrictName, selectedSigunguCode]);
+
+  const aggregated = useMemo(
+    () => aggregateDistrictData(rankingRowsSource.length ? rankingRowsSource : districtRows),
+    [districtRows, rankingRowsSource],
+  );
+  const focusData = useMemo(() => {
+    if (drillCurrent.level === 'REGION') return selectedDistrictData ?? aggregated;
+    if (drillCurrent.level === 'SIGUNGU') return aggregated;
+    if (drillCurrent.level === 'EUPMYEONDONG') return rankingRowsSource[0] ?? aggregated;
+    return selectedDistrictData ?? aggregated;
+  }, [aggregated, drillCurrent.level, rankingRowsSource, selectedDistrictData]);
 
   const selectedKpiDef = useMemo<RegionalDashboardKpiConfig>(
     () => REGIONAL_DASHBOARD_KPI_MAP[selectedKpiKey] ?? REGIONAL_DASHBOARD_KPIS[0],
     [selectedKpiKey],
+  );
+  const activeMapLayer = MAP_LAYER_BY_KPI[selectedKpiKey];
+  const mapLayerOptions = useMemo(
+    () =>
+      [
+        { key: 'RISK' as const, label: '위험', kpi: PRIMARY_KPI_BY_LAYER.RISK },
+        { key: 'BOTTLENECK' as const, label: '병목', kpi: PRIMARY_KPI_BY_LAYER.BOTTLENECK },
+        { key: 'GAP' as const, label: '격차', kpi: PRIMARY_KPI_BY_LAYER.GAP },
+        { key: 'LOAD' as const, label: '부하', kpi: PRIMARY_KPI_BY_LAYER.LOAD },
+      ],
+    [],
   );
 
   const topCards = useMemo(() => {
@@ -783,6 +1487,10 @@ export function RegionalDashboard({
 
   const mapIndicatorId = OPS_TO_GEO_INDICATOR[selectedKpiKey] ?? 'regional_sla_violation';
   const mapColorScheme = (OPS_COLOR_SCHEME[selectedKpiKey] ?? 'blue') as MapColorScheme;
+  const activeChartPalette = useMemo(
+    () => (COLOR_PALETTES[mapColorScheme as keyof typeof COLOR_PALETTES] ?? COLOR_PALETTES.blue),
+    [mapColorScheme],
+  );
   const breadcrumbTrail = drillStack;
   const currentDrillLabel =
     drillCurrent.level === 'REGION'
@@ -792,8 +1500,8 @@ export function RegionalDashboard({
   const mapHeaderTitle = `${RANGE_PRESET_LABEL[rangePreset]} · ${region.label} · ${selectedKpiDef.shortLabel} · 시군구`;
 
   const mapValueList = useMemo(
-    () => districtRows.map((row) => row.mapMetric[selectedKpiKey]),
-    [districtRows, selectedKpiKey],
+    () => rankingRowsSource.map((row) => row.mapMetric[selectedKpiKey]),
+    [rankingRowsSource, selectedKpiKey],
   );
 
   const mapMin = useMemo(() => (mapValueList.length ? Math.min(...mapValueList) : 0), [mapValueList]);
@@ -806,34 +1514,55 @@ export function RegionalDashboard({
   const heatmapData = useMemo(() => {
     const palette = COLOR_PALETTES[mapColorScheme as keyof typeof COLOR_PALETTES] ?? COLOR_PALETTES.blue;
     const span = mapMax - mapMin || 1;
-    return districtRows.map((row) => {
+    return rankingRowsSource.map((row) => {
       const value = row.mapMetric[selectedKpiKey];
       const ratio = (value - mapMin) / span;
       const idx = Math.max(0, Math.min(palette.length - 1, Math.floor(ratio * palette.length)));
+      const code = String(row.regionId);
       return {
+        code,
         name: row.name,
+        regionId: makeRegionId({
+          level: getChildAdminLevel(currentScopeNode.level),
+          code,
+          name: row.name,
+        }),
         size: Math.max(1, value),
         value,
         fill: palette[idx],
       };
     });
-  }, [districtRows, selectedKpiKey, mapMin, mapMax, mapColorScheme]);
+  }, [currentScopeNode.level, rankingRowsSource, selectedKpiKey, mapMin, mapMax, mapColorScheme]);
 
   const regionalValue = aggregated.kpi[selectedKpiKey];
 
   const priorityRows = useMemo(() => {
     const direction = determineDirection(selectedKpiKey);
-    const values = districtRows.map((row) => row.kpi[selectedKpiKey]);
-    const volumes = districtRows.map((row) => row.volume);
+    const values = rankingRowsSource.map((row) => row.kpi[selectedKpiKey]);
+    const volumes = rankingRowsSource.map((row) => row.volume);
     const valueMin = Math.min(...values);
     const valueMax = Math.max(...values);
     const volumeMin = Math.min(...volumes);
     const volumeMax = Math.max(...volumes);
 
-    return districtRows
+    const adDensitySeries = rankingRowsSource.map((row) => row.adTransitionSignal.densityScore);
+    const adTransitionSeries = rankingRowsSource.map((row) => row.adTransitionSignal.transition30d);
+    const adDeltaSeries = rankingRowsSource.map((row) => row.adTransitionSignal.deltaFromAvg);
+
+    const dxWaitSeries = rankingRowsSource.map((row) => row.differentialDelay.avgWaitDays);
+    const dxDelayedSeries = rankingRowsSource.map((row) => row.differentialDelay.delayedRatio);
+    const dxBacklogSeries = rankingRowsSource.map((row) => row.differentialDelay.backlogCount);
+
+    const conversionGapSeries = rankingRowsSource.map((row) => 1 - row.stageConversionRate.conversionRate);
+    const conversionDeltaGapSeries = rankingRowsSource.map((row) => -row.stageConversionRate.deltaFromRegional);
+    const conversionSupportSeries = rankingRowsSource.map(
+      (row) => row.screenToDxDrivers.reduce((sum, item) => sum + item.value, 0) / Math.max(1, row.screenToDxDrivers.length),
+    );
+
+    return rankingRowsSource
       .map((row) => {
         const kpiValue = row.kpi[selectedKpiKey];
-        const score = computePriorityScore({
+        let score = computePriorityScore({
           kpiValue,
           kpiMin: valueMin,
           kpiMax: valueMax,
@@ -843,11 +1572,98 @@ export function RegionalDashboard({
           direction,
         });
 
+        if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+          const densityNorm = normalizeValue(
+            row.adTransitionSignal.densityScore,
+            Math.min(...adDensitySeries),
+            Math.max(...adDensitySeries),
+          );
+          const transitionNorm = normalizeValue(
+            row.adTransitionSignal.transition30d,
+            Math.min(...adTransitionSeries),
+            Math.max(...adTransitionSeries),
+          );
+          const deltaNorm = normalizeValue(
+            row.adTransitionSignal.deltaFromAvg,
+            Math.min(...adDeltaSeries),
+            Math.max(...adDeltaSeries),
+          );
+          score = Number(
+            (
+              densityNorm * AD_TOP5_WEIGHTS.density +
+              transitionNorm * AD_TOP5_WEIGHTS.transition +
+              deltaNorm * AD_TOP5_WEIGHTS.delta
+            ).toFixed(3),
+          );
+        } else if (selectedKpiKey === 'regionalDxDelayHotspot') {
+          const waitNorm = normalizeValue(
+            row.differentialDelay.avgWaitDays,
+            Math.min(...dxWaitSeries),
+            Math.max(...dxWaitSeries),
+          );
+          const delayedNorm = normalizeValue(
+            row.differentialDelay.delayedRatio,
+            Math.min(...dxDelayedSeries),
+            Math.max(...dxDelayedSeries),
+          );
+          const backlogNorm = normalizeValue(
+            row.differentialDelay.backlogCount,
+            Math.min(...dxBacklogSeries),
+            Math.max(...dxBacklogSeries),
+          );
+          score = Number(
+            (
+              waitNorm * DX_DELAY_TOP5_WEIGHTS.wait +
+              delayedNorm * DX_DELAY_TOP5_WEIGHTS.delayed +
+              backlogNorm * DX_DELAY_TOP5_WEIGHTS.backlog
+            ).toFixed(3),
+          );
+        } else if (selectedKpiKey === 'regionalScreenToDxRate') {
+          const conversionGapNorm = normalizeValue(
+            1 - row.stageConversionRate.conversionRate,
+            Math.min(...conversionGapSeries),
+            Math.max(...conversionGapSeries),
+          );
+          const deltaGapNorm = normalizeValue(
+            -row.stageConversionRate.deltaFromRegional,
+            Math.min(...conversionDeltaGapSeries),
+            Math.max(...conversionDeltaGapSeries),
+          );
+          const supportValue =
+            row.screenToDxDrivers.reduce((sum, item) => sum + item.value, 0) /
+            Math.max(1, row.screenToDxDrivers.length);
+          const supportNorm = normalizeValue(
+            supportValue,
+            Math.min(...conversionSupportSeries),
+            Math.max(...conversionSupportSeries),
+          );
+          score = Number(
+            (
+              conversionGapNorm * SCREEN_TO_DX_TOP5_WEIGHTS.gapRate +
+              deltaGapNorm * SCREEN_TO_DX_TOP5_WEIGHTS.deltaGap +
+              supportNorm * SCREEN_TO_DX_TOP5_WEIGHTS.support
+            ).toFixed(3),
+          );
+        }
+
         const districtNationalRef = Number(
-          sv(`national-${selectedKpiKey}-${rangePreset}-${analyticsPeriod}-${row.name}`, KPI_RANGE[selectedKpiKey][0], KPI_RANGE[selectedKpiKey][1]).toFixed(1),
+          sv(
+            `national-${selectedKpiKey}-${rangePreset}-${analyticsPeriod}-${drillCurrent.level}-${drillCurrent.id}-${row.name}`,
+            KPI_RANGE[selectedKpiKey][0],
+            KPI_RANGE[selectedKpiKey][1],
+          ).toFixed(1),
         );
 
+        const normalizedCode =
+          normalizeRegionCode(parseRegionIdCode(row.regionId)) ||
+          normalizeRegionCode(row.regionId);
         return {
+          code: normalizedCode,
+          regionId: makeRegionId({
+            level: getChildAdminLevel(currentScopeNode.level),
+            code: normalizedCode,
+            name: row.name,
+          }),
           name: row.name,
           kpiValue,
           volume: row.volume,
@@ -855,14 +1671,72 @@ export function RegionalDashboard({
           nationalDelta: Number((kpiValue - districtNationalRef).toFixed(1)),
         };
       })
-      .sort((a, b) => b.priorityScore - a.priorityScore);
-  }, [districtRows, selectedKpiKey, rangePreset, analyticsPeriod]);
+      .sort((a, b) => {
+        if (b.priorityScore !== a.priorityScore) return b.priorityScore - a.priorityScore;
+        const nameCompare = a.name.localeCompare(b.name, 'ko-KR');
+        if (nameCompare !== 0) return nameCompare;
+        return a.code.localeCompare(b.code);
+      });
+  }, [
+    analyticsPeriod,
+    currentScopeNode.level,
+    drillCurrent.id,
+    drillCurrent.level,
+    rangePreset,
+    rankingRowsSource,
+    selectedKpiKey,
+  ]);
 
-  const top5 = useMemo(() => priorityRows.slice(0, 5), [priorityRows]);
+  const childCodeSet = useMemo(
+    () =>
+      new Set(
+        childrenScope.childrenCodes
+          .map((code) => normalizeRegionCode(code))
+          .filter(Boolean),
+      ),
+    [childrenScope.childrenCodes],
+  );
+
+  const top5 = useMemo(() => {
+    const childLevel = getChildAdminLevel(currentScopeNode.level);
+    const scopedRows = priorityRows.filter((row) => {
+      const normalizedCode =
+        normalizeRegionCode(row.code) ||
+        normalizeRegionCode(parseRegionIdCode(row.code));
+      if (!normalizedCode) return false;
+      if (!childCodeSet.size) return true;
+      return childCodeSet.has(normalizedCode);
+    });
+    const source = (scopedRows.length > 0 ? scopedRows : priorityRows).slice(0, 5);
+    const normalizedTopRows: Array<(typeof priorityRows)[number] & { code: string; regionId: string; regionKey: { level: AdminLevel; code: string; name: string } }> = [];
+
+    source.forEach((row) => {
+      const code =
+        normalizeRegionCode(row.code) ||
+        normalizeRegionCode(parseRegionIdCode(row.regionId));
+      if (!code) return;
+      normalizedTopRows.push({
+        ...row,
+        code,
+        regionKey: {
+          level: childLevel,
+          code,
+          name: row.name,
+        },
+        regionId: makeRegionId({
+          level: childLevel,
+          code,
+          name: row.name,
+        }),
+      });
+    });
+
+    return normalizedTopRows;
+  }, [childCodeSet, currentScopeNode.level, priorityRows]);
 
   const totalVolume = useMemo(
-    () => districtRows.reduce((sum, row) => sum + row.volume, 0),
-    [districtRows],
+    () => rankingRowsSource.reduce((sum, row) => sum + row.volume, 0),
+    [rankingRowsSource],
   );
 
   const top5Concentration = useMemo(() => {
@@ -873,107 +1747,435 @@ export function RegionalDashboard({
 
   const top5ConcentrationLabel = top5Concentration == null ? '—' : `${top5Concentration.toFixed(1)}%`;
 
+  const alertSummary = useMemo<AlertSummary>(() => {
+    const slaAtRiskRegions = rankingRowsSource.filter((row) => row.kpi.regionalRecontact >= 10).length;
+    const examDelayRegions = rankingRowsSource.filter(
+      (row) => row.differentialDelay.avgWaitDays >= settings.thresholds.longWaitDays,
+    ).length;
+    const overdueFollowups = rankingRowsSource.reduce(
+      (sum, row) => sum + (row.recontactReasons.find((item) => item.name === '미응답')?.value ?? 0),
+      0,
+    );
+    const surgeRegions = rankingRowsSource.filter((row) => row.stageImpact.stage1QueueDelta >= 12).length;
+    return {
+      slaAtRiskRegions,
+      examDelayRegions,
+      overdueFollowups: Math.round(overdueFollowups),
+      surgeRegions,
+    };
+  }, [rankingRowsSource, settings.thresholds.longWaitDays]);
+
+  const opsKpiBlocks = useMemo<RegionalKpiBlock[]>(
+    () => {
+      const riskHotspots = rankingRowsSource.filter((row) => row.adTransitionSignal.densityScore >= 70).length;
+      const highRiskCases = rankingRowsSource.reduce((sum, row) => sum + row.adTransitionSignal.highRiskCount, 0);
+      const avgExamDelayDays =
+        rankingRowsSource.length > 0
+          ? Number(
+              (
+                rankingRowsSource.reduce((sum, row) => sum + row.differentialDelay.avgWaitDays, 0) /
+                rankingRowsSource.length
+              ).toFixed(1),
+            )
+          : 0;
+      const stage2Queue = Math.round(
+        rankingRowsSource.reduce(
+          (sum, row) => sum + (row.queueTypeBacklog.find((item) => item.name === '2차 큐')?.value ?? 0),
+          0,
+        ),
+      );
+      const conversionRates = rankingRowsSource.map((row) => row.stageConversionRate.conversionRate * 100);
+      const conversionGap =
+        conversionRates.length > 1
+          ? Number((Math.max(...conversionRates) - Math.min(...conversionRates)).toFixed(1))
+          : 0;
+      const processingGapDays =
+        rankingRowsSource.length > 1
+          ? Number(
+              (
+                Math.max(...rankingRowsSource.map((row) => row.differentialDelay.avgWaitDays)) -
+                Math.min(...rankingRowsSource.map((row) => row.differentialDelay.avgWaitDays))
+              ).toFixed(1),
+            )
+          : 0;
+      return [
+        {
+          id: 'risk',
+          title: 'Risk',
+          value: riskHotspots,
+          unit: '곳',
+          delta: { value: alertSummary.slaAtRiskRegions, unit: '곳', direction: alertSummary.slaAtRiskRegions > 0 ? 'up' : 'flat' },
+          severity: alertSummary.slaAtRiskRegions > 4 ? 'critical' : alertSummary.slaAtRiskRegions > 2 ? 'warn' : 'normal',
+          bindLayer: 'RISK',
+        },
+        {
+          id: 'bottleneck',
+          title: 'Bottleneck',
+          value: avgExamDelayDays,
+          unit: '일',
+          delta: { value: stage2Queue, unit: '건', direction: stage2Queue > 0 ? 'up' : 'flat' },
+          severity: avgExamDelayDays > settings.thresholds.longWaitDays ? 'critical' : avgExamDelayDays > settings.thresholds.longWaitDays - 1 ? 'warn' : 'normal',
+          bindLayer: 'BOTTLENECK',
+        },
+        {
+          id: 'gap',
+          title: 'Gap',
+          value: conversionGap,
+          unit: '%p',
+          delta: { value: processingGapDays, unit: '일', direction: processingGapDays > 0 ? 'up' : 'flat' },
+          severity: conversionGap > 18 ? 'critical' : conversionGap > 10 ? 'warn' : 'normal',
+          bindLayer: 'GAP',
+        },
+        {
+          id: 'load',
+          title: 'Load',
+          value: highRiskCases,
+          unit: '건',
+          delta: { value: alertSummary.surgeRegions, unit: '곳', direction: alertSummary.surgeRegions > 0 ? 'up' : 'flat' },
+          severity: alertSummary.surgeRegions > 3 ? 'warn' : 'normal',
+          bindLayer: 'LOAD',
+        },
+      ];
+    },
+    [alertSummary, rankingRowsSource, settings.thresholds.longWaitDays],
+  );
+
+  const operationalTopItems = useMemo<OperationalTopItem[]>(
+    () =>
+      top5.map((item) => {
+        const regionCode = parseRegionIdCode(item.regionId) ?? item.code;
+        const row = rankingRowsSource.find((candidate) => String(candidate.regionId) === regionCode);
+        const issueType = ISSUE_BY_KPI[selectedKpiKey];
+        const primaryCause =
+          selectedKpiKey === 'regionalAdTransitionHotspot'
+            ? row?.adTransitionDrivers[0]?.name ?? '고위험 밀집'
+            : selectedKpiKey === 'regionalDxDelayHotspot'
+              ? row?.dxDelayDrivers[0]?.name ?? '평균 대기일'
+              : selectedKpiKey === 'regionalScreenToDxRate'
+                ? row?.screenToDxDrivers[0]?.name ?? '전환율 역격차'
+                : selectedKpiKey === 'regionalQueueRisk'
+                  ? row?.queueCauseTop[0]?.name ?? '연락 실패'
+                  : selectedKpiKey === 'regionalDataReadiness'
+                    ? row?.missingFields[0]?.name ?? '결측 필드 누락'
+                    : selectedKpiKey === 'regionalGovernance'
+                      ? row?.governanceMissingTypes[0]?.name ?? '로그 누락'
+                      : row?.queueTypeBacklog[0]?.name ?? '처리 대기 누적';
+        const recommendedAction =
+          issueType === 'EXAM_DELAY'
+            ? safeOpsText('검사 슬롯 확보 요청 생성')
+            : issueType === 'CONVERSION_GAP'
+              ? safeOpsText('저전환 구역 예약 동선 조정 요청')
+              : issueType === 'DATA_GAP'
+                ? safeOpsText('필수 필드 보완 요청 작업 생성')
+                : issueType === 'LOAD'
+                  ? safeOpsText('센터 부하 분산 배치 요청')
+                  : safeOpsText('우선 개입 작업을 큐에 추가');
+        return {
+          regionId: item.regionId,
+          regionName: item.name,
+          issueType,
+          severity: Math.max(0, Math.min(100, Math.round(item.priorityScore * 100))),
+          primaryCause,
+          recommendedAction,
+          ctaLabel: ACTION_LABEL_BY_ISSUE[issueType],
+        };
+      }),
+    [rankingRowsSource, selectedKpiKey, top5],
+  );
+
+  const addWorkQueueItem = useCallback(
+    (issueType: OperationalTopItem['issueType'], regionName: string, priority: 1 | 2 | 3 | 4 | 5) => {
+      const status: WorkStatus = priority <= 2 ? 'TODO' : 'IN_PROGRESS';
+      const dueOffsetHours = priority <= 2 ? 24 : 48;
+      const next: WorkQueueItem = {
+        id: `rq-${Date.now()}`,
+        priority,
+        regionName,
+        taskType: TASK_BY_ISSUE[issueType],
+        status,
+        assignee: '광역 운영',
+        dueAt: new Date(Date.now() + dueOffsetHours * 60 * 60 * 1000).toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+      setWorkQueue((prev) => [next, ...prev].slice(0, 20));
+    },
+    [],
+  );
+
+  const updateWorkQueueStatus = useCallback((id: string, status: WorkStatus) => {
+    setWorkQueue((prev) => prev.map((item) => (item.id === id ? { ...item, status } : item)));
+  }, []);
+
   const selectedDistrictDelta = useMemo(() => {
     if (!selectedDistrictData) return null;
     return Number((selectedDistrictData.kpi[selectedKpiKey] - regionalValue).toFixed(1));
   }, [regionalValue, selectedDistrictData, selectedKpiKey]);
 
-  const districtRowMap = useMemo(() => {
-    return new Map(districtRows.map((row) => [row.name, row]));
-  }, [districtRows]);
+  const districtRowMapByCode = useMemo(
+    () => {
+      const map = new Map<string, DistrictOpsData>();
+      rankingRowsSource.forEach((row) => {
+        const raw = String(row.regionId);
+        const parsed = normalizeRegionCode(parseRegionIdCode(raw));
+        map.set(raw, row);
+        if (parsed) map.set(parsed, row);
+      });
+      return map;
+    },
+    [rankingRowsSource],
+  );
 
   const geoTooltipExtraLines = useCallback(
-    ({ name }: { level: 'ctprvn' | 'sig' | 'emd'; code: string; name: string; value: number }) => {
-      const row = districtRowMap.get(name);
+    ({ code, name }: { level: 'ctprvn' | 'sig' | 'emd'; code: string; name: string; value: number }) => {
+      const normalizedCode =
+        normalizeRegionCode(code) ||
+        normalizeRegionCode(parseRegionIdCode(code));
+      const row = (normalizedCode ? districtRowMapByCode.get(normalizedCode) : undefined) ?? districtRowMapByCode.get(String(code));
       if (!row) return [] as string[];
       const delta7 = Number(sv(`${region.id}-${name}-${selectedKpiKey}-delta7-${rangePreset}-${analyticsPeriod}`, -12, 12).toFixed(1));
-      const deltaUnit = selectedKpiDef.unit === '점' ? '점' : selectedKpiDef.unit === '건' ? '건' : '%p';
+      const deltaUnit =
+        selectedKpiDef.unit === '점'
+          ? '점'
+          : selectedKpiDef.unit === '건'
+            ? '건'
+            : selectedKpiDef.unit === '일'
+              ? '일'
+              : '%p';
       return [
         `규모: ${row.volume.toLocaleString()}건`,
-        `최근 7일 변화: ${delta7 > 0 ? '+' : ''}${selectedKpiDef.unit === '건' ? Math.round(delta7) : delta7}${deltaUnit}`,
+        `최근 7일 변화: ${delta7 > 0 ? '+' : ''}${selectedKpiDef.unit === '건' || selectedKpiDef.unit === '일' ? Math.round(delta7) : delta7}${deltaUnit}`,
       ];
     },
-    [analyticsPeriod, districtRowMap, rangePreset, region.id, selectedKpiDef.unit, selectedKpiKey],
+    [analyticsPeriod, districtRowMapByCode, rangePreset, region.id, selectedKpiDef.unit, selectedKpiKey],
   );
 
   const handleGoBack = useCallback(() => {
+    updateSelectedDistrict(null);
+    updateSelectedRegionId(null);
     resetDrill();
     setStageImpactOpen(false);
-  }, [resetDrill]);
+  }, [resetDrill, updateSelectedDistrict, updateSelectedRegionId]);
 
   const handleDrillBack = useCallback(() => {
     if (!drillCanGoBack) return;
+    if (drillStack.length <= 2) {
+      updateSelectedDistrict(null);
+      updateSelectedRegionId(null);
+    }
     backDrill();
     setStageImpactOpen(false);
-  }, [backDrill, drillCanGoBack]);
+  }, [backDrill, drillCanGoBack, drillStack.length, updateSelectedDistrict, updateSelectedRegionId]);
 
   const handleRegionSelect = useCallback(
-    ({ level, code, name }: { level: string; code: string; name: string }) => {
+    ({
+      level,
+      code,
+      name,
+      regionId,
+    }: {
+      level: string;
+      code: string;
+      name: string;
+      regionId?: string;
+    }) => {
       if (level === 'ctprvn') {
         handleGoBack();
         return;
       }
-      const matchedDistrict =
-        districts.find((district) => district.includes(name) || name.includes(district)) ?? null;
-      if (level === 'sig' && (districtNameSet.has(name) || matchedDistrict)) {
-        const sigungu = districtNameSet.has(name) ? name : matchedDistrict!;
+      const normalizedCode =
+        normalizeRegionCode(code) ||
+        normalizeRegionCode(parseRegionIdCode(regionId));
+      const isSigunguPayload = level === 'sig' || (level === 'emd' && normalizedCode.length === 5);
+      const normalizedName = normalizeRegionLabel(name);
+      if (isSigunguPayload && normalizedCode) {
+        const sigungu = sigunguByCode.get(normalizedCode) ?? normalizedDistrictMap.get(normalizedName) ?? name;
+        const nextRegionId =
+          regionId ??
+          makeRegionId({
+            level: 'SIGUNGU',
+            code: normalizedCode,
+            name: sigungu,
+          });
+        updateSelectedRegionId(nextRegionId);
         updateSelectedDistrict(sigungu);
         setRightEvidenceTab('drivers');
-        pushDrill({
-          level: 'SIGUNGU',
-          id: code,
-          label: sigungu,
-          filters: {
-            kpi: selectedKpiKey,
-            range: rangePreset,
-            view: visualizationMode,
-          },
+        startTransition(() => {
+          pushDrill({
+            level: 'SIGUNGU',
+            id: normalizedCode,
+            label: sigungu,
+            filters: {
+              kpi: selectedKpiKey,
+              range: rangePreset,
+              view: visualizationMode,
+            },
+          });
         });
         return;
       }
       if (level === 'emd') {
+        if (!normalizedCode) return;
+        const emdLabel = emdByCode.get(normalizedCode)?.name ?? name;
+        const nextRegionId =
+          regionId ??
+          makeRegionId({
+            level: 'EUPMYEONDONG',
+            code: normalizedCode,
+            name: emdLabel,
+          });
+        updateSelectedRegionId(nextRegionId);
         setRightEvidenceTab('drivers');
-        pushDrill({
-          level: 'EUPMYEONDONG',
-          id: code,
-          label: name,
-          filters: {
-            kpi: selectedKpiKey,
-            range: rangePreset,
-            view: visualizationMode,
-          },
+        startTransition(() => {
+          pushDrill({
+            level: 'EUPMYEONDONG',
+            id: normalizedCode,
+            label: emdLabel,
+            filters: {
+              kpi: selectedKpiKey,
+              range: rangePreset,
+              view: visualizationMode,
+            },
+          });
         });
       }
     },
-    [districtNameSet, districts, handleGoBack, pushDrill, rangePreset, selectedKpiKey, updateSelectedDistrict, visualizationMode],
+    [
+      emdByCode,
+      handleGoBack,
+      normalizedDistrictMap,
+      pushDrill,
+      rangePreset,
+      selectedKpiKey,
+      sigunguByCode,
+      updateSelectedDistrict,
+      updateSelectedRegionId,
+      visualizationMode,
+    ],
   );
 
-  const handleSubRegionsChange = useCallback((regions: Array<{ code: string; name: string }>) => {
-    const nextSigungu = regions.filter((regionInfo) => regionInfo.code.length <= 5);
-    if (nextSigungu.length) {
-      setSigunguRegions(nextSigungu);
-    }
-  }, []);
+  const handleSubRegionsChange = useCallback((regions: MapChildRegion[]) => {
+    const expectedLevel = getChildAdminLevel(currentScopeNode.level);
+    const normalizedRows = regions
+      .map((item) => {
+        const code =
+          normalizeRegionCode(item.code) ||
+          normalizeRegionCode(parseRegionIdCode(item.regionId));
+        const name = String(item.name ?? '').trim();
+        if (!code || !name) return null;
+        return {
+          ...item,
+          code,
+          name,
+          regionKey: {
+            ...item.regionKey,
+            level: item.regionKey.level,
+            code,
+            name,
+          },
+          regionId:
+            item.regionId ||
+            makeRegionId({
+              level: item.regionKey.level,
+              code,
+              name,
+            }),
+        } satisfies MapChildRegion;
+      })
+      .filter((item): item is MapChildRegion => Boolean(item))
+      .filter((item, index, arr) => arr.findIndex((other) => other.code === item.code) === index);
+    const normalized = normalizedRows
+      .filter((item) => item.regionKey.level === expectedLevel)
+      .sort((a, b) => a.code.localeCompare(b.code, 'ko-KR'));
+
+    if (!normalized.length) return;
+
+    const nextSignature = `${expectedLevel}|${normalized
+      .map((item) => `${item.code}:${item.name}`)
+      .join('|')}`;
+    const prevSignature = subRegionSignatureByScopeRef.current[scopePathKey];
+    if (prevSignature === nextSignature) return;
+    subRegionSignatureByScopeRef.current[scopePathKey] = nextSignature;
+
+    setMapSubRegionsByScope((prev) => {
+      const current = prev[scopePathKey] ?? [];
+      if (
+        current.length === normalized.length &&
+        current.every(
+          (item, idx) =>
+            item.code === normalized[idx]?.code &&
+            item.name === normalized[idx]?.name &&
+            item.regionKey.level === normalized[idx]?.regionKey.level,
+        )
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [scopePathKey]: normalized,
+      };
+    });
+  }, [currentScopeNode.level, scopePathKey]);
 
   const handleTop5Click = useCallback(
-    (districtName: string) => {
-      const match = sigunguRegions.find(
-        (item) => item.name.includes(districtName) || districtName.includes(item.name),
-      );
-      updateSelectedDistrict(districtName);
+    (areaCode: string, areaName: string, areaRegionId?: string) => {
       setRightEvidenceTab('drivers');
-      pushDrill({
-        level: 'SIGUNGU',
-        id: match?.code ?? districtName,
-        label: districtName,
-        filters: {
-          kpi: selectedKpiKey,
-          range: rangePreset,
-          view: visualizationMode,
-        },
+      setTop5MenuRegionId(null);
+      const normalizedCode =
+        normalizeRegionCode(areaCode) ||
+        normalizeRegionCode(parseRegionIdCode(areaRegionId));
+      if (!normalizedCode) return;
+      const targetLevel = drillCurrent.level === 'REGION' ? 'SIGUNGU' : 'EUPMYEONDONG';
+      const nextRegionId = makeRegionId({
+        level: targetLevel,
+        code: normalizedCode,
+        name: areaName,
+      });
+      updateSelectedRegionId(nextRegionId);
+      if (nextRegionId === selectedRegionId) return;
+
+      if (targetLevel === 'SIGUNGU') {
+        updateSelectedDistrict(areaName);
+        startTransition(() => {
+          pushDrill({
+            level: 'SIGUNGU',
+            id: normalizedCode,
+            label: areaName,
+            filters: {
+              kpi: selectedKpiKey,
+              range: rangePreset,
+              view: visualizationMode,
+            },
+          });
+        });
+        return;
+      }
+
+      startTransition(() => {
+        pushDrill(
+          {
+            level: 'EUPMYEONDONG',
+            id: normalizedCode,
+            label: areaName,
+            filters: {
+              kpi: selectedKpiKey,
+              range: rangePreset,
+              view: visualizationMode,
+            },
+          },
+          drillCurrent.level === 'EUPMYEONDONG' ? 'replace' : 'push',
+        );
       });
     },
-    [pushDrill, rangePreset, selectedKpiKey, sigunguRegions, updateSelectedDistrict, visualizationMode],
+    [
+      drillCurrent.level,
+      pushDrill,
+      rangePreset,
+      selectedRegionId,
+      selectedKpiKey,
+      updateSelectedDistrict,
+      updateSelectedRegionId,
+      visualizationMode,
+    ],
   );
 
   const trendData = useMemo(() => {
@@ -996,6 +2198,11 @@ export function RegionalDashboard({
       if (selectedKpiDef.unit === '점') {
         return Number(
           Math.max(min, Math.min(max, value + trendRateBias * 4)).toFixed(1),
+        );
+      }
+      if (selectedKpiDef.unit === '일') {
+        return Number(
+          Math.max(min, Math.min(max, value + trendRateBias * 2)).toFixed(1),
         );
       }
       return Number(
@@ -1111,6 +2318,24 @@ export function RegionalDashboard({
         safeOpsText('번호 오류 누락 구간에 연락처 보정 요청이 필요함'),
       ];
     }
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+      return [
+        safeOpsText('고위험 전환 신호가 큰 구역에 Stage3 경로 담당 인력 선배치가 필요함'),
+        safeOpsText('상위 구역 재접촉 슬롯 확장과 집중 관리 캠페인이 필요함'),
+      ];
+    }
+    if (selectedKpiKey === 'regionalDxDelayHotspot') {
+      return [
+        safeOpsText('평균 대기일이 긴 구역에 검사 슬롯 확보 요청이 필요함'),
+        safeOpsText('미방문 누적 구간에 병원 연계 지원 요청이 필요함'),
+      ];
+    }
+    if (selectedKpiKey === 'regionalScreenToDxRate') {
+      return [
+        safeOpsText('전환율이 낮은 구역에 예약 동선 개선과 현장 배치 보강이 필요함'),
+        safeOpsText('지연·재접촉 동시 상승 구역에 우선 개입 생성이 필요함'),
+      ];
+    }
     return [
       safeOpsText('센터 리스크 상위 구역에 지원 티켓 생성이 필요함'),
       safeOpsText('적체·오류 동시 상승 구역에 집중 지원 배치가 필요함'),
@@ -1122,6 +2347,9 @@ export function RegionalDashboard({
     if (selectedKpiKey === 'regionalQueueRisk') return focusData.queueCauseTop.slice(0, 3);
     if (selectedKpiKey === 'regionalRecontact') return focusData.slaStageContribution.slice(0, 3);
     if (selectedKpiKey === 'regionalDataReadiness') return focusData.recontactReasons.slice(0, 3);
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') return focusData.adTransitionDrivers.slice(0, 3);
+    if (selectedKpiKey === 'regionalDxDelayHotspot') return focusData.dxDelayDrivers.slice(0, 3);
+    if (selectedKpiKey === 'regionalScreenToDxRate') return focusData.screenToDxDrivers.slice(0, 3);
     return focusData.governanceMissingTypes.slice(0, 3);
   }, [focusData, selectedKpiKey]);
 
@@ -1163,13 +2391,46 @@ export function RegionalDashboard({
         basis: safeOpsText('재접촉 필요 사유 비중이 가장 높은 항목'),
       };
     }
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+      return {
+        stage: '고위험 밀집',
+        valueLabel: `${Math.round(focusData.adTransitionSignal.highRiskCount)}명 · ${Math.round(focusData.adTransitionSignal.densityScore)}점`,
+        basis: safeOpsText('고위험 전환 신호 밀집도가 높은 구역'),
+      };
+    }
+    if (selectedKpiKey === 'regionalDxDelayHotspot') {
+      return {
+        stage: '평균 대기일',
+        valueLabel: `${Math.round(focusData.differentialDelay.avgWaitDays)}일 · ${(focusData.differentialDelay.delayedRatio * 100).toFixed(1)}%`,
+        basis: safeOpsText('감별검사 지연 비율과 대기일이 함께 높은 구역'),
+      };
+    }
+    if (selectedKpiKey === 'regionalScreenToDxRate') {
+      return {
+        stage: '전환율 격차',
+        valueLabel: `${(focusData.stageConversionRate.conversionRate * 100).toFixed(1)}%`,
+        basis: safeOpsText('선별 이후 정밀연계 완료율 격차가 큰 구역'),
+      };
+    }
     const topRisk = focusData.governanceMissingTypes[0];
     return {
       stage: topRisk?.name ?? '운영 리스크',
       valueLabel: topRisk ? `${Math.round(topRisk.value)}건` : '—',
       basis: safeOpsText('센터 리스크 기여도가 가장 높은 항목'),
     };
-  }, [focusData.governanceMissingTypes, focusData.queueCauseTop, focusData.queueTypeBacklog, focusData.recontactReasons, focusData.slaStageContribution, selectedKpiKey]);
+  }, [
+    focusData.adTransitionSignal.densityScore,
+    focusData.adTransitionSignal.highRiskCount,
+    focusData.differentialDelay.avgWaitDays,
+    focusData.differentialDelay.delayedRatio,
+    focusData.governanceMissingTypes,
+    focusData.queueCauseTop,
+    focusData.queueTypeBacklog,
+    focusData.recontactReasons,
+    focusData.slaStageContribution,
+    focusData.stageConversionRate.conversionRate,
+    selectedKpiKey,
+  ]);
 
   const uiEmphasis = useMemo(() => {
     return {
@@ -1194,6 +2455,15 @@ export function RegionalDashboard({
     }
     if (selectedKpiKey === 'regionalDataReadiness') {
       return safeOpsText('미응답·반송 비중이 높아 재접촉 슬롯 확장과 연락 보정이 필요함');
+    }
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+      return safeOpsText('고위험 전환 신호가 집중된 구역이 늘어 선제 개입 우선순위 상향이 필요함');
+    }
+    if (selectedKpiKey === 'regionalDxDelayHotspot') {
+      return safeOpsText('검사 대기일이 증가해 연계 슬롯 확보와 재방문 운영 강화가 필요함');
+    }
+    if (selectedKpiKey === 'regionalScreenToDxRate') {
+      return safeOpsText('선별 이후 연계 전환율 격차가 커져 저전환 구역 집중 개입이 필요함');
     }
     return safeOpsText('센터 리스크 누적 구역이 늘어 지원 우선순위 재정렬이 필요함');
   }, [selectedKpiKey, uiEmphasis.primaryDriverStage]);
@@ -1235,6 +2505,15 @@ export function RegionalDashboard({
     if (selectedKpiKey === 'regionalGovernance') {
       return safeOpsText(`이번 주 권장 개입: ${topTwoDistrictLabel}의 센터 지원 티켓 우선 발행`);
     }
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+      return safeOpsText(`이번 주 권장 개입: ${topTwoDistrictLabel}에 고위험군 집중 관리 슬롯 우선 배치`);
+    }
+    if (selectedKpiKey === 'regionalDxDelayHotspot') {
+      return safeOpsText(`이번 주 권장 개입: ${topTwoDistrictLabel}의 검사 연계 슬롯과 병원 협력 요청 우선`);
+    }
+    if (selectedKpiKey === 'regionalScreenToDxRate') {
+      return safeOpsText(`이번 주 권장 개입: ${topTwoDistrictLabel} 저전환 구역의 예약 동선과 현장 배치 개선`);
+    }
     return safeOpsText(`이번 주 권장 개입: ${topTwoDistrictLabel}에 초기 처리 인력 우선 배치`);
   }, [selectedKpiKey, topTwoDistrictLabel]);
 
@@ -1244,6 +2523,9 @@ export function RegionalDashboard({
     if (selectedKpiKey === 'regionalQueueRisk') return selectedDistrictData.queueCauseTop[0]?.name ?? '연락 실패';
     if (selectedKpiKey === 'regionalRecontact') return selectedDistrictData.slaStageContribution[0]?.name ?? 'SLA 임박';
     if (selectedKpiKey === 'regionalDataReadiness') return selectedDistrictData.recontactReasons[0]?.name ?? '미응답';
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') return selectedDistrictData.adTransitionDrivers[0]?.name ?? '고위험 밀집';
+    if (selectedKpiKey === 'regionalDxDelayHotspot') return selectedDistrictData.dxDelayDrivers[0]?.name ?? '평균 대기일';
+    if (selectedKpiKey === 'regionalScreenToDxRate') return selectedDistrictData.screenToDxDrivers[0]?.name ?? '전환율 역격차';
     return selectedDistrictData.governanceMissingTypes[0]?.name ?? '책임자 미기록';
   }, [selectedDistrictData, selectedKpiKey]);
 
@@ -1264,6 +2546,7 @@ export function RegionalDashboard({
       .map((item) => {
         if (selectedKpiDef.unit === '%') return `${item.name} ${item.value.toFixed(1)}%`;
         if (selectedKpiDef.unit === '점') return `${item.name} ${Math.round(item.value)}점`;
+        if (selectedKpiDef.unit === '일') return `${item.name} ${Math.round(item.value)}일`;
         return `${item.name} ${Math.round(item.value)}건`;
       });
 
@@ -1321,6 +2604,235 @@ export function RegionalDashboard({
   }, [selectedKpiKey, trendData, trendMarkerIndex]);
 
   const renderDataEvidencePanel = () => {
+    if (selectedKpiKey === 'regionalRecontact') {
+      const rows = focusData.recontactReasons
+        .slice()
+        .sort((a, b) => b.value - a.value)
+        .slice(0, showExtendedTopN ? 8 : 5);
+      const total = rows.reduce((sum, row) => sum + row.value, 0);
+      const useDonutForReasons = rows.length <= 3;
+
+      return (
+        <>
+          {useDonutForReasons ? (
+            <DonutBreakdown
+              title="실패 사유 분포"
+              subtitle="항목 수가 3개 이하일 때 도넛으로 표시"
+              scopeLabel={currentDrillLabel}
+              data={rows}
+              unit="건"
+              colors={activeChartPalette.slice(-3)}
+              onSliceClick={(item) => setSelectedCauseName(item.name)}
+            />
+          ) : (
+            <TopNHorizontalBar
+              title="실패 사유 TopN"
+              subtitle="미응답/연락처 오류/시간대 문제 분포"
+              scopeLabel={currentDrillLabel}
+              data={rows}
+              unit="건"
+              color={selectedKpiDef.color}
+              maxItems={showExtendedTopN ? 8 : 5}
+              onItemClick={(item) => setSelectedCauseName(item.name)}
+            />
+          )}
+          <ChartCard title="실패 사유 데이터" subtitle="사유별 건수/비중">
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b border-gray-100">
+                    <th className="py-1 pr-2">사유</th>
+                    <th className="py-1 pr-2 text-right">건수</th>
+                    <th className="py-1 text-right">비중</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.name} className="border-b border-gray-50">
+                      <td className="py-1 pr-2 text-gray-700">{row.name}</td>
+                      <td className="py-1 pr-2 text-right font-medium text-gray-900">{Math.round(row.value).toLocaleString()}건</td>
+                      <td className="py-1 text-right text-gray-700">
+                        {total > 0 ? `${((row.value / total) * 100).toFixed(1)}%` : '0.0%'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ChartCard>
+        </>
+      );
+    }
+
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+      const rows = rankingRowsSource
+        .map((row) => ({
+          name: row.name,
+          highRiskCount: row.adTransitionSignal.highRiskCount,
+          transition30d: row.adTransitionSignal.transition30d,
+          deltaFromAvg: row.adTransitionSignal.deltaFromAvg,
+        }))
+        .sort((a, b) => b.highRiskCount - a.highRiskCount)
+        .slice(0, showExtendedTopN ? 8 : 5);
+
+      return (
+        <>
+          <TopNHorizontalBar
+            title="고위험 밀집 TopN"
+            subtitle="고위험 인원 기준 우선순위"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: row.highRiskCount }))}
+            unit="건"
+            color="#dc2626"
+            maxItems={showExtendedTopN ? 8 : 5}
+            onItemClick={(item) => setSelectedCauseName(item.name)}
+          />
+          <ChartCard title="전환 신호 데이터" subtitle="지역별 highRiskCount / transition30d / Δ">
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b border-gray-100">
+                    <th className="py-1 pr-2">지역</th>
+                    <th className="py-1 pr-2 text-right">고위험</th>
+                    <th className="py-1 pr-2 text-right">30일 신호</th>
+                    <th className="py-1 text-right">Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.name} className="border-b border-gray-50">
+                      <td className="py-1 pr-2 text-gray-700">{row.name}</td>
+                      <td className="py-1 pr-2 text-right font-medium text-gray-900">{row.highRiskCount.toLocaleString()}명</td>
+                      <td className="py-1 pr-2 text-right text-gray-700">{row.transition30d.toLocaleString()}건</td>
+                      <td className={`py-1 text-right font-medium ${row.deltaFromAvg >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                        {row.deltaFromAvg > 0 ? '+' : ''}
+                        {row.deltaFromAvg.toFixed(1)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ChartCard>
+        </>
+      );
+    }
+
+    if (selectedKpiKey === 'regionalDxDelayHotspot') {
+      const rows = rankingRowsSource
+        .map((row) => ({
+          name: row.name,
+          avgWaitDays: row.differentialDelay.avgWaitDays,
+          delayedRatio: row.differentialDelay.delayedRatio,
+          backlogCount: row.differentialDelay.backlogCount,
+          deltaFromAvg: row.differentialDelay.deltaFromAvg,
+        }))
+        .sort((a, b) => b.avgWaitDays - a.avgWaitDays)
+        .slice(0, showExtendedTopN ? 8 : 5);
+
+      return (
+        <>
+          <TopNHorizontalBar
+            title="평균 대기일 TopN"
+            subtitle="감별검사 대기일 기준 병목 구역"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: row.avgWaitDays }))}
+            unit="일"
+            color="#f97316"
+            maxItems={showExtendedTopN ? 8 : 5}
+            onItemClick={(item) => setSelectedCauseName(item.name)}
+          />
+          <ChartCard title="지연 데이터" subtitle="avgWaitDays / delayedRatio / backlogCount / Δ">
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b border-gray-100">
+                    <th className="py-1 pr-2">지역</th>
+                    <th className="py-1 pr-2 text-right">평균 대기일</th>
+                    <th className="py-1 pr-2 text-right">지연 비율</th>
+                    <th className="py-1 pr-2 text-right">대기 인원</th>
+                    <th className="py-1 text-right">Δ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.name} className="border-b border-gray-50">
+                      <td className="py-1 pr-2 text-gray-700">{row.name}</td>
+                      <td className="py-1 pr-2 text-right font-medium text-gray-900">{Math.round(row.avgWaitDays)}일</td>
+                      <td className="py-1 pr-2 text-right text-gray-700">{(row.delayedRatio * 100).toFixed(1)}%</td>
+                      <td className="py-1 pr-2 text-right text-gray-700">{row.backlogCount.toLocaleString()}건</td>
+                      <td className={`py-1 text-right font-medium ${row.deltaFromAvg >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                        {row.deltaFromAvg > 0 ? '+' : ''}
+                        {row.deltaFromAvg.toFixed(1)}일
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ChartCard>
+        </>
+      );
+    }
+
+    if (selectedKpiKey === 'regionalScreenToDxRate') {
+      const rows = rankingRowsSource
+        .map((row) => ({
+          name: row.name,
+          conversionRate: row.stageConversionRate.conversionRate,
+          deltaFromRegional: row.stageConversionRate.deltaFromRegional,
+          support: row.screenToDxDrivers.reduce((sum, item) => sum + item.value, 0) / Math.max(1, row.screenToDxDrivers.length),
+        }))
+        .sort((a, b) => a.conversionRate - b.conversionRate)
+        .slice(0, showExtendedTopN ? 8 : 5);
+
+      return (
+        <>
+          <DeltaScatterOrBar
+            title="전환율 비교 · 평균 대비 Δ"
+            subtitle="선별→정밀연계 전환율 격차"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({
+              name: row.name,
+              value: Number((row.conversionRate * 100).toFixed(1)),
+              delta: row.deltaFromRegional,
+            }))}
+            valueUnit="%"
+            deltaUnit="%p"
+            barColor="#0f766e"
+            lineColor="#dc2626"
+          />
+          <ChartCard title="전환율 데이터" subtitle="conversionRate / deltaFromRegional / support">
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b border-gray-100">
+                    <th className="py-1 pr-2">지역</th>
+                    <th className="py-1 pr-2 text-right">전환율</th>
+                    <th className="py-1 pr-2 text-right">Δ</th>
+                    <th className="py-1 text-right">보조지표</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.name} className="border-b border-gray-50">
+                      <td className="py-1 pr-2 text-gray-700">{row.name}</td>
+                      <td className="py-1 pr-2 text-right font-medium text-gray-900">{(row.conversionRate * 100).toFixed(1)}%</td>
+                      <td className={`py-1 pr-2 text-right font-medium ${row.deltaFromRegional >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                        {row.deltaFromRegional > 0 ? '+' : ''}
+                        {row.deltaFromRegional.toFixed(1)}%p
+                      </td>
+                      <td className="py-1 text-right text-gray-700">{row.support.toFixed(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ChartCard>
+        </>
+      );
+    }
+
     const missingRows = normalizedMissingFields.slice(0, showExtendedTopN ? 7 : 5);
     return (
       <>
@@ -1457,7 +2969,7 @@ export function RegionalDashboard({
               scopeLabel={currentDrillLabel}
               data={focusData.recontactReasons}
               unit="건"
-              colors={['#ef4444', '#f97316', '#fb7185']}
+              colors={activeChartPalette.slice(-3)}
               onSliceClick={(item) => setSelectedCauseName(item.name)}
             />
           ) : (
@@ -1467,7 +2979,7 @@ export function RegionalDashboard({
               scopeLabel={currentDrillLabel}
               data={focusData.recontactReasons}
               unit="건"
-              color="#ef4444"
+              color={selectedKpiDef.color}
               onItemClick={(item) => setSelectedCauseName(item.name)}
             />
           )}
@@ -1477,7 +2989,7 @@ export function RegionalDashboard({
             scopeLabel={currentDrillLabel}
             data={focusData.recontactTrend.map((row) => ({ label: row.day, regional: row.value }))}
             unit="%"
-            color="#ef4444"
+            color={selectedKpiDef.color}
           />
           <StageContribution
             title="권장 시간대(연락 성공률)"
@@ -1485,7 +2997,7 @@ export function RegionalDashboard({
             scopeLabel={currentDrillLabel}
             data={focusData.recontactSlots.map((slot) => ({ name: slot.slot, value: slot.successRate }))}
             unit="%"
-            colorScale={['#ef4444', '#f97316', '#fb7185', '#fda4af', '#fca5a5', '#dc2626']}
+            colorScale={activeChartPalette.slice(-6)}
           />
         </>
       );
@@ -1510,6 +3022,126 @@ export function RegionalDashboard({
             data={focusData.collectionLeadtime}
             unit="건"
             colorScale={['#f59e0b', '#f97316', '#fb923c', '#ea580c']}
+          />
+        </>
+      );
+    }
+
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+      const rows = rankingRowsSource
+        .map((row) => ({
+          name: row.name,
+          value: row.adTransitionSignal.densityScore,
+          delta: row.adTransitionSignal.deltaFromAvg,
+          highRiskCount: row.adTransitionSignal.highRiskCount,
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 8);
+
+      return (
+        <>
+          <DeltaScatterOrBar
+            title="집중 구역 위험도 · 평균 대비 Δ"
+            subtitle="AD 전환 위험 집중도 비교"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: row.value, delta: row.delta }))}
+            valueUnit="점"
+            deltaUnit="점"
+            barColor="#dc2626"
+            lineColor="#f97316"
+          />
+          <TopNHorizontalBar
+            title="고위험 인원 TopN"
+            subtitle="highRiskCount 기준 우선 개입 대상"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: row.highRiskCount }))}
+            unit="건"
+            color="#dc2626"
+            onItemClick={(item) => setSelectedCauseName(item.name)}
+          />
+        </>
+      );
+    }
+
+    if (selectedKpiKey === 'regionalDxDelayHotspot') {
+      const rows = rankingRowsSource
+        .map((row) => ({
+          name: row.name,
+          value: row.differentialDelay.avgWaitDays,
+          delta: row.differentialDelay.deltaFromAvg,
+          delayedRatio: row.differentialDelay.delayedRatio,
+          backlogCount: row.differentialDelay.backlogCount,
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 8);
+
+      return (
+        <>
+          <DeltaScatterOrBar
+            title="평균 대기일 · 평균 대비 Δ"
+            subtitle="지연 병목 구역 비교"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: row.value, delta: row.delta }))}
+            valueUnit="일"
+            deltaUnit="일"
+            barColor="#f97316"
+            lineColor="#dc2626"
+          />
+          <TopNHorizontalBar
+            title="지연 비율 TopN"
+            subtitle="delayedRatio 기준 우선 조치 대상"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: Number((row.delayedRatio * 100).toFixed(1)) }))}
+            unit="%"
+            color="#ea580c"
+            onItemClick={(item) => setSelectedCauseName(item.name)}
+          />
+          <StageContribution
+            title="검사 대기 인원 분포"
+            subtitle="backlogCount 기준"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: row.backlogCount })).slice(0, 6)}
+            unit="건"
+            colorScale={['#fb923c', '#f97316', '#ea580c', '#c2410c', '#f59e0b', '#fdba74']}
+          />
+        </>
+      );
+    }
+
+    if (selectedKpiKey === 'regionalScreenToDxRate') {
+      const rows = rankingRowsSource
+        .map((row) => ({
+          name: row.name,
+          conversionRate: row.stageConversionRate.conversionRate,
+          delta: row.stageConversionRate.deltaFromRegional,
+        }))
+        .sort((a, b) => a.conversionRate - b.conversionRate)
+        .slice(0, 8);
+
+      return (
+        <>
+          <DeltaScatterOrBar
+            title="전환율 · 평균 대비 Δ"
+            subtitle="선별 이후 정밀연계 완료율 격차"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({
+              name: row.name,
+              value: Number((row.conversionRate * 100).toFixed(1)),
+              delta: row.delta,
+            }))}
+            valueUnit="%"
+            deltaUnit="%p"
+            barColor="#0f766e"
+            lineColor="#dc2626"
+          />
+          <TopNHorizontalBar
+            title="저전환 구역 TopN"
+            subtitle="100-전환율 기준"
+            scopeLabel={currentDrillLabel}
+            data={rows.map((row) => ({ name: row.name, value: Number(((1 - row.conversionRate) * 100).toFixed(1)) }))}
+            unit="%"
+            color="#0f766e"
+            onItemClick={(item) => setSelectedCauseName(item.name)}
           />
         </>
       );
@@ -1640,30 +3272,6 @@ export function RegionalDashboard({
 
           <div className="w-px h-8 bg-gray-200 shrink-0" />
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              onClick={handleDrillBack}
-              disabled={!drillCanGoBack}
-              className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${
-                drillCanGoBack
-                  ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
-                  : 'text-gray-400 bg-gray-100 cursor-not-allowed'
-              }`}
-            >
-              <ChevronLeft className="h-3 w-3" />
-              <span>뒤로</span>
-            </button>
-            <button
-              onClick={handleGoBack}
-              className="p-1 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded transition-colors"
-              title="광역 관할로 이동"
-            >
-              <Home className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          <div className="w-px h-8 bg-gray-200 shrink-0" />
-
           <div className="flex items-center gap-1 text-gray-500 shrink-0">
             <button className="p-1.5 hover:bg-gray-100 rounded" title="도움말">
               <HelpCircle className="h-4 w-4" />
@@ -1672,6 +3280,36 @@ export function RegionalDashboard({
               <Download className="h-4 w-4" />
             </button>
           </div>
+        </div>
+
+        <div className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-1.5">
+          {opsKpiBlocks.map((block) => (
+            <button
+              key={block.id}
+              onClick={() => updateSelectedKpiKey(PRIMARY_KPI_BY_LAYER[block.bindLayer])}
+              className={`rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+                activeMapLayer === block.bindLayer
+                  ? 'border-slate-400 bg-slate-50'
+                  : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+              }`}
+            >
+              <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
+                {block.title}
+              </div>
+              <div className="text-[13px] font-bold text-gray-800 mt-0.5">
+                {block.unit === '건'
+                  ? `${Math.round(block.value).toLocaleString()}${block.unit}`
+                  : `${Number(block.value).toFixed(block.unit === '%p' ? 1 : 1)}${block.unit ?? ''}`}
+              </div>
+              {block.delta && (
+                <div className="text-[10px] text-gray-500 mt-0.5">
+                  Δ {block.delta.value > 0 ? '+' : ''}
+                  {block.delta.value}
+                  {block.delta.unit}
+                </div>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -1701,6 +3339,29 @@ export function RegionalDashboard({
                 <div className="p-2 rounded border border-gray-100 bg-gray-50 text-gray-800">{summaryLineCurrent}</div>
                 <div className="p-2 rounded border border-amber-100 bg-amber-50 text-amber-900">{summaryLineRisk}</div>
                 <div className="p-2 rounded border border-blue-100 bg-blue-50 text-blue-900">{summaryLineAction}</div>
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-gray-700">오늘의 운영 경고</span>
+                <span className="text-[11px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
+                  Layer: {activeMapLayer}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="rounded border border-red-100 bg-red-50 px-2 py-1.5 text-red-800">
+                  SLA 위험 구역 <span className="font-semibold">{alertSummary.slaAtRiskRegions}곳</span>
+                </div>
+                <div className="rounded border border-orange-100 bg-orange-50 px-2 py-1.5 text-orange-800">
+                  검사 지연 임계 초과 <span className="font-semibold">{alertSummary.examDelayRegions}곳</span>
+                </div>
+                <div className="rounded border border-amber-100 bg-amber-50 px-2 py-1.5 text-amber-800">
+                  재접촉 지연 <span className="font-semibold">{alertSummary.overdueFollowups.toLocaleString()}건</span>
+                </div>
+                <div className="rounded border border-violet-100 bg-violet-50 px-2 py-1.5 text-violet-800">
+                  전주 대비 급증 <span className="font-semibold">{alertSummary.surgeRegions}곳</span>
+                </div>
               </div>
             </div>
 
@@ -1744,12 +3405,21 @@ export function RegionalDashboard({
                 KPI 수준과 물량을 함께 반영한 운영 우선순위
               </div>
               <div className="space-y-1">
-                {top5.map((item, idx) => (
-                  <button
-                    key={item.name}
-                    onClick={() => handleTop5Click(item.name)}
+                {top5.map((item, idx) => {
+                  return (
+                  <div
+                    key={item.regionId}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleTop5Click(item.code, item.name, item.regionId)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        handleTop5Click(item.code, item.name, item.regionId);
+                      }
+                    }}
                     className={`w-full text-left p-1.5 rounded-lg border transition-colors ${
-                      selectedDistrictName === item.name ? 'border-red-300 bg-red-50' : 'border-gray-100 hover:bg-gray-50'
+                      selectedRegionId === item.regionId ? 'border-red-300 bg-red-50' : 'border-gray-100 hover:bg-gray-50'
                     }`}
                   >
                     <div className="space-y-1">
@@ -1768,93 +3438,110 @@ export function RegionalDashboard({
                       </div>
                       <div className="flex items-center justify-between gap-2 pl-6">
                         <div className="text-[11px] text-gray-500">
-                          {selectedKpiDef.shortLabel} {formatKpiValue(selectedKpiKey, item.kpiValue)} · {item.volume.toLocaleString()}건 · 평균 대비 Δ {formatDeltaValue(selectedKpiKey, Number((item.kpiValue - regionalValue).toFixed(1)))}
+                          {(() => {
+                            const op = operationalTopItems.find((row) => row.regionId === item.regionId);
+                            const issueLabel = op?.issueType ?? ISSUE_BY_KPI[selectedKpiKey];
+                            const cause = op?.primaryCause ?? '원인 분석 필요';
+                            return `${issueLabel} · ${cause} · ${selectedKpiDef.shortLabel} ${formatKpiValue(selectedKpiKey, item.kpiValue)} · ${item.volume.toLocaleString()}건 · 평균 대비 Δ ${formatDeltaValue(selectedKpiKey, Number((item.kpiValue - regionalValue).toFixed(1)))}`;
+                          })()}
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
+                        <div className="flex items-center gap-1 shrink-0 relative">
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
-                              onCreateIntervention?.({
-                                kpi: selectedKpiKey,
-                                sgg: item.name,
-                                range: analyticsPeriod,
-                                source: 'overview',
-                                primaryDriverStage: uiEmphasis.primaryDriverStage,
-                              });
+                              const op = operationalTopItems.find((row) => row.regionId === item.regionId);
+                              addWorkQueueItem(op?.issueType ?? ISSUE_BY_KPI[selectedKpiKey], item.name, idx < 2 ? 1 : idx < 4 ? 2 : 3);
                             }}
-                            className="h-5 w-5 flex items-center justify-center rounded border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100"
-                            title="할당/재할당"
+                            className="h-5 px-1.5 inline-flex items-center justify-center rounded border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 text-[10px] font-medium"
+                            title="작업 큐에 추가"
                           >
-                            <BarChart3 className="h-3 w-3" />
+                            {operationalTopItems.find((row) => row.regionId === item.regionId)?.ctaLabel ?? '작업 큐에 추가'}
                           </button>
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
-                              onCreateIntervention?.({
-                                kpi: 'regionalDataReadiness',
-                                sgg: item.name,
-                                range: analyticsPeriod,
-                                source: 'overview',
-                                primaryDriverStage: '재접촉',
-                              });
+                              setTop5MenuRegionId((prev) => (prev === item.regionId ? null : item.regionId));
                             }}
-                            className="h-5 w-5 flex items-center justify-center rounded border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100"
-                            title="재접촉 배정"
+                            className="h-5 px-1.5 inline-flex items-center justify-center rounded border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 text-[10px] font-medium"
+                            title="추가 작업"
+                            aria-label={`${item.name} 추가 작업`}
                           >
-                            <Phone className="h-3 w-3" />
+                            <MoreHorizontal className="h-3 w-3" />
                           </button>
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onCreateIntervention?.({
-                                kpi: 'regionalGovernance',
-                                sgg: item.name,
-                                range: analyticsPeriod,
-                                source: 'overview',
-                                primaryDriverStage: '센터 지원',
-                              });
-                            }}
-                            className="h-5 w-5 flex items-center justify-center rounded border border-violet-200 text-violet-700 bg-violet-50 hover:bg-violet-100"
-                            title="센터 지원 요청"
-                          >
-                            <Shield className="h-3 w-3" />
-                          </button>
+                          {top5MenuRegionId === item.regionId && (
+                            <div className="absolute right-0 top-6 z-30 min-w-[140px] rounded-md border border-gray-200 bg-white shadow-lg p-1">
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setTop5MenuRegionId(null);
+                                  onCreateIntervention?.({
+                                    kpi: selectedKpiKey,
+                                    sgg: item.name,
+                                    range: analyticsPeriod,
+                                    source: 'overview',
+                                    primaryDriverStage: '할당/재할당',
+                                  });
+                                }}
+                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
+                              >
+                                할당/재할당
+                              </button>
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setTop5MenuRegionId(null);
+                                  onCreateIntervention?.({
+                                    kpi: 'regionalDataReadiness',
+                                    sgg: item.name,
+                                    range: analyticsPeriod,
+                                    source: 'overview',
+                                    primaryDriverStage: '재접촉 배정',
+                                  });
+                                }}
+                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
+                              >
+                                재접촉 배정
+                              </button>
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setTop5MenuRegionId(null);
+                                  onCreateIntervention?.({
+                                    kpi: 'regionalGovernance',
+                                    sgg: item.name,
+                                    range: analyticsPeriod,
+                                    source: 'overview',
+                                    primaryDriverStage: '센터 지원 요청',
+                                  });
+                                }}
+                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
+                              >
+                                센터 지원 요청
+                              </button>
+                              <button
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setTop5MenuRegionId(null);
+                                  handleTop5Click(item.code, item.name, item.regionId);
+                                }}
+                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
+                              >
+                                상세 보기
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
-                  </button>
-                ))}
+                  </div>
+                );
+                })}
+                {top5.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-2 py-3 text-[11px] text-gray-500">
+                    현재 단계 하위 행정구역 데이터 준비중
+                  </div>
+                )}
               </div>
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
-              <div className="text-sm font-semibold text-gray-700">운영 액션</div>
-              <button
-                onClick={() =>
-                  onCreateIntervention?.({
-                    kpi: selectedKpiKey,
-                    sgg: selectedDistrictName,
-                    range: analyticsPeriod,
-                    source: 'overview',
-                    primaryDriverStage: uiEmphasis.primaryDriverStage,
-                  })
-                }
-                className="w-full px-3 py-2 rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-              >
-                개입 만들기
-              </button>
-              <button
-                onClick={() =>
-                  onNavigateToCause?.({
-                    kpi: selectedKpiKey,
-                    sgg: selectedDistrictName,
-                    range: analyticsPeriod,
-                  })
-                }
-                className="w-full px-3 py-2 rounded-md text-sm font-medium border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100 transition-colors"
-              >
-                원인 분석으로 이동
-              </button>
             </div>
 
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -1875,28 +3562,16 @@ export function RegionalDashboard({
                       ? `${Math.round(mapMin)}건 ~ ${Math.round(mapMax)}건`
                       : selectedKpiDef.unit === '점'
                         ? `${Math.round(mapMin)}점 ~ ${Math.round(mapMax)}점`
+                        : selectedKpiDef.unit === '일'
+                          ? `${Math.round(mapMin)}일 ~ ${Math.round(mapMax)}일`
                         : `${mapMin.toFixed(1)}% ~ ${mapMax.toFixed(1)}%`}
                   </div>
-                  <button
-                    onClick={() =>
-                      onCreateIntervention?.({
-                        kpi: selectedKpiKey,
-                        sgg: selectedDistrictName,
-                        range: analyticsPeriod,
-                        source: 'overview',
-                        primaryDriverStage: uiEmphasis.primaryDriverStage,
-                      })
-                    }
-                    className="w-full px-2 py-1.5 rounded border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors text-[12px] font-medium"
-                  >
-                    개입·조치 관리 열기
-                  </button>
                 </div>
               )}
             </div>
           </div>
 
-          <div className={`${layoutMode === 'desktop' ? 'min-w-0 min-h-0 flex flex-col overflow-hidden' : 'w-full shrink-0'}`}>
+          <div className={`${layoutMode === 'desktop' ? 'min-w-0 min-h-0 flex flex-col overflow-hidden' : 'w-full shrink-0'} ${panelFadeClass}`}>
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col flex-1">
               <div className="px-4 py-3 border-b border-gray-200 bg-white rounded-t-lg">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1940,6 +3615,22 @@ export function RegionalDashboard({
                       >
                         히트맵
                       </button>
+                    </div>
+                    <div className="flex rounded-md border border-gray-200 overflow-hidden">
+                      {mapLayerOptions.map((layer) => (
+                        <button
+                          key={layer.key}
+                          onClick={() => updateSelectedKpiKey(layer.kpi)}
+                          className={`px-2.5 py-1.5 text-[11px] font-medium transition border-l first:border-l-0 ${
+                            activeMapLayer === layer.key
+                              ? 'bg-slate-700 text-white border-slate-700'
+                              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-100'
+                          }`}
+                          title={`${layer.label} 레이어로 전환`}
+                        >
+                          {layer.label}
+                        </button>
+                      ))}
                     </div>
                     <div className="flex items-center gap-0.5">
                       {(['24h', '7d', '30d', '90d'] as const).map((preset) => (
@@ -1987,24 +3678,9 @@ export function RegionalDashboard({
                 <div className="absolute left-4 top-4 z-20 w-[min(420px,calc(100%-2rem))] rounded-lg border border-blue-200 bg-white/95 backdrop-blur px-3 py-2 shadow-sm">
                   <div className="text-[12px] font-semibold text-blue-800">상황 오버레이</div>
                   <div className="text-[12px] text-gray-700 mt-1 leading-relaxed">{mapOverlayMessage}</div>
-                  <button
-                    onClick={() =>
-                      onCreateIntervention?.({
-                        kpi: selectedKpiKey,
-                        sgg: selectedDistrictName,
-                        range: analyticsPeriod,
-                        source: 'map',
-                        primaryDriverStage: uiEmphasis.primaryDriverStage,
-                      })
-                    }
-                    className="mt-2 inline-flex items-center px-2.5 py-1.5 rounded-md text-[12px] font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-                  >
-                    개입 만들기
-                  </button>
                 </div>
                 {visualizationMode === 'geomap' ? (
                   <GeoMapPanel
-                    key={`regional-${region.id}-${selectedKpiKey}-${rangePreset}-${analyticsPeriod}`}
                     title=""
                     indicatorId={mapIndicatorId}
                     year={2026}
@@ -2051,9 +3727,8 @@ export function RegionalDashboard({
                           );
                         }}
                         onClick={(node: any) => {
-                          if (node?.name && districtNameSet.has(node.name)) {
-                            handleTop5Click(node.name);
-                          }
+                          if (!node?.code || !node?.name) return;
+                          handleTop5Click(String(node.code), String(node.name), String(node.regionId));
                         }}
                       />
                     </ResponsiveContainer>
@@ -2073,6 +3748,8 @@ export function RegionalDashboard({
                       ? `${Math.round(mapMin)}건`
                       : selectedKpiDef.unit === '점'
                         ? `${Math.round(mapMin)}점`
+                        : selectedKpiDef.unit === '일'
+                          ? `${Math.round(mapMin)}일`
                         : `${mapMin.toFixed(1)}%`}
                   </span>
                   <div className="flex-1 h-3 rounded-md overflow-hidden flex shadow-inner">
@@ -2085,6 +3762,8 @@ export function RegionalDashboard({
                       ? `${Math.round(mapMax)}건`
                       : selectedKpiDef.unit === '점'
                         ? `${Math.round(mapMax)}점`
+                        : selectedKpiDef.unit === '일'
+                          ? `${Math.round(mapMax)}일`
                         : `${mapMax.toFixed(1)}%`}
                   </span>
                 </div>
@@ -2092,7 +3771,7 @@ export function RegionalDashboard({
             </div>
           </div>
 
-          <div className={`${layoutMode === 'desktop' ? 'min-w-0 min-h-0 overflow-hidden' : layoutMode === 'tablet' ? 'hidden' : 'w-full shrink-0'} flex flex-col gap-2`}>
+          <div className={`${layoutMode === 'desktop' ? 'min-w-0 min-h-0 overflow-hidden' : layoutMode === 'tablet' ? 'hidden' : 'w-full shrink-0'} flex flex-col gap-2 ${panelFadeClass}`}>
             <div className="bg-white border border-gray-200 rounded-lg p-3 shrink-0">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-semibold text-gray-700">우측 분석 · 조치 중심</span>
@@ -2112,21 +3791,32 @@ export function RegionalDashboard({
                   title="이번 주 권장 조치"
                   subtitle={activeKpiNarrative}
                   action={(
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1.5">
                       <button
-                        onClick={handleDrillBack}
-                        disabled={!drillCanGoBack}
-                        className={`px-2 py-1 rounded text-[11px] ${
-                          drillCanGoBack ? 'text-blue-700 bg-blue-50 hover:bg-blue-100' : 'text-gray-400 bg-gray-100'
-                        }`}
+                        onClick={() =>
+                          onCreateIntervention?.({
+                            kpi: selectedKpiKey,
+                            sgg: selectedDistrictName,
+                            range: analyticsPeriod,
+                            source: 'overview',
+                            primaryDriverStage: uiEmphasis.primaryDriverStage,
+                          })
+                        }
+                        className="px-2.5 py-1.5 rounded-md text-[11px] font-medium text-white bg-blue-600 hover:bg-blue-700"
                       >
-                        뒤로
+                        개입 만들기
                       </button>
                       <button
-                        onClick={handleGoBack}
-                        className="px-2 py-1 rounded text-[11px] text-gray-600 bg-gray-100 hover:bg-gray-200"
+                        onClick={() =>
+                          onNavigateToCause?.({
+                            kpi: selectedKpiKey,
+                            sgg: selectedDistrictName,
+                            range: analyticsPeriod,
+                          })
+                        }
+                        className="px-2.5 py-1.5 rounded-md text-[11px] font-medium border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100"
                       >
-                        상위
+                        원인 분석으로 이동
                       </button>
                     </div>
                   )}
@@ -2142,34 +3832,7 @@ export function RegionalDashboard({
                         </div>
                         <div className="text-[12px] text-gray-800 mt-1">{scenario.action}</div>
                         <div className="text-[11px] text-gray-600 mt-1">리스크: {scenario.risk}</div>
-                        <div className="mt-2 flex items-center gap-1.5">
-                          <button
-                            onClick={() =>
-                              onCreateIntervention?.({
-                                kpi: selectedKpiKey,
-                                sgg: selectedDistrictName,
-                                range: analyticsPeriod,
-                                source: 'overview',
-                                primaryDriverStage: uiEmphasis.primaryDriverStage,
-                              })
-                            }
-                            className="px-2.5 py-1.5 rounded-md text-[12px] font-medium text-white bg-blue-600 hover:bg-blue-700"
-                          >
-                            개입 만들기
-                          </button>
-                          <button
-                            onClick={() =>
-                              onNavigateToCause?.({
-                                kpi: selectedKpiKey,
-                                sgg: selectedDistrictName,
-                                range: analyticsPeriod,
-                              })
-                            }
-                            className="px-2.5 py-1.5 rounded-md text-[12px] font-medium border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100"
-                          >
-                            원인 분석으로 이동
-                          </button>
-                        </div>
+                        <div className="text-[11px] text-gray-500 mt-1">상단 CTA에서 즉시 실행 가능</div>
                       </div>
                     ))}
                   </div>
@@ -2236,6 +3899,8 @@ export function RegionalDashboard({
                                   ? `${Math.round(item.value)}건`
                                   : selectedKpiDef.unit === '점'
                                     ? `${Math.round(item.value)}점`
+                                    : selectedKpiDef.unit === '일'
+                                      ? `${Math.round(item.value)}일`
                                     : `${item.value.toFixed(1)}%`}
                               </span>
                             </button>
@@ -2249,6 +3914,58 @@ export function RegionalDashboard({
                             </div>
                           </div>
                         )}
+                      </ChartCard>
+
+                      <ChartCard title="권장 조치" subtitle="선택 구역 기준으로 작업 큐에 즉시 등록">
+                        <div className="space-y-2">
+                          {operationalTopItems.slice(0, 3).map((item, idx) => (
+                            <div key={`${item.regionId}-${item.issueType}`} className="rounded-md border border-gray-100 bg-gray-50 px-2.5 py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-[12px] font-semibold text-gray-800">
+                                  {item.regionName} · {item.issueType}
+                                </div>
+                                <span className="text-[11px] text-red-600 font-medium">{item.severity}점</span>
+                              </div>
+                              <div className="text-[11px] text-gray-600 mt-1">{item.recommendedAction}</div>
+                              <div className="mt-1.5 flex items-center gap-1.5">
+                                <button
+                                  onClick={() => addWorkQueueItem(item.issueType, item.regionName, idx === 0 ? 1 : 2)}
+                                  className="px-2 py-1 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 text-[11px] font-medium hover:bg-emerald-100"
+                                >
+                                  {item.ctaLabel}
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </ChartCard>
+
+                      <ChartCard title="운영 작업 큐" subtitle="대기/진행/완료 상태 추적">
+                        <div className="space-y-1.5">
+                          {workQueue.slice(0, 6).map((item) => (
+                            <div key={item.id} className="rounded border border-gray-100 px-2 py-1.5 bg-white">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-[12px] font-medium text-gray-800">
+                                  P{item.priority} · {item.regionName}
+                                </div>
+                                <select
+                                  value={item.status}
+                                  onChange={(event) => updateWorkQueueStatus(item.id, event.target.value as WorkStatus)}
+                                  className="h-6 rounded border border-gray-200 bg-gray-50 px-1.5 text-[11px] text-gray-700"
+                                >
+                                  <option value="TODO">대기</option>
+                                  <option value="IN_PROGRESS">진행</option>
+                                  <option value="DONE">완료</option>
+                                  <option value="REJECTED">반려</option>
+                                </select>
+                              </div>
+                              <div className="mt-1 text-[11px] text-gray-600">
+                                {item.taskType} · 마감{' '}
+                                {item.dueAt ? new Date(item.dueAt).toLocaleDateString('ko-KR') : '-'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </ChartCard>
                     </>
                   )}
@@ -2291,10 +4008,10 @@ export function RegionalDashboard({
                       <tbody>
                         {priorityRows.slice(0, 12).map((row) => (
                           <tr
-                            key={row.name}
-                            onClick={() => handleTop5Click(row.name)}
+                            key={row.code}
+                            onClick={() => handleTop5Click(row.code, row.name, row.regionId)}
                             className={`border-b border-gray-100 cursor-pointer transition-colors ${
-                              selectedDistrictName === row.name ? 'bg-blue-50' : 'hover:bg-gray-50'
+                              selectedRegionId === row.regionId ? 'bg-blue-50' : 'hover:bg-gray-50'
                             }`}
                           >
                             <td className="px-2 py-1.5 font-medium text-gray-800">{row.name}</td>
@@ -2313,6 +4030,8 @@ export function RegionalDashboard({
                                 ? `${Math.round(row.nationalDelta)}건`
                                 : selectedKpiDef.unit === '점'
                                   ? `${Math.round(row.nationalDelta)}점`
+                                  : selectedKpiDef.unit === '일'
+                                    ? `${Math.round(row.nationalDelta)}일`
                                   : `${row.nationalDelta.toFixed(1)}%p`}
                             </td>
                           </tr>

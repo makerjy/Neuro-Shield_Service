@@ -76,6 +76,14 @@ function normalizeRange(range: InternalRangeKey): 'week' | 'month' | 'quarter' {
   return 'week';
 }
 
+function isSameSelection(a: RegionalSelectionState, b: RegionalSelectionState): boolean {
+  return (
+    a.selectedKpiKey === b.selectedKpiKey &&
+    a.selectedRegionSgg === b.selectedRegionSgg &&
+    a.selectedRange === b.selectedRange
+  );
+}
+
 function readUrlSelection(fallbackKpi: KpiKey): { page: RegionalPageId; selection: RegionalSelectionState } {
   const page = parseRegionalPage(window.location.pathname);
   const selection = parseRegionalSelection(window.location.search, fallbackKpi);
@@ -101,11 +109,33 @@ export function RegionalCenterApp({
   const districtOptions = DISTRICT_MAP[regionId] ?? DISTRICT_MAP.seoul;
 
   const syncUrl = useCallback((nextPage: RegionalPageId, nextSelection: RegionalSelectionState, mode: 'push' | 'replace' = 'push', extras?: Record<string, string | null | undefined>) => {
-    const url = buildRegionalUrl(nextPage, nextSelection, extras);
+    const rawUrl = buildRegionalUrl(nextPage, nextSelection, extras);
+    const nextUrl = new URL(rawUrl, window.location.origin);
+    const currentUrl = new URL(window.location.href);
+
+    // Overview에서 drill/view는 GeoMap drill 상태 SSOT이므로 유지한다.
+    if (nextPage === 'overview') {
+      const preserveKeys = ['drill', 'view'] as const;
+      preserveKeys.forEach((key) => {
+        if (!nextUrl.searchParams.has(key) && currentUrl.searchParams.has(key)) {
+          const value = currentUrl.searchParams.get(key);
+          if (value) nextUrl.searchParams.set(key, value);
+        }
+      });
+    }
+
+    if (
+      nextUrl.pathname === currentUrl.pathname &&
+      nextUrl.search === currentUrl.search &&
+      nextUrl.hash === currentUrl.hash
+    ) {
+      return;
+    }
+
     if (mode === 'replace') {
-      window.history.replaceState({}, '', url);
+      window.history.replaceState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
     } else {
-      window.history.pushState({}, '', url);
+      window.history.pushState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
     }
   }, []);
 
@@ -162,6 +192,10 @@ export function RegionalCenterApp({
     setCurrentPage(nextPage);
     setSelection((prev) => {
       const next = { ...prev, ...patch };
+      if (isSameSelection(prev, next)) {
+        syncUrl(nextPage, next, 'replace', extras);
+        return prev;
+      }
       syncUrl(nextPage, next, 'push', extras);
       return next;
     });
@@ -170,6 +204,7 @@ export function RegionalCenterApp({
   const patchSelection = useCallback((patch: Partial<RegionalSelectionState>) => {
     setSelection((prev) => {
       const next = { ...prev, ...patch };
+      if (isSameSelection(prev, next)) return prev;
       syncUrl(currentPage, next, 'replace');
       return next;
     });

@@ -30,6 +30,9 @@ const KPI_LABEL: Record<KpiKey, string> = {
   regionalRecontact: 'SLA 위험',
   regionalDataReadiness: '재접촉 필요',
   regionalGovernance: '센터 리스크',
+  regionalAdTransitionHotspot: 'AD 전환 위험',
+  regionalDxDelayHotspot: '감별검사 지연',
+  regionalScreenToDxRate: '선별→정밀연계 전환율',
 };
 
 const TYPE_LABEL: Record<InterventionType, string> = {
@@ -71,6 +74,9 @@ function buildMetrics(seed: string): InterventionMetricSnapshot {
     regionalRecontact: Number(sv(`${seed}-sla-risk`, 4, 19).toFixed(1)),
     regionalDataReadiness: Number(sv(`${seed}-recontact-need`, 5, 24).toFixed(1)),
     regionalGovernance: Number(sv(`${seed}-center-risk`, 28, 82).toFixed(1)),
+    regionalAdTransitionHotspot: Number(sv(`${seed}-ad-hotspot`, 18, 88).toFixed(1)),
+    regionalDxDelayHotspot: Number(sv(`${seed}-dx-delay`, 8, 62).toFixed(1)),
+    regionalScreenToDxRate: Number(sv(`${seed}-screen-dx-rate`, 36, 88).toFixed(1)),
   };
 }
 
@@ -142,6 +148,21 @@ function metricDeltaRows(item: Intervention) {
       label: '센터 리스크 변화',
       unit: '점',
     },
+    {
+      key: 'regionalAdTransitionHotspot' as const,
+      label: 'AD 전환 위험 변화',
+      unit: '점',
+    },
+    {
+      key: 'regionalDxDelayHotspot' as const,
+      label: '감별검사 대기일 변화',
+      unit: '일',
+    },
+    {
+      key: 'regionalScreenToDxRate' as const,
+      label: '선별→정밀연계 전환율 변화',
+      unit: '%',
+    },
   ];
 
   return rows.map((meta) => {
@@ -190,7 +211,16 @@ export function RegionalInterventionsPage({
 
     const now = new Date().toISOString();
     const draftRegion = pendingDraft.region ?? selectedRegionSgg ?? districtOptions[0] ?? '권역 전체';
-    const draftType: InterventionType = pendingDraft.type ?? (pendingDraft.kpiKey === 'regionalGovernance' ? 'GOVERNANCE_FIX' : 'RECONTACT_PUSH');
+    const draftType: InterventionType =
+      pendingDraft.type ??
+      (pendingDraft.kpiKey === 'regionalGovernance'
+        ? 'GOVERNANCE_FIX'
+        : pendingDraft.kpiKey === 'regionalAdTransitionHotspot' ||
+            pendingDraft.kpiKey === 'regionalScreenToDxRate'
+          ? 'PATHWAY_TUNE'
+          : pendingDraft.kpiKey === 'regionalDxDelayHotspot'
+            ? 'STAFFING'
+            : 'RECONTACT_PUSH');
     const beforeMetrics = buildMetrics(`${region.id}-${draftRegion}-${pendingDraft.kpiKey}-before-draft`);
 
     const stageNote = pendingDraft.primaryDriverStage

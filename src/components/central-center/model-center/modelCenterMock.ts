@@ -8,7 +8,72 @@ import type {
   ModelUseEdge,
   InspectorContent,
   ModelCenterViewModel,
+  BatchMeta,
+  DispatchLog,
+  Stage2Distribution,
+  Stage3Enrollment,
 } from "./modelCenter.types";
+
+const BASE_DATE = "2026-02-12";
+const D1_SCOPE_LINE = `기준: ${BASE_DATE} · D-1`;
+
+export const MOCK_BATCH_META: BatchMeta = {
+  baseDate: BASE_DATE,
+  receiveDeadline: "08:30",
+  modelWindow: "08:35-08:48",
+  dispatchTime: "08:52",
+  status: "partial",
+  impactedStages: ["S2", "S3"],
+  notes: "일부 기관(7개) 결과 지연으로 Stage2/3 집계가 부분 반영되었습니다.",
+  receiveRate: 76.4,
+  missingInstitutionCount: 7,
+  expectedRetryAt: "2026-02-13 11:30",
+};
+
+export const MOCK_STAGE2_DISTRIBUTION: Stage2Distribution = {
+  baseDate: BASE_DATE,
+  receivedN: 157_204,
+  adPct: 23.4,
+  mciPct: 62.1,
+  normalPct: 14.5,
+};
+
+export const MOCK_STAGE3_ENROLLMENT: Stage3Enrollment = {
+  baseDate: BASE_DATE,
+  stage2ReceivedN: 157_204,
+  mciEnrollPct: 78.6,
+  adEnrollPct: 64.2,
+};
+
+export const MOCK_DISPATCH_LOGS: DispatchLog[] = [
+  {
+    stage: "S1",
+    destination: "치매안심센터",
+    sentCount: 38_124,
+    failedCount: 18,
+    retryCount: 18,
+    lastSentAt: "2026-02-13 08:53",
+    slaStatus: "ok",
+  },
+  {
+    stage: "S2",
+    destination: "광역",
+    sentCount: 11_832,
+    failedCount: 64,
+    retryCount: 41,
+    lastSentAt: "2026-02-13 08:54",
+    slaStatus: "delayed",
+  },
+  {
+    stage: "S3",
+    destination: "중앙",
+    sentCount: 7_405,
+    failedCount: 39,
+    retryCount: 27,
+    lastSentAt: "2026-02-13 08:56",
+    slaStatus: "delayed",
+  },
+];
 
 /* ════════════════════════════════════════════════════════════
    A. KPI Strip (8개)
@@ -20,9 +85,10 @@ export const MOCK_KPIS: PipelineKpi[] = [
     value: 1_247_653,
     unit: "명",
     delta: 1.2,
-    scopeLine: "전국 집계 · 비식별",
+    baseDate: BASE_DATE,
+    scopeLine: D1_SCOPE_LINE,
     status: "neutral",
-    help: { title: "전체 대상자", body: "전국 치매안심센터 등록 대상자 합계 (비식별 집계)" },
+    help: { title: "전체 대상자", body: `기준일(D-1): ${BASE_DATE}\n전국 치매안심센터 등록 대상자 합계 (비식별 집계)` },
   },
   {
     key: "s1-applied-rate",
@@ -30,9 +96,10 @@ export const MOCK_KPIS: PipelineKpi[] = [
     value: 87.3,
     unit: "%",
     delta: 2.1,
-    scopeLine: "전국 집계 · 비식별",
+    baseDate: BASE_DATE,
+    scopeLine: D1_SCOPE_LINE,
     status: "good",
-    help: { title: "1차 선별 적용률", body: "모델/규칙 기반 1차 선별이 적용된 대상자 비율" },
+    help: { title: "1차 선별 적용률", body: `기준일(D-1): ${BASE_DATE}\n모델/규칙 기반 1차 선별이 적용된 대상자 비율` },
     jumpTo: "stage1",
     modeOverride: {
       quality: { label: "1차 데이터 누락률", value: 4.2, unit: "%", status: "warn" },
@@ -45,20 +112,23 @@ export const MOCK_KPIS: PipelineKpi[] = [
     value: 12.3,
     unit: "%",
     delta: -0.8,
-    scopeLine: "전국 집계 · 비식별",
+    baseDate: BASE_DATE,
+    scopeLine: D1_SCOPE_LINE,
     status: "warn",
-    help: { title: "1차 고위험 신호율", body: "모델 위험도 추정 기반 '고위험' 대상자 비율 (판단 보조 신호)" },
+    help: { title: "1차 고위험 신호율", body: `기준일(D-1): ${BASE_DATE}\n모델 위험도 추정 기반 '고위험' 대상자 비율 (판단 보조 신호)` },
     jumpTo: "stage1",
   },
   {
     key: "s2-receive-rate",
     label: "2차 분류 수신률",
-    value: 91.1,
+    value: 76.4,
     unit: "%",
-    delta: 3.4,
-    scopeLine: "전국 집계 · 비식별",
-    status: "good",
-    help: { title: "2차 분류 수신률", body: "의료기관으로부터 2차 진단 분류 결과를 수신한 비율" },
+    delta: -1.7,
+    baseDate: BASE_DATE,
+    partialStages: ["S2", "S3"],
+    scopeLine: D1_SCOPE_LINE,
+    status: "warn",
+    help: { title: "2차 분류 수신률", body: `기준일(D-1): ${BASE_DATE}\n의료기관으로부터 2차 진단 분류 결과를 수신한 비율\n수신률 80% 미만으로 부분 집계 상태` },
     jumpTo: "stage2",
     modeOverride: {
       quality: { label: "2차 불일치율", value: 6.8, unit: "%", status: "warn" },
@@ -67,24 +137,47 @@ export const MOCK_KPIS: PipelineKpi[] = [
   },
   {
     key: "s2-distribution",
-    label: "2차 분류 분포(AD)",
-    value: 23.4,
+    label: "2차 분류 분포(MCI/AD)",
+    value: MOCK_STAGE2_DISTRIBUTION.adPct,
+    valuePrefix: "AD",
+    secondaryValueLine: `MCI ${MOCK_STAGE2_DISTRIBUTION.mciPct}%`,
     unit: "%",
     delta: 1.1,
-    scopeLine: "전국 집계 · 비식별",
+    baseDate: BASE_DATE,
+    partialStages: ["S2"],
+    scopeLine: D1_SCOPE_LINE,
     status: "risk",
-    help: { title: "AD 분류 비율", body: "기관 연계 결과 AD로 분류된 비율 (기관 입력 기준)" },
+    help: {
+      title: "2차 분류 분포(MCI/AD)",
+      body:
+        `기준일(D-1): ${MOCK_STAGE2_DISTRIBUTION.baseDate}\n` +
+        `분모: 2차 기관 결과 수신 완료 ${MOCK_STAGE2_DISTRIBUTION.receivedN.toLocaleString()}명\n` +
+        `AD ${MOCK_STAGE2_DISTRIBUTION.adPct}% · MCI ${MOCK_STAGE2_DISTRIBUTION.mciPct}% · 정상 ${MOCK_STAGE2_DISTRIBUTION.normalPct}%\n` +
+        "기관 결과 기반",
+    },
     jumpTo: "stage2",
   },
   {
     key: "s3-enrollment-rate",
-    label: "3차 MCI 편입률",
-    value: 78.6,
+    label: "MCI/AD 편입률",
+    value: MOCK_STAGE3_ENROLLMENT.mciEnrollPct,
+    valuePrefix: "MCI",
+    secondaryValueLine: `AD ${MOCK_STAGE3_ENROLLMENT.adEnrollPct}%`,
     unit: "%",
     delta: 5.2,
-    scopeLine: "전국 집계 · 비식별",
+    baseDate: BASE_DATE,
+    partialStages: ["S3"],
+    scopeLine: D1_SCOPE_LINE,
     status: "good",
-    help: { title: "MCI 관리 편입률", body: "MCI 분류 대상자 중 관리 등록/추적 대상 비율" },
+    help: {
+      title: "MCI/AD 편입률",
+      body:
+        `기준일(D-1): ${MOCK_STAGE3_ENROLLMENT.baseDate}\n` +
+        `분모: Stage2 결과 수신 ${MOCK_STAGE3_ENROLLMENT.stage2ReceivedN.toLocaleString()}명\n` +
+        `분자: MCI 편입 ${MOCK_STAGE3_ENROLLMENT.mciEnrollPct}% / AD 관리 경로 편입 ${MOCK_STAGE3_ENROLLMENT.adEnrollPct}%\n` +
+        "정의: Stage2 결과 중 트래킹 경로 편입 비율 (기관 결과 기반)\n" +
+        "주의: 일부 기관 지연으로 부분 집계",
+    },
     jumpTo: "stage3",
     modeOverride: {
       quality: { label: "추적 누락률", value: 8.1, unit: "%", status: "warn" },
@@ -97,9 +190,11 @@ export const MOCK_KPIS: PipelineKpi[] = [
     value: 71.4,
     unit: "%",
     delta: -2.3,
-    scopeLine: "전국 집계 · 비식별",
+    baseDate: BASE_DATE,
+    partialStages: ["S3"],
+    scopeLine: D1_SCOPE_LINE,
     status: "warn",
-    help: { title: "추적 이행률", body: "다음 체크/방문/검사 일정 이행 완료 비율" },
+    help: { title: "추적 이행률", body: `기준일(D-1): ${BASE_DATE}\n다음 체크/방문/검사 일정 이행 완료 비율` },
     jumpTo: "stage3",
   },
   {
@@ -108,9 +203,11 @@ export const MOCK_KPIS: PipelineKpi[] = [
     value: 12,
     unit: "건",
     delta: -3,
-    scopeLine: "전국 집계 · 비식별",
+    baseDate: BASE_DATE,
+    partialStages: ["S2", "S3"],
+    scopeLine: D1_SCOPE_LINE,
     status: "risk",
-    help: { title: "SLA 위반", body: "처리 기한 초과 및 정책 위반 건수" },
+    help: { title: "SLA 위반", body: `기준일(D-1): ${BASE_DATE}\n처리 기한 초과 및 정책 위반 건수` },
   },
 ];
 
@@ -120,6 +217,7 @@ export const MOCK_KPIS: PipelineKpi[] = [
 export const MOCK_STAGES: StageOverview[] = [
   {
     stageId: "stage1",
+    examLabel: "1차 선별검사",
     title: "1차 선별",
     purposeLine: "대규모 대상자 중 '추가 확인 필요' 후보를 좁히는 운영 신호 생성",
     inputs: [
@@ -156,8 +254,9 @@ export const MOCK_STAGES: StageOverview[] = [
   },
   {
     stageId: "stage2",
+    examLabel: "2차 진단검사",
     title: "2차 진단 분류",
-    purposeLine: "의료기관/검사 결과 연계로 '분류 결과'를 수신하는 단계",
+    purposeLine: "의료기관/검사 결과 연계로 '진단 결과'를 수신하고, 모델은 일관성 검증 신호를 제공",
     inputs: [
       { name: "1차 선별 결과", desc: "Stage1 risk_score, risk_band, reason_codes" },
       { name: "2차 검사 결과", desc: "PET/MRI/바이오마커 등 의료기관 연계" },
@@ -188,10 +287,11 @@ export const MOCK_STAGES: StageOverview[] = [
   },
   {
     stageId: "stage3",
-    title: "3차 MCI 관리",
-    purposeLine: "MCI 분류 대상자의 추적/관리/재평가 운영",
+    examLabel: "3차 감별검사",
+    title: "3차 감별·추적 관리",
+    purposeLine: "MCI/AD 경로별 편입 이후 감별·추적·재평가 운영",
     inputs: [
-      { name: "2차 분류 결과", desc: "diagnosis_class=MCI, 기관 결과" },
+      { name: "2차 분류 결과", desc: "diagnosis_class=MCI/AD, 기관 결과" },
       { name: "3차 추적 이력", desc: "방문/상담/검사 완료 이력" },
     ],
     processing: [
@@ -205,7 +305,7 @@ export const MOCK_STAGES: StageOverview[] = [
       { name: "drop_off_reason", desc: "중도이탈 사유 코드" },
     ],
     transition: [
-      { to: "end", ruleLine: "재평가 완료 / 이탈 / 전문 의료 연계" },
+      { to: "end", ruleLine: "재평가 완료 / 이탈 / 전문 의료 연계 / AD 관리 경로 이관" },
     ],
     metrics: {
       applied: 60_234,
@@ -284,6 +384,11 @@ export const MOCK_NODES: ModelUseNode[] = [
   // Post-Model Guardrails
   { id: "out-guardrail",group: "output", label: "guardrail_flags",   shortDesc: "보정/이상치 경고 플래그",     stageTag: "common" },
 
+  /* ══════ Dispatch ══════ */
+  { id: "dispatch-s1", group: "dispatch", label: "S1 Dispatch", shortDesc: "신규 케이스 목록 / 예약 유도 대상", stageTag: "stage1" },
+  { id: "dispatch-s2", group: "dispatch", label: "S2 Dispatch", shortDesc: "기관 결과 반영 목록 / 검증필요 플래그", stageTag: "stage2" },
+  { id: "dispatch-s3", group: "dispatch", label: "S3 Dispatch", shortDesc: "추적 우선순위 High / 권고 액션", stageTag: "stage3" },
+
   /* ══════ Downstream Ops ══════ */
   // Stage 1 OPS
   { id: "ops-case",      group: "ops", label: "케이스 생성",       shortDesc: "안심센터 케이스 등록",       stageTag: "stage1" },
@@ -314,9 +419,11 @@ export const MOCK_EDGES: ModelUseEdge[] = [
   { from: "md-s1-rule", to: "out-quality",  label: "quality_flags" },
   // S1 Outputs → Guardrails
   { from: "out-score",  to: "md-guardrail", label: "S1 검증" },
-  // S1 Outputs → Ops
-  { from: "out-score",  to: "ops-case",    label: "케이스 생성 트리거" },
-  { from: "out-band",   to: "ops-booking",  label: "예약 유도 조건" },
+  // S1 Outputs → Dispatch → Ops
+  { from: "out-score",  to: "dispatch-s1", label: "신규 케이스 집계" },
+  { from: "out-band",   to: "dispatch-s1", label: "예약 유도 대상" },
+  { from: "dispatch-s1", to: "ops-case",   label: "케이스 생성 트리거" },
+  { from: "dispatch-s1", to: "ops-booking", label: "예약 유도 조건" },
 
   /* ══════ Stage 2 Flow ══════ */
   // S2 Inputs → S2 Vectorizer
@@ -341,8 +448,10 @@ export const MOCK_EDGES: ModelUseEdge[] = [
   { from: "md-s2-consist",to: "out-signal",    label: "일관성 신호" },
   // S2 Outputs → Transition
   { from: "out-diag",     to: "md-transition", style: "dashed" },
-  // S2 → Ops
-  { from: "out-s2-conf",  to: "ops-s2-prio",   label: "우선순위 참고" },
+  // S2 Outputs → Dispatch → Ops
+  { from: "out-diag",     to: "dispatch-s2",   label: "기관 결과 반영 목록" },
+  { from: "out-signal",   to: "dispatch-s2",   label: "검증필요 플래그" },
+  { from: "dispatch-s2",  to: "ops-s2-prio",   label: "우선순위 참고" },
 
   /* ══════ Stage 3 Flow ══════ */
   // S3 Inputs → S3 Encoder
@@ -366,11 +475,14 @@ export const MOCK_EDGES: ModelUseEdge[] = [
   { from: "md-transition", to: "md-s3-prio",   label: "MCI 편입" },
   // Guardrails → Output
   { from: "md-guardrail", to: "out-guardrail",  label: "보정 플래그" },
-  // S3 → Ops
-  { from: "out-priority", to: "ops-tracking",   label: "추적 우선순위" },
-  { from: "out-actions",  to: "ops-resource",   label: "자원 배분 입력" },
-  { from: "out-s3-conf",  to: "ops-s3-route",   label: "경로 참고" },
-  { from: "out-guardrail",to: "ops-s3-resched", label: "재조정 트리거" },
+  // S3 Outputs → Dispatch → Ops
+  { from: "out-priority", to: "dispatch-s3",    label: "High 추적 우선순위" },
+  { from: "out-actions",  to: "dispatch-s3",    label: "권고 액션 목록" },
+  { from: "out-guardrail",to: "dispatch-s3",    label: "재처리 필요 플래그" },
+  { from: "dispatch-s3",  to: "ops-tracking",   label: "추적 우선순위" },
+  { from: "dispatch-s3",  to: "ops-resource",   label: "자원 배분 입력" },
+  { from: "dispatch-s3",  to: "ops-s3-route",   label: "경로 참고" },
+  { from: "dispatch-s3",  to: "ops-s3-resched", label: "재조정 트리거" },
 ];
 
 /* ════════════════════════════════════════════════════════════
@@ -379,6 +491,35 @@ export const MOCK_EDGES: ModelUseEdge[] = [
 const RESPONSIBILITY_LINE = "최종 결정 주체: 담당자/기관. 모델은 판단 보조 신호만 제공합니다.";
 
 export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
+  "batch-cycle": {
+    id: "batch-cycle",
+    definition: {
+      what: "D-1 기준 일 단위 배치 집계/모델 실행/센터 전송의 상태 요약입니다.",
+      why: "실시간 처리로 오해하지 않도록 배치 운영 상태와 영향 범위를 한 번에 제공합니다.",
+      whereUsed: ["Batch Cycle Banner", "전송 상태 점검", "부분 집계 대응"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [
+        { field: "baseDate", type: "date", nullable: false, note: "D-1 기준일" },
+        { field: "receiveDeadline", type: "time", nullable: false, note: "수신 마감 시각" },
+        { field: "modelWindow", type: "string", nullable: false, note: "모델 실행 구간" },
+        { field: "dispatchTime", type: "time", nullable: false, note: "전송 완료 시각" },
+      ],
+      refreshCadence: "일 1회 배치",
+    },
+    qualityAudit: {
+      changeLog: [{ version: "BATCH-2026-02-13", date: "2026-02-13", summary: "S2/S3 부분 집계 감지 및 재처리 예정" }],
+    },
+    batchSummary: {
+      impactedStages: MOCK_BATCH_META.impactedStages,
+      receiveRate: MOCK_BATCH_META.receiveRate,
+      missingInstitutionCount: MOCK_BATCH_META.missingInstitutionCount,
+      expectedRetryAt: MOCK_BATCH_META.expectedRetryAt,
+      impactedMetrics: ["2차 분류 분포(MCI/AD)", "MCI/AD 편입률", "3차 추적 이행률"],
+      dispatchLogs: MOCK_DISPATCH_LOGS,
+    },
+  },
   /* ─ Stages ─ */
   stage1: {
     id: "stage1",
@@ -422,8 +563,8 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
   stage2: {
     id: "stage2",
     definition: {
-      what: "의료기관 검사 결과(AD/MCI/정상)를 수신하고, 모델 참고 신호와 분리 표기합니다.",
-      why: "기관 연계 결과의 수신 현황과 일관성을 모니터링하여 운영 품질을 확보합니다.",
+      what: "의료기관/검사 결과 연계로 '진단 결과'를 수신하고, 모델은 일관성 검증 신호를 제공합니다.",
+      why: "기관 결과(공식 분류)와 모델 신호(참고)를 분리해 운영 오해를 방지하고, 수신 누락/지연을 배치 단위로 관리합니다.",
       whereUsed: ["2차 분류 현황 보고", "불일치 모니터링", "3차 편입 판단 참고"],
       responsibility: RESPONSIBILITY_LINE,
     },
@@ -433,11 +574,11 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
         { field: "exam_result", type: "object", nullable: false, note: "PET/MRI/바이오마커" },
       ],
       outputs: [
-        { field: "diagnosis_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "기관 연계 결과" },
-        { field: "model_support_signal", type: "enum(일치|주의|검증필요)", nullable: false, note: "모델 참고 신호" },
+        { field: "diagnosis_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "기관 결과 = 공식 분류" },
+        { field: "model_support_signal", type: "enum(일치|주의|검증필요)", nullable: false, note: "모델 신호 = 참고(비진단)" },
         { field: "next_step_policy", type: "enum(3차편입|종결|재평가)", nullable: false },
       ],
-      refreshCadence: "실시간 (기관 연계 시점)",
+      refreshCadence: "일 1회 배치 (D-1 결과 집계)",
     },
     qualityAudit: {
       missingRate: 8.9,
@@ -452,18 +593,25 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
         { version: "v2.0", date: "2025-11-15", summary: "PET/MRI 표준 매핑 적용" },
       ],
     },
+    batchSummary: {
+      impactedStages: ["S2", "S3"],
+      receiveRate: 76.4,
+      missingInstitutionCount: 7,
+      expectedRetryAt: "2026-02-13 11:30",
+      impactedMetrics: ["2차 분류 분포(MCI/AD)", "MCI/AD 편입률", "3차 추적 이행률"],
+    },
   },
   stage3: {
     id: "stage3",
     definition: {
-      what: "MCI 분류 대상자에 대한 추적/관리/재평가를 운영합니다.",
-      why: "MCI 대상자의 체계적 관리와 적시 개입을 통해 중증 전환을 지연시키는 것을 목표로 합니다.",
-      whereUsed: ["MCI 추적 일정 관리", "자원 배분", "재평가 일정 수립"],
+      what: "MCI/AD 경로별 편입 이후 추적/관리/재평가를 운영합니다.",
+      why: "MCI Track/AD 관리 경로 편입률을 분리 모니터링해 배치 기반 운영 의사결정 정확도를 높입니다.",
+      whereUsed: ["MCI 추적 일정 관리", "AD 관리 경로 이관", "자원 배분", "재평가 일정 수립"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
       inputs: [
-        { field: "diagnosis_class", type: "enum(MCI)", nullable: false, note: "2차 분류 결과" },
+        { field: "diagnosis_class", type: "enum(MCI|AD)", nullable: false, note: "2차 분류 결과" },
         { field: "followup_history", type: "array", nullable: true, note: "방문/상담/검사 이력" },
       ],
       outputs: [
@@ -472,7 +620,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
         { field: "adherence_metrics", type: "object", nullable: false },
         { field: "drop_off_reason", type: "string", nullable: true },
       ],
-      refreshCadence: "주 1회 배치",
+      refreshCadence: "일 1회 배치 (D-1 결과 집계)",
     },
     qualityAudit: {
       missingRate: 8.1,
@@ -1311,6 +1459,79 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
+  /* ─ Dispatch Nodes ─ */
+  "dispatch-s1": {
+    id: "dispatch-s1",
+    definition: {
+      what: "S1 산출물(신규 케이스 후보/예약 유도 대상)을 일 단위 배치로 센터에 전송하는 노드입니다.",
+      why: "선별 결과를 센터 운영 시스템으로 안정적으로 전달해 후속 처리 누락을 줄입니다.",
+      whereUsed: ["S1 Dispatch 로그", "센터 케이스 생성", "예약 유도"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "risk_score", type: "number", nullable: false },
+        { field: "risk_band", type: "enum", nullable: false },
+      ],
+      outputs: [
+        { field: "dispatch_payload", type: "object[]", nullable: false, note: "신규 케이스 / 예약 유도 대상" },
+      ],
+      refreshCadence: "일 1회 배치 전송",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+    batchSummary: {
+      dispatchLogs: MOCK_DISPATCH_LOGS.filter((log) => log.stage === "S1"),
+    },
+  },
+  "dispatch-s2": {
+    id: "dispatch-s2",
+    definition: {
+      what: "S2 기관 결과 반영 목록과 검증필요 플래그를 일 단위 배치로 전송하는 노드입니다.",
+      why: "기관 결과 기반 운영 지시를 광역/센터에 일관되게 전달합니다.",
+      whereUsed: ["S2 Dispatch 로그", "검증필요 후속 처리", "2차 우선순위 조정"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "diagnosis_class", type: "enum(AD|MCI|NORMAL)", nullable: false },
+        { field: "model_support_signal", type: "enum(일치|주의|검증필요)", nullable: false },
+      ],
+      outputs: [
+        { field: "dispatch_payload", type: "object[]", nullable: false, note: "기관 결과 반영 / 검증필요 플래그" },
+      ],
+      refreshCadence: "일 1회 배치 전송",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+    batchSummary: {
+      impactedStages: ["S2"],
+      dispatchLogs: MOCK_DISPATCH_LOGS.filter((log) => log.stage === "S2"),
+    },
+  },
+  "dispatch-s3": {
+    id: "dispatch-s3",
+    definition: {
+      what: "S3 추적 우선순위 High 목록과 권고 액션 리스트를 일 단위 배치로 전송하는 노드입니다.",
+      why: "추적/자원 배분 실행의 기준 데이터를 중앙/센터에 동기화합니다.",
+      whereUsed: ["S3 Dispatch 로그", "MCI/AD 추적 운영", "자원 배분"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      inputs: [
+        { field: "followup_priority", type: "enum(High|Med|Low)", nullable: false },
+        { field: "recommended_actions", type: "string[]", nullable: false },
+      ],
+      outputs: [
+        { field: "dispatch_payload", type: "object[]", nullable: false, note: "High 추적 목록 / 권고 액션" },
+      ],
+      refreshCadence: "일 1회 배치 전송",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+    batchSummary: {
+      impactedStages: ["S3"],
+      dispatchLogs: MOCK_DISPATCH_LOGS.filter((log) => log.stage === "S3"),
+    },
+  },
+
   /* ─ Ops Nodes ─ */
   "ops-case": {
     id: "ops-case",
@@ -1322,7 +1543,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     dataContract: {
       inputs: [{ field: "risk_score", type: "number", nullable: false }, { field: "risk_band", type: "enum", nullable: false }],
-      refreshCadence: "실시간",
+      refreshCadence: "일 1회 배치 반영",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
@@ -1336,7 +1557,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     dataContract: {
       inputs: [{ field: "risk_band", type: "enum", nullable: false }],
-      refreshCadence: "실시간",
+      refreshCadence: "일 1회 배치 반영",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
@@ -1350,7 +1571,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     dataContract: {
       inputs: [{ field: "recommended_actions", type: "string[]", nullable: false }],
-      refreshCadence: "주 1회",
+      refreshCadence: "일 1회 배치 반영",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
@@ -1364,7 +1585,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     dataContract: {
       inputs: [{ field: "followup_priority", type: "enum(High|Med|Low)", nullable: false }],
-      refreshCadence: "주 1회",
+      refreshCadence: "일 1회 배치 반영",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
@@ -1378,7 +1599,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     dataContract: {
       inputs: [{ field: "s2_support_confidence", type: "number(0-1)", nullable: false }],
-      refreshCadence: "실시간",
+      refreshCadence: "일 1회 배치 반영",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
@@ -1392,7 +1613,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     },
     dataContract: {
       inputs: [{ field: "s3_support_confidence", type: "number(0-1)", nullable: false }],
-      refreshCadence: "실시간",
+      refreshCadence: "일 1회 배치 반영",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
@@ -1417,7 +1638,11 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
    ════════════════════════════════════════════════════════════ */
 export function buildMockViewModel(viewMode: "ops" | "quality" | "audit" = "ops"): ModelCenterViewModel {
   return {
-    lastUpdatedAt: "2026-02-12 09:00",
+    lastUpdatedAt: "2026-02-13 09:00",
+    batchMeta: MOCK_BATCH_META,
+    dispatchLogs: MOCK_DISPATCH_LOGS,
+    stage2Distribution: MOCK_STAGE2_DISTRIBUTION,
+    stage3Enrollment: MOCK_STAGE3_ENROLLMENT,
     viewMode,
     kpis: MOCK_KPIS,
     stages: MOCK_STAGES,

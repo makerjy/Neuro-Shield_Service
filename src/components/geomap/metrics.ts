@@ -1,4 +1,5 @@
 import { GeoIndicator } from './geoIndicators';
+import { normalizeRegionCode } from '../../lib/regionKey';
 
 export type MetricPoint = {
   code: string;
@@ -28,8 +29,16 @@ const valueFromHash = (hash: number, indicator: GeoIndicator) => {
 };
 
 const getFeatureCode = (feature: any) =>
-  String(
+  normalizeRegionCode(
     feature?.properties?.code ??
+      feature?.properties?.adm_cd ??
+      feature?.properties?.ADM_CD ??
+      feature?.properties?.sggnm_cd ??
+      feature?.properties?.SGGNM_CD ??
+      feature?.properties?.sigungu_cd ??
+      feature?.properties?.SIGUNGU_CD ??
+      feature?.properties?.emd_cd ??
+      feature?.properties?.EMD_CD ??
       feature?.properties?.CTPRVN_CD ??
       feature?.properties?.SIG_CD ??
       feature?.properties?.EMD_CD ??

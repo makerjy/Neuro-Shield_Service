@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { MutableRefObject } from 'react';
 
 export type DrillLevel = 'REGION' | 'SIGUNGU' | 'EUPMYEONDONG' | 'CUSTOM';
 export type DrillViewMode = 'geomap' | 'heatmap';
@@ -35,10 +36,17 @@ const DEFAULT_KPI_KEY = 'kpi';
 const DEFAULT_RANGE_KEY = 'range';
 const DEFAULT_VIEW_KEY = 'view';
 
-type CompactDrillEntry = {
+type DrillItem = {
   l: DrillLevel;
   i: string;
-  n?: string;
+  n: string;
+};
+
+const DRILL_LEVEL_ORDER: Record<DrillLevel, number> = {
+  REGION: 0,
+  SIGUNGU: 1,
+  EUPMYEONDONG: 2,
+  CUSTOM: 3,
 };
 
 function normalizeLevel(value: unknown): DrillLevel | null {
@@ -53,46 +61,110 @@ function normalizeLevel(value: unknown): DrillLevel | null {
   return null;
 }
 
-function parseCompactStack(raw: string): Array<{ level: DrillLevel; id: string; label: string }> | null {
+function toDrillItem(value: unknown): DrillItem | null {
+  if (!value || typeof value !== 'object') return null;
+  const source = value as Record<string, unknown>;
+  const level = normalizeLevel(source.l ?? source.level);
+  const rawId = source.i ?? source.id;
+  if (!level || (typeof rawId !== 'string' && typeof rawId !== 'number')) return null;
+
+  const id = String(rawId);
+  const rawName = source.n ?? source.label ?? id;
+  const name = typeof rawName === 'string' && rawName.trim() ? rawName : id;
+
+  return { l: level, i: id, n: name };
+}
+
+function canonicalizeDrill(input: DrillItem[]): DrillItem[] {
+  const normalized = input
+    .filter(Boolean)
+    .map((item) => ({ l: item.l, i: String(item.i), n: item.n }));
+
+  const out: DrillItem[] = [];
+  normalized.forEach((item) => {
+    const nextOrder = DRILL_LEVEL_ORDER[item.l];
+    while (out.length > 0) {
+      const last = out[out.length - 1];
+      if (DRILL_LEVEL_ORDER[last.l] < nextOrder) break;
+      out.pop();
+    }
+    out.push(item);
+  });
+
+  return out;
+}
+
+function drillToQuery(drill: DrillItem[]): string {
+  const canon = canonicalizeDrill(drill);
+  return JSON.stringify(
+    canon.map((item) => ({
+      l: item.l,
+      i: String(item.i),
+      n: item.n,
+    })),
+  );
+}
+
+function parseRawDrillArray(raw: string): DrillItem[] {
   try {
-    const decoded = JSON.parse(raw) as Array<Record<string, unknown>>;
-    if (!Array.isArray(decoded) || decoded.length === 0) return null;
-
-    const mapped = decoded
-      .map((item) => {
-        const level = normalizeLevel(item.l ?? item.level);
-        const id = typeof item.i === 'string' ? item.i : typeof item.id === 'string' ? item.id : null;
-        const name = typeof item.n === 'string' ? item.n : typeof item.label === 'string' ? item.label : '';
-        if (!level || !id) return null;
-        return {
-          level,
-          id,
-          label: name.trim() ? name : id,
-        };
-      })
-      .filter((item): item is { level: DrillLevel; id: string; label: string } => Boolean(item));
-
-    return mapped.length ? mapped : null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return canonicalizeDrill(
+      parsed
+        .map((item) => toDrillItem(item))
+        .filter((item): item is DrillItem => Boolean(item)),
+    );
   } catch {
-    return null;
+    return [];
   }
 }
 
-function serializeCompactStack(stack: DrillContext[]): string {
-  const compact: CompactDrillEntry[] = stack.map((item) => ({
-    l: item.level,
-    i: item.id,
-    n: item.label,
-  }));
-  return JSON.stringify(compact);
+function queryToDrill(raw: string | null): DrillItem[] {
+  if (!raw) return [];
+
+  const direct = parseRawDrillArray(raw);
+  if (direct.length > 0) return direct;
+
+  try {
+    const decoded = decodeURIComponent(raw);
+    if (decoded !== raw) {
+      return parseRawDrillArray(decoded);
+    }
+  } catch {
+    return [];
+  }
+
+  return [];
 }
 
-function toRootContext(root: UseDrillNavOptions['root'], initialFilters: DrillFilters): DrillContext {
+function stackToDrill(stack: DrillContext[]): DrillItem[] {
+  return stack.map((item) => ({
+    l: item.level,
+    i: String(item.id),
+    n: item.label,
+  }));
+}
+
+function normalizeStackPath(stack: DrillContext[]): DrillContext[] {
+  const out: DrillContext[] = [];
+  stack.forEach((item) => {
+    const nextOrder = DRILL_LEVEL_ORDER[item.level];
+    while (out.length > 0) {
+      const last = out[out.length - 1];
+      if (DRILL_LEVEL_ORDER[last.level] < nextOrder) break;
+      out.pop();
+    }
+    out.push({ ...item, id: String(item.id) });
+  });
+  return out;
+}
+
+function toRootContext(root: UseDrillNavOptions['root'], filters: DrillFilters): DrillContext {
   return {
     level: root.level,
-    id: root.id,
+    id: String(root.id),
     label: root.label,
-    filters: { ...initialFilters },
+    filters: { ...filters },
     timestamp: Date.now(),
   };
 }
@@ -120,156 +192,125 @@ function parseStackFromUrl(
   if (typeof window === 'undefined') return [rootContext];
 
   const params = new URLSearchParams(window.location.search);
-  const raw = params.get(queryKey);
-  const view = parseView(params.get(viewKey), rootContext.filters.view);
-  const kpi = params.get(kpiKey) ?? rootContext.filters.kpi;
-  const range = parseRange(params.get(rangeKey) ?? rootContext.filters.range, rootContext.filters.range);
+  const parsedDrill = queryToDrill(params.get(queryKey));
   const baseFilters: DrillFilters = {
-    kpi,
-    range,
-    view,
+    kpi: params.get(kpiKey) ?? rootContext.filters.kpi,
+    range: parseRange(params.get(rangeKey) ?? rootContext.filters.range, rootContext.filters.range),
+    view: parseView(params.get(viewKey), rootContext.filters.view),
   };
 
-  if (!raw) {
-    return [{ ...rootContext, filters: { ...rootContext.filters, ...baseFilters } }];
+  if (!parsedDrill.length) {
+    return [{ ...rootContext, filters: { ...baseFilters } }];
   }
 
-  const compact = parseCompactStack(raw);
-  if (compact?.length) {
-    const normalized = compact.map((item, idx) => ({
-      level: idx === 0 ? rootContext.level : item.level,
-      id: idx === 0 ? rootContext.id : item.id,
-      label: idx === 0 ? rootContext.label : item.label,
-      filters: { ...baseFilters },
-      timestamp: Date.now(),
-    }));
-    return normalized;
-  }
+  const rootItem: DrillItem = { l: rootContext.level, i: String(rootContext.id), n: rootContext.label };
+  const merged = canonicalizeDrill([
+    rootItem,
+    ...parsedDrill.filter((item) => !(item.l === rootItem.l && item.i === rootItem.i)),
+  ]);
 
-  try {
-    const decoded = JSON.parse(raw) as Array<Partial<DrillContext>>;
-    if (!Array.isArray(decoded) || decoded.length === 0) {
-      return [{ ...rootContext, filters: { ...rootContext.filters, ...baseFilters } }];
-    }
-
-    const mapped = decoded
-      .map((item) => {
-        const level = normalizeLevel(item.level);
-        if (!level || typeof item.id !== 'string' || typeof item.label !== 'string') return null;
-
-        const sourceFilters = item.filters ?? {};
-        const filters: DrillFilters = {
-          kpi:
-            typeof sourceFilters.kpi === 'string' && sourceFilters.kpi.trim()
-              ? sourceFilters.kpi
-              : baseFilters.kpi,
-          range: parseRange(
-            typeof sourceFilters.range === 'string' ? sourceFilters.range : baseFilters.range,
-            baseFilters.range,
-          ),
-          view: parseView(
-            typeof sourceFilters.view === 'string' ? sourceFilters.view : view,
-            view,
-          ),
-          overlay:
-            typeof sourceFilters.overlay === 'string' && sourceFilters.overlay.trim()
-              ? sourceFilters.overlay
-              : undefined,
-        };
-
-        return {
-          level,
-          id: item.id,
-          label: item.label,
-          filters,
-          timestamp: typeof item.timestamp === 'number' ? item.timestamp : Date.now(),
-        } as DrillContext;
-      })
-      .filter((item): item is DrillContext => Boolean(item));
-
-    if (!mapped.length) {
-      return [{ ...rootContext, filters: { ...rootContext.filters, ...baseFilters } }];
-    }
-
-    const normalized = [...mapped];
-    normalized[0] = {
-      ...normalized[0],
-      level: rootContext.level,
-      id: rootContext.id,
-      label: rootContext.label,
-      filters: { ...normalized[0].filters, ...rootContext.filters, ...baseFilters },
-    };
-
-    const last = normalized[normalized.length - 1];
-    if (
-      last.filters.view !== baseFilters.view ||
-      last.filters.kpi !== baseFilters.kpi ||
-      last.filters.range !== baseFilters.range
-    ) {
-      last.filters = { ...last.filters, ...baseFilters };
-    }
-
-    return normalized;
-  } catch {
-    return [{ ...rootContext, filters: { ...rootContext.filters, ...baseFilters } }];
-  }
+  return merged.map((item, index) => ({
+    level: item.l,
+    id: item.i,
+    label: index === 0 ? rootContext.label : item.n,
+    filters: { ...baseFilters },
+    timestamp: Date.now() + index,
+  }));
 }
 
-function writeStackToUrl(
-  stack: DrillContext[],
-  mode: HistoryMode,
-  queryKey: string,
-  kpiKey: string,
-  rangeKey: string,
-  viewKey: string,
-  defaultFilters: DrillFilters,
-): void {
-  if (typeof window === 'undefined') return;
-  if (!stack.length) return;
+function areFiltersEqual(a: DrillFilters, b: DrillFilters): boolean {
+  return (
+    a.kpi === b.kpi &&
+    a.range === b.range &&
+    a.view === b.view &&
+    (a.overlay ?? '') === (b.overlay ?? '')
+  );
+}
 
-  const url = new URL(window.location.href);
+function areStacksEquivalent(a: DrillContext[], b: DrillContext[]): boolean {
+  if (a.length !== b.length) return false;
+
+  for (let idx = 0; idx < a.length; idx += 1) {
+    if (a[idx].level !== b[idx].level) return false;
+    if (String(a[idx].id) !== String(b[idx].id)) return false;
+    if (a[idx].label !== b[idx].label) return false;
+    if (!areFiltersEqual(a[idx].filters, b[idx].filters)) return false;
+  }
+
+  return true;
+}
+
+function buildDrillSignature(drillQuery: string, filters: Pick<DrillFilters, 'kpi' | 'range' | 'view'>): string {
+  return `${drillQuery}|${filters.kpi}|${filters.range}|${filters.view}`;
+}
+
+function writeStackToUrl(params: {
+  stack: DrillContext[];
+  mode: HistoryMode;
+  queryKey: string;
+  kpiKey: string;
+  rangeKey: string;
+  viewKey: string;
+  defaultFilters: DrillFilters;
+  lastAppliedQueryRef: MutableRefObject<string>;
+}): boolean {
+  const { stack, mode, queryKey, kpiKey, rangeKey, viewKey, defaultFilters, lastAppliedQueryRef } = params;
+  if (typeof window === 'undefined') return false;
+  if (!stack.length) return false;
+
+  const currentUrl = new URL(window.location.href);
+  const nextUrl = new URL(window.location.href);
   const current = stack[stack.length - 1];
+
+  const canonicalDrill = drillToQuery(stackToDrill(stack));
+  const drillDepth = canonicalizeDrill(stackToDrill(stack)).length;
+  const isRootOnly = drillDepth <= 1;
   const isDefaultFilterState =
     current.filters.kpi === defaultFilters.kpi &&
     current.filters.range === defaultFilters.range &&
     current.filters.view === defaultFilters.view;
-  const isRootOnly = stack.length <= 1;
 
   if (isRootOnly) {
-    url.searchParams.delete(queryKey);
+    nextUrl.searchParams.delete(queryKey);
   } else {
-    url.searchParams.set(queryKey, serializeCompactStack(stack));
+    nextUrl.searchParams.set(queryKey, canonicalDrill);
   }
 
   if (isRootOnly && isDefaultFilterState) {
-    url.searchParams.delete(viewKey);
-    url.searchParams.delete(kpiKey);
-    url.searchParams.delete(rangeKey);
+    nextUrl.searchParams.delete(viewKey);
+    nextUrl.searchParams.delete(kpiKey);
+    nextUrl.searchParams.delete(rangeKey);
   } else {
     if (current.filters.view === defaultFilters.view) {
-      url.searchParams.delete(viewKey);
+      nextUrl.searchParams.delete(viewKey);
     } else {
-      url.searchParams.set(viewKey, current.filters.view);
+      nextUrl.searchParams.set(viewKey, current.filters.view);
     }
 
     if (current.filters.kpi === defaultFilters.kpi) {
-      url.searchParams.delete(kpiKey);
+      nextUrl.searchParams.delete(kpiKey);
     } else {
-      url.searchParams.set(kpiKey, current.filters.kpi);
+      nextUrl.searchParams.set(kpiKey, current.filters.kpi);
     }
 
     if (current.filters.range === defaultFilters.range) {
-      url.searchParams.delete(rangeKey);
+      nextUrl.searchParams.delete(rangeKey);
     } else {
-      url.searchParams.set(rangeKey, current.filters.range);
+      nextUrl.searchParams.set(rangeKey, current.filters.range);
     }
   }
 
+  if (nextUrl.search === currentUrl.search) return false;
+
   if (mode === 'replace') {
-    window.history.replaceState({}, '', url.toString());
+    window.history.replaceState({}, '', nextUrl.toString());
   } else {
-    window.history.pushState({}, '', url.toString());
+    window.history.pushState({}, '', nextUrl.toString());
   }
+
+  const normalizedDrill = isRootOnly ? '' : canonicalDrill;
+  lastAppliedQueryRef.current = buildDrillSignature(normalizedDrill, current.filters);
+  return true;
 }
 
 export function useDrillNav({
@@ -281,12 +322,14 @@ export function useDrillNav({
   viewKey = DEFAULT_VIEW_KEY,
 }: UseDrillNavOptions) {
   const latestFiltersRef = useRef<DrillFilters>(initialFilters);
+  const lastAppliedQueryRef = useRef<string>('');
+
   useEffect(() => {
     latestFiltersRef.current = initialFilters;
   }, [initialFilters.kpi, initialFilters.overlay, initialFilters.range, initialFilters.view]);
 
   const rootIdentity = useMemo(
-    () => `${root.level}:${root.id}:${root.label}`,
+    () => `${root.level}:${String(root.id)}:${root.label}`,
     [root.id, root.label, root.level],
   );
 
@@ -312,19 +355,45 @@ export function useDrillNav({
   const canGoBack = stack.length > 1;
   const canBack = canGoBack;
 
+  useEffect(() => {
+    lastAppliedQueryRef.current = buildDrillSignature(drillToQuery(stackToDrill(stack)), current.filters);
+  }, [current.filters.kpi, current.filters.range, current.filters.view, stack]);
+
   const commit = useCallback(
     (nextStack: DrillContext[], mode: HistoryMode) => {
-      writeStackToUrl(nextStack, mode, queryKey, kpiKey, rangeKey, viewKey, initialFilters);
-      return nextStack;
+      const normalized = nextStack.length
+        ? normalizeStackPath(nextStack)
+        : [toRootContext({ level: root.level, id: String(root.id), label: root.label }, latestFiltersRef.current)];
+
+      writeStackToUrl({
+        stack: normalized,
+        mode,
+        queryKey,
+        kpiKey,
+        rangeKey,
+        viewKey,
+        defaultFilters: latestFiltersRef.current,
+        lastAppliedQueryRef,
+      });
+      return normalized;
     },
-    [initialFilters, kpiKey, queryKey, rangeKey, viewKey],
+    [kpiKey, queryKey, rangeKey, root.id, root.label, root.level, viewKey],
   );
 
   useEffect(() => {
     const nextRootContext = toRootContext(root, latestFiltersRef.current);
     const parsed = parseStackFromUrl(nextRootContext, queryKey, kpiKey, rangeKey, viewKey);
-    setStack(parsed);
-    writeStackToUrl(parsed, 'replace', queryKey, kpiKey, rangeKey, viewKey, latestFiltersRef.current);
+    setStack((prev) => (areStacksEquivalent(prev, parsed) ? prev : parsed));
+    writeStackToUrl({
+      stack: parsed,
+      mode: 'replace',
+      queryKey,
+      kpiKey,
+      rangeKey,
+      viewKey,
+      defaultFilters: latestFiltersRef.current,
+      lastAppliedQueryRef,
+    });
     // root identity changed: keep current drill if URL has it, otherwise rebuild root context.
   }, [
     kpiKey,
@@ -339,8 +408,21 @@ export function useDrillNav({
 
   useEffect(() => {
     const onPopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const canonFromUrl = drillToQuery(queryToDrill(params.get(queryKey)));
+      const signatureFromUrl = buildDrillSignature(canonFromUrl, {
+        kpi: params.get(kpiKey) ?? latestFiltersRef.current.kpi,
+        range: parseRange(
+          params.get(rangeKey) ?? latestFiltersRef.current.range,
+          latestFiltersRef.current.range,
+        ),
+        view: parseView(params.get(viewKey), latestFiltersRef.current.view),
+      });
+      if (signatureFromUrl === lastAppliedQueryRef.current) return;
+
       const nextRootContext = toRootContext(root, latestFiltersRef.current);
-      setStack(parseStackFromUrl(nextRootContext, queryKey, kpiKey, rangeKey, viewKey));
+      const parsed = parseStackFromUrl(nextRootContext, queryKey, kpiKey, rangeKey, viewKey);
+      setStack((prev) => (areStacksEquivalent(prev, parsed) ? prev : parsed));
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -354,6 +436,7 @@ export function useDrillNav({
           ...item,
           filters: { ...item.filters, ...filters },
         }));
+        if (areStacksEquivalent(source, next)) return source;
         return commit(next, mode);
       });
     },
@@ -363,23 +446,21 @@ export function useDrillNav({
   const push = useCallback(
     (next: Omit<DrillContext, 'timestamp'>, mode: HistoryMode = 'push') => {
       setStack((prev) => {
-        const source = prev.length ? prev : [rootContext];
+        const source = normalizeStackPath(prev.length ? prev : [rootContext]);
         const currentContext = source[source.length - 1];
         const nextContext: DrillContext = {
           ...next,
+          id: String(next.id),
           filters: { ...currentContext.filters, ...next.filters },
           timestamp: Date.now(),
         };
+        const nextOrder = DRILL_LEVEL_ORDER[nextContext.level];
+        const nextStack = [
+          ...source.filter((item) => DRILL_LEVEL_ORDER[item.level] < nextOrder),
+          nextContext,
+        ];
 
-        const isSameTarget =
-          currentContext.level === nextContext.level &&
-          currentContext.id === nextContext.id &&
-          currentContext.label === nextContext.label;
-
-        const nextStack = isSameTarget
-          ? [...source.slice(0, -1), nextContext]
-          : [...source, nextContext];
-
+        if (areStacksEquivalent(source, nextStack)) return source;
         return commit(nextStack, mode);
       });
     },
@@ -399,6 +480,7 @@ export function useDrillNav({
       setStack((prev) => {
         if (index < 0 || index >= prev.length) return prev;
         const next = prev.slice(0, index + 1);
+        if (areStacksEquivalent(prev, next)) return prev;
         return commit(next, 'push');
       });
     },
@@ -406,8 +488,13 @@ export function useDrillNav({
   );
 
   const reset = useCallback(() => {
-    const next = [toRootContext({ level: root.level, id: root.id, label: root.label }, latestFiltersRef.current)];
-    setStack(commit(next, 'push'));
+    const next = [
+      toRootContext({ level: root.level, id: String(root.id), label: root.label }, latestFiltersRef.current),
+    ];
+    setStack((prev) => {
+      if (areStacksEquivalent(prev, next)) return prev;
+      return commit(next, 'push');
+    });
   }, [commit, root.id, root.label, root.level]);
 
   return {

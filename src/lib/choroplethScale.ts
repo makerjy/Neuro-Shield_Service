@@ -11,6 +11,7 @@ export const COLOR_PALETTES = {
   blue: ['#eff6ff', '#bfdbfe', '#93c5fd', '#60a5fa', '#3b82f6', '#2563eb', '#1d4ed8'],
   red: ['#fef2f2', '#fecaca', '#fca5a5', '#f87171', '#ef4444', '#dc2626', '#b91c1c'],
   green: ['#f0fdf4', '#bbf7d0', '#86efac', '#4ade80', '#22c55e', '#16a34a', '#15803d'],
+  teal: ['#f0fdfa', '#ccfbf1', '#99f6e4', '#5eead4', '#2dd4bf', '#14b8a6', '#0f766e'],
   orange: ['#fff7ed', '#fed7aa', '#fdba74', '#fb923c', '#f97316', '#ea580c', '#c2410c'],
   purple: ['#faf5ff', '#e9d5ff', '#d8b4fe', '#c084fc', '#a855f7', '#9333ea', '#7e22ce'],
   heat: ['#fef3c7', '#fde68a', '#fcd34d', '#fbbf24', '#f59e0b', '#d97706', '#b45309'],
@@ -167,6 +168,9 @@ export const KPI_PALETTE_MAP: Record<string, keyof typeof COLOR_PALETTES> = {
   regionalRecontact: 'red',
   regionalDataReadiness: 'orange',
   regionalGovernance: 'purple',
+  regionalAdTransitionHotspot: 'red',
+  regionalDxDelayHotspot: 'orange',
+  regionalScreenToDxRate: 'teal',
 };
 
 /** KPI 키에 해당하는 팔레트 이름 반환 */
@@ -202,6 +206,9 @@ export const KPI_LABELS: Record<string, string> = {
   regionalRecontact: '재접촉 필요',
   regionalDataReadiness: '데이터 준비',
   regionalGovernance: '거버넌스/로그 완전성',
+  regionalAdTransitionHotspot: 'AD 전환 위험 집중',
+  regionalDxDelayHotspot: '감별검사 지연',
+  regionalScreenToDxRate: '선별→정밀연계 전환율',
 };
 
 export function getKpiLabel(kpiKey: string): string {

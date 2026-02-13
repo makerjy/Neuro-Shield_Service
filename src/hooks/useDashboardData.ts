@@ -51,18 +51,24 @@ function toRegionList(scope: DashboardScope): Array<{ code: string; name: string
   if (scope.subRegions?.length) {
     return scope.subRegions.map((region) => ({ code: region.id, name: region.name }));
   }
-  if (scope.regionCode && scope.regionName) {
-    return [{ code: scope.regionCode, name: scope.regionName }];
-  }
   return undefined;
 }
 
-function buildDashboardQueryKey(scope: DashboardScope, period: CentralTimeWindow, selectedKpi: CentralKpiId) {
-  return ['dashboard', scope.level, scope.regionCode ?? 'KR', period, selectedKpi] as const;
+function buildDashboardQueryKey(
+  scope: DashboardScope,
+  period: CentralTimeWindow,
+  selectedKpi: CentralKpiId,
+  periodVariant?: string
+) {
+  const subRegionSignature = scope.subRegions?.length
+    ? scope.subRegions.map((region) => region.id).join('|')
+    : 'none';
+  return ['dashboard', scope.level, scope.regionCode ?? 'KR', subRegionSignature, period, periodVariant ?? 'default', selectedKpi] as const;
 }
 
 interface UseDashboardDataOptions {
   loadDrilldown?: boolean;
+  periodVariant?: string;
 }
 
 export function useDashboardData(
@@ -74,12 +80,16 @@ export function useDashboardData(
   const queryClient = useQueryClient();
   const regionList = useMemo(() => toRegionList(scope), [scope]);
   const shouldLoadDrilldown = options.loadDrilldown ?? false;
-  const baseKey = useMemo(() => buildDashboardQueryKey(scope, period, selectedKpi), [scope, period, selectedKpi]);
+  const periodVariant = options.periodVariant;
+  const baseKey = useMemo(
+    () => buildDashboardQueryKey(scope, period, selectedKpi, periodVariant),
+    [scope, period, periodVariant, selectedKpi]
+  );
 
   const centralKpisQuery = useQuery({
     queryKey: [...baseKey, 'kpis'],
     queryFn: async () => {
-      const response = await fetchCentralKpis(period);
+      const response = await fetchCentralKpis(period, periodVariant);
       return response.kpis as CentralKpiValue[];
     },
     placeholderData: keepPreviousData,
@@ -90,7 +100,7 @@ export function useDashboardData(
 
   const dashboardBundleQuery = useQuery({
     queryKey: [...baseKey, 'bundle'],
-    queryFn: () => fetchCentralDashboardBundle(period, regionList, scope.level, scope.regionCode),
+    queryFn: () => fetchCentralDashboardBundle(period, regionList, scope.level, scope.regionCode, periodVariant),
     placeholderData: keepPreviousData,
     staleTime: QUERY_STALE_TIME_MS,
     gcTime: QUERY_GC_TIME_MS,
@@ -101,10 +111,10 @@ export function useDashboardData(
     queryKey: [...baseKey, 'drilldown'],
     queryFn: async (): Promise<DrilldownData> => {
       const [funnel, bottleneck, linkage, regions] = await Promise.all([
-        fetchCentralFunnel(period),
-        fetchCentralBottlenecks(period),
-        fetchCentralLinkage(period),
-        fetchCentralRegions(period),
+        fetchCentralFunnel(period, periodVariant),
+        fetchCentralBottlenecks(period, periodVariant),
+        fetchCentralLinkage(period, periodVariant),
+        fetchCentralRegions(period, periodVariant),
       ]);
       return {
         funnelData: funnel.stages,
@@ -123,16 +133,16 @@ export function useDashboardData(
   const prefetchScope = useCallback(
     (nextScope: DashboardScope) => {
       const nextRegionList = toRegionList(nextScope);
-      const nextBaseKey = buildDashboardQueryKey(nextScope, period, selectedKpi);
+      const nextBaseKey = buildDashboardQueryKey(nextScope, period, selectedKpi, periodVariant);
 
       queryClient.prefetchQuery({
         queryKey: [...nextBaseKey, 'bundle'],
-        queryFn: () => fetchCentralDashboardBundle(period, nextRegionList, nextScope.level, nextScope.regionCode),
+        queryFn: () => fetchCentralDashboardBundle(period, nextRegionList, nextScope.level, nextScope.regionCode, periodVariant),
         staleTime: QUERY_STALE_TIME_MS,
         gcTime: QUERY_GC_TIME_MS,
       });
     },
-    [period, queryClient, selectedKpi]
+    [period, periodVariant, queryClient, selectedKpi]
   );
 
   const hasInitialData = Boolean(dashboardBundleQuery.data && centralKpisQuery.data);

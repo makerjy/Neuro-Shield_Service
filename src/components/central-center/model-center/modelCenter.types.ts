@@ -11,25 +11,91 @@ export type StageId = "stage1" | "stage2" | "stage3";
 /** 2차 진단 분류 라벨 (기관 연계 결과) */
 export type DiagnosisClass = "AD" | "MCI" | "NORMAL";
 
+export type BatchStatus = "completed" | "running" | "partial" | "delayed" | "failed";
+export type BatchStageTag = "S1" | "S2" | "S3";
+
+export interface Stage2Distribution {
+  baseDate: string;
+  receivedN: number;
+  adPct: number;
+  mciPct: number;
+  normalPct: number;
+}
+
+export interface Stage3Enrollment {
+  baseDate: string;
+  stage2ReceivedN: number;
+  mciEnrollPct: number;
+  adEnrollPct: number;
+}
+
+export interface BatchMeta {
+  baseDate: string;
+  receiveDeadline: string;
+  modelWindow: string;
+  dispatchTime: string;
+  status: BatchStatus;
+  impactedStages?: BatchStageTag[];
+  notes?: string;
+  receiveRate?: number;
+  missingInstitutionCount?: number;
+  expectedRetryAt?: string;
+}
+
+export interface DispatchLog {
+  stage: BatchStageTag;
+  destination: "중앙" | "광역" | "치매안심센터";
+  sentCount: number;
+  failedCount: number;
+  retryCount: number;
+  lastSentAt: string;
+  slaStatus: "ok" | "delayed" | "breached";
+}
+
+export interface HoverMetaBase {
+  stage: BatchStageTag;
+  title: string;
+  baseDate: string; // D-1
+  definition: string;
+  denominator: { label: string; n: number };
+  coverage?: { receivedPct?: number; partial?: boolean; notes?: string };
+  outputs: string[]; // 최대 3개
+  caution?: string; // 1줄
+  modelChip?: string; // "ML v3.2.1" 등
+  dispatchChip?: string; // "전송: 완료/지연" 등
+}
+
 /* ─── KPI Strip ─── */
 export interface PipelineKpi {
   key: string;
   label: string;
   value: number;
+  valuePrefix?: string;
+  secondaryValueLine?: string;
   unit?: "%" | "명" | "일" | "건";
   delta?: number;             // 전주/전월 대비
+  baseDate: string;           // D-1 기준일
+  partialStages?: BatchStageTag[];
   scopeLine: string;          // "전국 집계 / 비식별"
   status?: "good" | "warn" | "risk" | "neutral";
   help?: { title: string; body: string };
   jumpTo?: StageId;
   /** View Mode별로 이 카드가 교체되는지 여부 + 교체 시 대체 값 */
-  modeOverride?: Partial<Record<ViewMode, { label: string; value: number; unit?: string; status?: string }>>;
+  modeOverride?: Partial<Record<ViewMode, {
+    label: string;
+    value: number;
+    valuePrefix?: string;
+    secondaryValueLine?: string;
+    unit?: string;
+    status?: string;
+  }>>;
 }
 
 /* ─── Stage Overview ─── */
 export interface StageOverview {
   stageId: StageId;
   title: string;
+  examLabel: string;
   purposeLine: string;
   inputs: { name: string; desc: string }[];
   processing: { name: string; desc: string; version?: string }[];
@@ -47,7 +113,7 @@ export interface StageOverview {
 /* ─── Model Use Map ─── */
 export interface ModelUseNode {
   id: string;
-  group: "input" | "feature" | "model" | "output" | "ops";
+  group: "input" | "feature" | "model" | "output" | "dispatch" | "ops";
   label: string;
   shortDesc: string;
   /** 어느 Stage에 주로 소속되는지 (공통이면 "common") */
@@ -84,11 +150,23 @@ export interface InspectorContent {
     biasAlerts?: { group: string; level: "low" | "mid" | "high"; note: string }[];
     changeLog?: { version: string; date: string; summary: string; impact?: string }[];
   };
+  batchSummary?: {
+    impactedStages?: BatchStageTag[];
+    receiveRate?: number;
+    missingInstitutionCount?: number;
+    expectedRetryAt?: string;
+    impactedMetrics?: string[];
+    dispatchLogs?: DispatchLog[];
+  };
 }
 
 /* ─── Root View-Model ─── */
 export interface ModelCenterViewModel {
   lastUpdatedAt: string;
+  batchMeta?: BatchMeta;
+  dispatchLogs?: DispatchLog[];
+  stage2Distribution?: Stage2Distribution;
+  stage3Enrollment?: Stage3Enrollment;
   viewMode: ViewMode;
   kpis: PipelineKpi[];
   stages: StageOverview[];

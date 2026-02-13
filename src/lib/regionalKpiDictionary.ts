@@ -10,14 +10,20 @@ export type RegionalKpiKey =
   | 'regionalQueueRisk'      // 병목 큐 위험 점수
   | 'regionalRecontact'      // 재접촉 필요율
   | 'regionalDataReadiness'  // 데이터 충족률
-  | 'regionalGovernance';    // 로그 완전성
+  | 'regionalGovernance'     // 로그 완전성
+  | 'regionalAdTransitionHotspot' // AD 전환 위험 집중 지표
+  | 'regionalDxDelayHotspot'      // 감별검사 지연 지표
+  | 'regionalScreenToDxRate';     // 선별→정밀연계 전환율
 
 export type RegionalChartKey =
   | 'regionalSlaTrend'
   | 'regionalQueueRiskTrend'
   | 'regionalRecontactTrend'
   | 'regionalDataReadinessTrend'
-  | 'regionalGovernanceTrend';
+  | 'regionalGovernanceTrend'
+  | 'regionalAdTransitionHotspotTrend'
+  | 'regionalDxDelayHotspotTrend'
+  | 'regionalScreenToDxRateTrend';
 
 export type RegionalCalcBasis = 'case' | 'event';
 export type KpiDirection = 'higherWorse' | 'higherBetter';
@@ -134,6 +140,62 @@ export const REGIONAL_TOP_KPIS: RegionalKpiDef[] = [
     target: 95,
     defaultVisible: true,
     priority: 5,
+    direction: 'higherBetter',
+  },
+  {
+    kpiKey: 'regionalAdTransitionHotspot',
+    label: 'AD 전환 위험 집중 구역',
+    shortLabel: '전환 위험',
+    unit: '점',
+    calcBasis: 'case',
+    tooltip: '고위험 신호 밀집 구역의 전환 위험도 지표. 값이 높을수록 집중 관리 필요.',
+    color: '#dc2626',
+    iconBg: 'bg-rose-100 text-rose-700',
+    isTopKpi: true,
+    mapEligible: true,
+    tableEligible: true,
+    trendEligible: true,
+    target: 40,
+    invertColor: true,
+    defaultVisible: true,
+    priority: 6,
+    direction: 'higherWorse',
+  },
+  {
+    kpiKey: 'regionalDxDelayHotspot',
+    label: '감별검사 지연 구역',
+    shortLabel: '검사 지연',
+    unit: '일',
+    calcBasis: 'case',
+    tooltip: '감별검사 평균 대기일과 지연 비율을 결합한 운영 지표. 값이 높을수록 병목 해소가 필요.',
+    color: '#f97316',
+    iconBg: 'bg-orange-100 text-orange-700',
+    isTopKpi: true,
+    mapEligible: true,
+    tableEligible: true,
+    trendEligible: true,
+    target: 24,
+    invertColor: true,
+    defaultVisible: true,
+    priority: 7,
+    direction: 'higherWorse',
+  },
+  {
+    kpiKey: 'regionalScreenToDxRate',
+    label: '선별→정밀연계 전환율',
+    shortLabel: '전환율',
+    unit: '%',
+    calcBasis: 'case',
+    tooltip: '선별 이후 정밀연계 방문 완료율. 값이 낮을수록 운영 개입 우선순위가 높다.',
+    color: '#0f766e',
+    iconBg: 'bg-teal-100 text-teal-700',
+    isTopKpi: true,
+    mapEligible: true,
+    tableEligible: true,
+    trendEligible: true,
+    target: 70,
+    defaultVisible: true,
+    priority: 8,
     direction: 'higherBetter',
   },
 ];
@@ -398,6 +460,9 @@ export const OPS_TO_GEO_INDICATOR: Record<RegionalKpiKey, string> = {
   regionalRecontact: 'regional_recontact_rate',
   regionalDataReadiness: 'regional_data_readiness',
   regionalGovernance: 'regional_governance_missing',
+  regionalAdTransitionHotspot: 'regional_ad_transition_hotspot',
+  regionalDxDelayHotspot: 'regional_dx_delay_hotspot',
+  regionalScreenToDxRate: 'regional_screen_to_dx_rate',
 };
 
 /** KPI → 지도 색상 스키마 */
@@ -407,4 +472,7 @@ export const OPS_COLOR_SCHEME: Record<RegionalKpiKey, string> = {
   regionalRecontact: 'red',
   regionalDataReadiness: 'orange',
   regionalGovernance: 'purple',
+  regionalAdTransitionHotspot: 'red',
+  regionalDxDelayHotspot: 'orange',
+  regionalScreenToDxRate: 'teal',
 };

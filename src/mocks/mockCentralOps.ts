@@ -717,10 +717,11 @@ const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
    1) GET /central/dashboard/kpis?window=
 ───────────────────────────────────────────────────────────── */
 export async function fetchCentralKpis(
-  window: CentralTimeWindow = 'LAST_7D'
+  window: CentralTimeWindow = 'LAST_7D',
+  periodVariant = 'default'
 ): Promise<CentralDashboardKpisResponse> {
   await delay(200);
-  const seed = `central-kpis-${window}`;
+  const seed = `central-kpis-${window}-${periodVariant}`;
   const sparkline = (base: number, spread: number) =>
     Array.from({ length: 7 }, (_, i) => Number((base + _sv(`${seed}-sp-${i}`, -spread, spread)).toFixed(1)));
 
@@ -789,10 +790,11 @@ export async function fetchCentralKpis(
    2) GET /central/metrics/funnel?window=
 ───────────────────────────────────────────────────────────── */
 export async function fetchCentralFunnel(
-  window: CentralTimeWindow = 'LAST_7D'
+  window: CentralTimeWindow = 'LAST_7D',
+  periodVariant = 'default'
 ): Promise<FunnelResponse> {
   await delay(150);
-  const seed = `central-funnel-${window}`;
+  const seed = `central-funnel-${window}-${periodVariant}`;
   const reach = Math.round(_sv(`${seed}-reach`, 50000, 120000));
   const s0 = Math.round(reach * _sv(`${seed}-s0r`, 0.25, 0.40));
   const s1 = Math.round(s0 * _sv(`${seed}-s1r`, 0.10, 0.20));
@@ -827,10 +829,11 @@ export async function fetchCentralFunnel(
    3) GET /central/metrics/bottlenecks?window=
 ───────────────────────────────────────────────────────────── */
 export async function fetchCentralBottlenecks(
-  window: CentralTimeWindow = 'LAST_7D'
+  window: CentralTimeWindow = 'LAST_7D',
+  periodVariant = 'default'
 ): Promise<BottleneckResponse> {
   await delay(150);
-  const seed = `central-bn-${window}`;
+  const seed = `central-bn-${window}-${periodVariant}`;
   const metrics: BottleneckMetric[] = [
     // 동의 병목
     { key: 'consent_pending_rate', label: '동의 보류율', value: Number(_sv(`${seed}-cp`, 15, 45).toFixed(1)), unit: '%', threshold: 30, status: _sv(`${seed}-cp`, 15, 45) > 30 ? 'red' : _sv(`${seed}-cp`, 15, 45) > 20 ? 'yellow' : 'green', category: 'consent' },
@@ -852,10 +855,11 @@ export async function fetchCentralBottlenecks(
    4) GET /central/metrics/linkage?window=
 ───────────────────────────────────────────────────────────── */
 export async function fetchCentralLinkage(
-  window: CentralTimeWindow = 'LAST_7D'
+  window: CentralTimeWindow = 'LAST_7D',
+  periodVariant = 'default'
 ): Promise<LinkageResponse> {
   await delay(150);
-  const seed = `central-link-${window}`;
+  const seed = `central-link-${window}-${periodVariant}`;
   const metrics: LinkageMetric[] = [
     {
       stage: 'stage2',
@@ -888,10 +892,11 @@ export async function fetchCentralLinkage(
    5) GET /central/metrics/regions?window=
 ───────────────────────────────────────────────────────────── */
 export async function fetchCentralRegions(
-  window: CentralTimeWindow = 'LAST_7D'
+  window: CentralTimeWindow = 'LAST_7D',
+  periodVariant = 'default'
 ): Promise<RegionComparisonResponse> {
   await delay(200);
-  const seed = `central-reg-${window}`;
+  const seed = `central-reg-${window}-${periodVariant}`;
   const rows: RegionComparisonRow[] = REGION_LIST.map(r => {
     const rs = `${seed}-${r.code}`;
     return {
@@ -957,11 +962,12 @@ export async function fetchCentralDashboardBundle(
   window: CentralTimeWindow = 'LAST_7D',
   regionList?: { code: string; name: string }[],
   drillLevel?: string,
-  regionCode?: string
+  regionCode?: string,
+  periodVariant = 'default'
 ): Promise<DashboardData> {
   // delay 제거 — 즉시 응답
   const scopeKey = regionCode ? `${drillLevel}-${regionCode}` : 'nation';
-  const seed = `bundle-${window}-${scopeKey}`;
+  const seed = `bundle-${window}-${periodVariant}-${scopeKey}`;
 
   // 드릴다운 시 전달받은 하위 지역 목록 사용, 없으면 전국 17개 시도
   const activeRegions = (regionList && regionList.length > 0) ? regionList : REGION_LIST;

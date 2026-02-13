@@ -70,8 +70,9 @@ function stage1SlaLabel(summary: Stage1HeaderSummary | null) {
 export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
   const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
   const [stage1HeaderSummary, setStage1HeaderSummary] = useState<Stage1HeaderSummary | null>(null);
+  const stageLikeStage1 = stage === "Stage 1";
   const stage1IdentityLine =
-    stage === "Stage 1" && profile
+    stageLikeStage1 && profile
       ? `연령대 ${toAgeBand(profile.profile.age)} · 연락처 ${maskPhone(profile.profile.phone)} · 케이스키 ${profile.id}`
       : null;
 
@@ -126,7 +127,7 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
           </div>
         </div>
 
-        {stage === "Stage 1" && stage1HeaderSummary ? (
+        {stageLikeStage1 && stage1HeaderSummary ? (
           <div className="mt-3 rounded-xl border border-slate-700 bg-gradient-to-r from-slate-900 to-slate-800 px-3 py-2 text-white">
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
               <span className="rounded-md bg-white/15 px-2 py-1">접촉 방식 {stage1StrategyLabel(stage1HeaderSummary)}</span>
@@ -143,7 +144,7 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {stage === "Stage 1" ? (
+        {stageLikeStage1 ? (
           <>
             <Stage1OpsDetail
               caseRecord={profile}

@@ -18,7 +18,7 @@ import {
   Legend,
 } from 'recharts';
 
-export type ChartUnit = '건' | '%' | '점' | '%p';
+export type ChartUnit = '건' | '%' | '점' | '일' | '%p';
 
 type NamedValue = { name: string; value: number };
 
@@ -62,6 +62,7 @@ export function formatDelta(value: number, unit: '건' | '점' | '%p' = '%p'): s
 export function formatByUnit(value: number, unit: ChartUnit): string {
   if (unit === '건') return `${formatNumber(value)}건`;
   if (unit === '점') return `${Math.round(value)}점`;
+  if (unit === '일') return `${Math.round(value)}일`;
   if (unit === '%') return formatPercent(value, 1);
   return formatDelta(value, '%p');
 }
@@ -69,6 +70,7 @@ export function formatByUnit(value: number, unit: ChartUnit): string {
 function formatLabelByUnit(value: number, unit: ChartUnit): string {
   if (unit === '건') return `${formatCompact(value)}건`;
   if (unit === '점') return `${formatCompact(value)}점`;
+  if (unit === '일') return `${Math.round(value)}일`;
   if (unit === '%') return `${value.toFixed(1)}%`;
   return `${value > 0 ? '+' : ''}${value.toFixed(1)}%p`;
 }

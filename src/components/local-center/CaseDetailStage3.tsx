@@ -1,5 +1,5 @@
 import React from "react";
-import { Stage3CaseDetailPage } from "./stage3/Stage3CaseDetailPage";
+import { StageMirrorDetail } from "./shared/StageMirrorDetail";
 
 interface CaseDetailStage3Props {
   caseId: string;
@@ -7,5 +7,5 @@ interface CaseDetailStage3Props {
 }
 
 export function CaseDetailStage3({ caseId, onBack }: CaseDetailStage3Props) {
-  return <Stage3CaseDetailPage caseId={caseId} onBack={onBack} />;
+  return <StageMirrorDetail caseId={caseId} stage="Stage 3" onBack={onBack} />;
 }

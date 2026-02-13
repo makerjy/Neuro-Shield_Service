@@ -22,7 +22,10 @@ export const GEO_INDICATORS: GeoIndicator[] = [
   { id: 'regional_queue_risk', label: '시군구별 병목 점수', unit: '점', scale: [15, 95] },
   { id: 'regional_recontact_rate', label: '시군구별 재접촉 필요율', unit: '%', scale: [4, 38] },
   { id: 'regional_data_readiness', label: '시군구별 데이터 충족률', unit: '%', scale: [62, 99] },
-  { id: 'regional_governance_missing', label: '시군구별 로그 누락률', unit: '%', scale: [1, 28] }
+  { id: 'regional_governance_missing', label: '시군구별 로그 누락률', unit: '%', scale: [1, 28] },
+  { id: 'regional_ad_transition_hotspot', label: '시군구별 AD 전환 위험 집중도', unit: '점', scale: [18, 92] },
+  { id: 'regional_dx_delay_hotspot', label: '시군구별 감별검사 평균 대기일', unit: '일', scale: [9, 68] },
+  { id: 'regional_screen_to_dx_rate', label: '시군구별 선별→정밀연계 전환율', unit: '%', scale: [34, 91] },
 ];
 
 export function getGeoIndicator(id: string): GeoIndicator {

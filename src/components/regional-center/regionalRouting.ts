@@ -120,7 +120,10 @@ export function parseRegionalSelection(search: string, fallbackKpi: KpiKey): Reg
     kpiParam === 'regionalQueueRisk' ||
     kpiParam === 'regionalRecontact' ||
     kpiParam === 'regionalDataReadiness' ||
-    kpiParam === 'regionalGovernance'
+    kpiParam === 'regionalGovernance' ||
+    kpiParam === 'regionalAdTransitionHotspot' ||
+    kpiParam === 'regionalDxDelayHotspot' ||
+    kpiParam === 'regionalScreenToDxRate'
       ? kpiParam
       : fallbackKpi;
 

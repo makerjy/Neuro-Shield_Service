@@ -5,17 +5,27 @@ import {
   type SecondExamStatus,
 } from "../caseData";
 import type {
+  CaseStage2Status,
+  BranchPlan,
+  ClinicalSummary,
+  DomainScore,
   FollowUpState,
+  FollowUpPlan,
+  LinkageStatus,
   MciSubClass,
+  NeuropsychSummary,
+  Stage2AuditEvent,
   Stage2AuditLogItem,
   Stage2CaseDetailData,
   Stage2ChecklistItem,
   Stage2Class,
   Stage2Decision,
   Stage2MemoItem,
+  Stage2FollowupTodo,
   Stage2StepKey,
   Stage2Steps,
   Stage2TimelineItem,
+  TodoType,
   StepStatus,
 } from "./stage2Types";
 
@@ -198,12 +208,31 @@ function buildSteps(baseCase: Case): Stage2Steps {
 function buildDecision(baseCase: Case, steps: Stage2Steps): Stage2Decision {
   const confirmedClass = deriveClassFromRisk(baseCase);
   const classLabel: Stage2Class = canConfirmDecision(steps) ? confirmedClass : "UNCONFIRMED";
+  const finalClass =
+    classLabel === "DEMENTIA"
+      ? "AD_SUSPECT"
+      : classLabel === "NORMAL"
+        ? "NORMAL"
+        : classLabel === "MCI"
+          ? "MCI"
+          : "UNCONFIRMED";
+  const decidedAt =
+    classLabel === "UNCONFIRMED"
+      ? undefined
+      : toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-decision-at`);
 
   return {
     class: classLabel,
     mciSubClass: classLabel === "MCI" ? deriveMciSubclass(baseCase) : null,
     confidenceNote: confidenceNote(steps),
     evidence: mapEvidence(baseCase, steps, classLabel),
+    finalClass,
+    decidedAt,
+    decidedBy: classLabel === "UNCONFIRMED" ? undefined : baseCase.counselor,
+    rationaleSummary:
+      classLabel === "UNCONFIRMED"
+        ? "Step3/Step4 미완료로 운영상 분류 확정 대기"
+        : `검사 기반 분류 ${finalClass} · 운영 강도 조정 필요`,
   };
 }
 
@@ -245,6 +274,216 @@ function buildFollowUp(baseCase: Case, decision: Stage2Decision): FollowUpState 
     reservationStatus: reservationFromCase(baseCase),
     programPlan: buildProgramDomains(decision),
   };
+}
+
+function buildBirthDate(age: number, seed: string): string {
+  const nowYear = new Date().getFullYear();
+  const year = nowYear - age;
+  const month = String(1 + Math.floor(seeded(`${seed}-birth-month`) * 12)).padStart(2, "0");
+  const day = String(1 + Math.floor(seeded(`${seed}-birth-day`) * 27)).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function buildDomainScores(baseCase: Case): DomainScore[] {
+  const base = Math.max(18, Math.min(30, Math.round(30 - (baseCase.riskScore - 45) * 0.16)));
+  const gradeOf = (score: number): DomainScore["grade"] => (score >= 24 ? "정상" : score >= 20 ? "경계" : "저하");
+  const scoreFrom = (delta: number) => Math.max(10, Math.min(30, base + delta));
+  return [
+    { domain: "MEMORY", score: scoreFrom(-3), grade: gradeOf(scoreFrom(-3)), summary: "최근 기억 회상 변동 관찰" },
+    { domain: "ATTENTION", score: scoreFrom(-1), grade: gradeOf(scoreFrom(-1)), summary: "주의 지속시간 약간 저하" },
+    { domain: "EXECUTIVE", score: scoreFrom(-2), grade: gradeOf(scoreFrom(-2)), summary: "집행기능 과제 반응 지연" },
+    { domain: "LANGUAGE", score: scoreFrom(0), grade: gradeOf(scoreFrom(0)), summary: "언어 기능은 비교적 보존" },
+    { domain: "VISUOSPATIAL", score: scoreFrom(-2), grade: gradeOf(scoreFrom(-2)), summary: "시공간 과제 일부 실수" },
+  ];
+}
+
+function buildNeuropsychSummary(baseCase: Case, steps: Stage2Steps): NeuropsychSummary {
+  const domains = buildDomainScores(baseCase);
+  const cistTotal = Math.max(12, Math.min(30, Math.round(domains.reduce((acc, cur) => acc + cur.score, 0) / domains.length)));
+  return {
+    cistTotal,
+    domains,
+    missingCount: steps.neuropsych.missingCount ?? 0,
+    freshness: steps.neuropsych.date ? "LATEST" : "UNKNOWN",
+    updatedAt: steps.neuropsych.date ?? toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-neuro-summary`),
+  };
+}
+
+function buildClinicalSummary(baseCase: Case, steps: Stage2Steps): ClinicalSummary {
+  const risk = baseCase.riskScore;
+  const adlImpact: ClinicalSummary["adlImpact"] = risk >= 70 ? "YES" : risk >= 50 ? "UNKNOWN" : "NO";
+  const flags: ClinicalSummary["flags"] = [];
+  if (risk >= 58) flags.push("MOOD");
+  if (risk >= 64) flags.push("SLEEP");
+  if (risk >= 72) flags.push("MEDICATION");
+  return {
+    adlImpact,
+    caregiverNote:
+      adlImpact === "YES"
+        ? "보호자 관찰: 최근 일상 루틴 유지가 어렵고 복약 관리가 불안정함."
+        : adlImpact === "UNKNOWN"
+          ? "보호자 관찰: 경미한 건망 반응이 있으나 기능 저하는 추가 확인 필요."
+          : "보호자 관찰: 일상 기능은 대체로 유지됨.",
+    flags,
+    needDifferential: risk >= 68 || steps.specialist.status !== "DONE",
+    updatedAt: steps.clinicalEval.date ?? toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-clinical-summary`),
+  };
+}
+
+function toBranch(decision: Stage2Decision): BranchPlan["branch"] {
+  if (decision.class === "DEMENTIA") return "AD_SUSPECT";
+  if (decision.class === "MCI") return "MCI";
+  if (decision.class === "NORMAL") return "NORMAL";
+  return "UNCONFIRMED";
+}
+
+function toIntensity(baseCase: Case, decision: Stage2Decision): BranchPlan["intensityLevel"] {
+  if (decision.class === "DEMENTIA" || (decision.class === "MCI" && decision.mciSubClass === "HIGH_RISK")) return "L3";
+  if (baseCase.riskScore >= 60 || decision.class === "MCI") return "L2";
+  return "L1";
+}
+
+function buildBranchPlan(baseCase: Case, decision: Stage2Decision, steps: Stage2Steps, followUp: FollowUpState): BranchPlan {
+  return {
+    branch: toBranch(decision),
+    intensityLevel: toIntensity(baseCase, decision),
+    nextActions: [
+      { id: "confirm-result", label: "2차 평가 결과 확정", done: steps.clinicalEval.status === "DONE" && steps.specialist.status === "DONE" },
+      { id: "set-branch", label: "분기/운영 강도 설정", done: decision.class !== "UNCONFIRMED" },
+      {
+        id: "linkage",
+        label: "연계/예약 실행",
+        done: followUp.referralStatus === "SENT" || followUp.reservationStatus === "CONFIRMED",
+      },
+      { id: "followup", label: "추적 계획 생성", done: Boolean(followUp.programPlan) || followUp.reevalTrigger === "ON" },
+    ],
+  };
+}
+
+function buildLinkageStatuses(baseCase: Case, followUp: FollowUpState): LinkageStatus[] {
+  const reservationDate = baseCase.reservation ? `${baseCase.reservation.date} ${baseCase.reservation.time}` : undefined;
+  return [
+    {
+      type: "CENTER",
+      status: followUp.trackingRegistered ? "CREATED" : "NOT_CREATED",
+      lastActor: baseCase.counselor,
+      lastAt: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-center-link`),
+      nextSchedule: reservationDate,
+    },
+    {
+      type: "HOSPITAL",
+      status:
+        followUp.referralStatus === "SENT" ? "COMPLETED" : followUp.referralStatus === "DRAFT" ? "CREATED" : "NOT_CREATED",
+      lastActor: baseCase.counselor,
+      lastAt: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-hospital-link`),
+      nextSchedule: reservationDate,
+    },
+    {
+      type: "COUNSELING",
+      status:
+        followUp.reservationStatus === "CONFIRMED"
+          ? "COMPLETED"
+          : followUp.reservationStatus === "REQUESTED"
+            ? "CREATED"
+            : "NOT_CREATED",
+      lastActor: baseCase.counselor,
+      lastAt: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-counseling-link`),
+      nextSchedule: reservationDate,
+    },
+  ];
+}
+
+function buildFollowUpPlan(baseCase: Case, branchPlan: BranchPlan): FollowUpPlan {
+  const cadence: FollowUpPlan["cadence"] =
+    branchPlan.intensityLevel === "L3" ? "WEEKLY" : branchPlan.intensityLevel === "L2" ? "BIWEEKLY" : "MONTHLY";
+  const dayShift = cadence === "WEEKLY" ? 7 : cadence === "BIWEEKLY" ? 14 : 30;
+  const date = new Date();
+  date.setDate(date.getDate() + dayShift);
+  return {
+    cadence,
+    nextDate: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
+    stage3Enroll: branchPlan.intensityLevel !== "L1",
+    notes:
+      branchPlan.intensityLevel === "L3"
+        ? "재검 임박군 우선 모니터링 및 보호자 동행 권고"
+        : "정기 추적과 생활습관 프로그램 안내",
+  };
+}
+
+function buildAuditEvents(baseCase: Case, decision: Stage2Decision, branchPlan: BranchPlan, followUpPlan: FollowUpPlan): Stage2AuditEvent[] {
+  return [
+    {
+      at: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-evt-1`),
+      actor: baseCase.counselor,
+      action: "2차 평가 결과 확정",
+      reason: decision.rationaleSummary,
+      summary: `분류 ${decision.finalClass ?? "UNCONFIRMED"} / 강도 ${branchPlan.intensityLevel}`,
+    },
+    {
+      at: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-evt-2`),
+      actor: baseCase.counselor,
+      action: "분기/레벨 변경",
+      reason: "검사 기반 분류",
+      summary: branchPlan.nextActions.map((item) => `${item.label}:${item.done ? "완료" : "대기"}`).join(", "),
+    },
+    {
+      at: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-evt-3`),
+      actor: "운영 시스템",
+      action: "추적 계획 생성",
+      reason: `추적 주기 ${followUpPlan.cadence}`,
+      summary: `다음 일정 ${followUpPlan.nextDate} / Stage3 등록 ${followUpPlan.stage3Enroll ? "예정" : "미정"}`,
+    },
+  ];
+}
+
+function buildStage2Status(steps: Stage2Steps, decision: Stage2Decision, baseCase: Case): CaseStage2Status {
+  if (baseCase.contactStatus === "UNREACHED") return "WAITING";
+  if (decision.class !== "UNCONFIRMED") return "JUDGMENT_DONE";
+  if (steps.specialist.status === "PENDING") return "RESULT_WAITING";
+  if (steps.clinicalEval.status === "MISSING" || steps.specialist.status === "MISSING") return "ON_HOLD";
+  return "IN_PROGRESS";
+}
+
+function buildTodoType(decision: Stage2Decision): TodoType {
+  if (decision.class === "NORMAL") return "NORMAL_REANALYSIS";
+  if (decision.class === "MCI" && decision.mciSubClass === "MILD_OK") return "MCI_MILD_TRACKING";
+  if (decision.class === "MCI" && decision.mciSubClass === "MODERATE") return "MCI_MODERATE_TRACKING";
+  if (decision.class === "MCI" && decision.mciSubClass === "HIGH_RISK") return "MCI_HIGH_RISK_DIFF_TEST";
+  return "DEMENTIA_DIFF_TEST";
+}
+
+function buildFollowupTodos(baseCase: Case, decision: Stage2Decision, followUpPlan: FollowUpPlan): Stage2FollowupTodo[] {
+  const timestamp = toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-todo-created`);
+  const coreTodo: Stage2FollowupTodo = {
+    id: `${baseCase.id}-todo-core`,
+    type: buildTodoType(decision),
+    title:
+      decision.class === "NORMAL"
+        ? "재분석 예약(검진 업데이트 시점)"
+        : decision.class === "MCI" && decision.mciSubClass === "MILD_OK"
+          ? "추적 + 신체건강 사례관리"
+          : decision.class === "MCI" && decision.mciSubClass === "MODERATE"
+            ? "추적 + 인지/신체 사례관리"
+            : "감별검사 연계(권고)",
+    status: decision.class === "UNCONFIRMED" ? "WAITING" : "IN_PROGRESS",
+    assignee: baseCase.counselor,
+    dueDate: followUpPlan.nextDate,
+    createdAt: timestamp,
+  };
+
+  const items: Stage2FollowupTodo[] = [coreTodo];
+  if (baseCase.contactStatus === "UNREACHED") {
+    items.push({
+      id: `${baseCase.id}-todo-recontact`,
+      type: "NO_RESPONSE_RETRY",
+      title: "무응답 재접촉 계획 생성",
+      status: "WAITING",
+      assignee: baseCase.counselor,
+      dueDate: followUpPlan.nextDate,
+      createdAt: timestamp,
+    });
+  }
+  return items;
 }
 
 function mapTimelineStatus(status: StepStatus): Stage2TimelineItem["status"] {
@@ -398,9 +637,68 @@ export function buildStage2CaseDetailMock(baseCase: Case): Stage2CaseDetailData 
   const steps = buildSteps(baseCase);
   const decision = buildDecision(baseCase, steps);
   const followUp = buildFollowUp(baseCase, decision);
+  const neuropsychSummary = buildNeuropsychSummary(baseCase, steps);
+  const clinicalSummary = buildClinicalSummary(baseCase, steps);
+  const branchPlan = buildBranchPlan(baseCase, decision, steps, followUp);
+  const linkageStatuses = buildLinkageStatuses(baseCase, followUp);
+  const followUpPlan = buildFollowUpPlan(baseCase, branchPlan);
+  const auditEvents = buildAuditEvents(baseCase, decision, branchPlan, followUpPlan);
   const timeline = buildTimeline(baseCase, steps, decision, followUp);
   const checklist = buildChecklist(baseCase, steps);
   const missingTotal = calcMissingTotal(steps, followUp, baseCase);
+  const stage2Status = buildStage2Status(steps, decision, baseCase);
+  const stage2EnteredAt = toDateTime(baseCase.registeredDate, `${baseCase.id}-stage2-entered`);
+  const targetCompletionDate = new Date();
+  targetCompletionDate.setDate(targetCompletionDate.getDate() + 14);
+  const targetCompletionAt = `${targetCompletionDate.getFullYear()}-${String(targetCompletionDate.getMonth() + 1).padStart(2, "0")}-${String(targetCompletionDate.getDate()).padStart(2, "0")} 18:00`;
+  const referral = {
+    status:
+      followUp.referralStatus === "SENT"
+        ? "RESULT_RECEIVED"
+        : followUp.reservationStatus === "CONFIRMED"
+          ? "RESERVATION_CONFIRMED"
+          : followUp.reservationStatus === "REQUESTED"
+            ? "RESERVATION_REQUESTED"
+            : followUp.referralStatus === "DRAFT"
+              ? "REFERRED"
+              : "BEFORE_REFERRAL",
+    org: "강남구 협력병원",
+    contact: "02-777-2200",
+    schedule: baseCase.reservation ? `${baseCase.reservation.date} ${baseCase.reservation.time}` : undefined,
+    resultReceivedAt: baseCase.secondExamStatus === "RESULT_CONFIRMED" ? toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-result-received`) : undefined,
+    lastRequestedAt: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-request-at`),
+    owner: baseCase.counselor,
+  } as const;
+  const diagnosis = {
+    finalClass: decision.finalClass,
+    mciSubtype: decision.mciSubClass,
+    confirmedBy: decision.decidedBy,
+    confirmedAt: decision.decidedAt,
+    rationale: decision.rationaleSummary,
+  };
+  const followupTodos = buildFollowupTodos(baseCase, decision, followUpPlan);
+  const commLogs = [
+    {
+      id: `${baseCase.id}-comm-1`,
+      channel: "CALL" as const,
+      result: baseCase.contactStatus === "REACHED" ? "연락 성공" : "연락 불가",
+      at: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-comm-1`),
+      note: "2차 운영 안내",
+    },
+    {
+      id: `${baseCase.id}-comm-2`,
+      channel: "SMS" as const,
+      templateLabel: "2차 예약안내",
+      result: "SENT",
+      at: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-comm-2`),
+      note: "예약 링크 안내",
+    },
+  ];
+  const stage1EvidenceSummary = [
+    "건강검진 위험 신호 반영",
+    "1차 선별결과 고위험군 플래그",
+    "접촉 로그 기반 2차 평가 연계",
+  ];
 
   return {
     caseId: baseCase.id,
@@ -409,16 +707,62 @@ export function buildStage2CaseDetailMock(baseCase: Case): Stage2CaseDetailData 
     roleLabel: "사례 관리자",
     stageLabel: "Stage 2",
     workStatus: toWorkStatus(baseCase),
+    stage2Status,
+    stage2EnteredAt,
+    targetCompletionAt,
     lastUpdatedAt: toDateTime(baseCase.autoMemo.lastUpdatedAt, `${baseCase.id}-updated`),
     missingTotal,
     steps,
     decision,
     followUp,
+    bottleneckCode:
+      steps.clinicalEval.status !== "DONE" || steps.specialist.status !== "DONE"
+        ? "MISSING_DOCS"
+        : followUp.reservationStatus === "NOT_REGISTERED"
+          ? "RESERVATION_PENDING"
+          : "NONE",
+    bottleneckMemo: "필수 단계 우선 점검",
+    stage1EvidenceSummary,
+    neuropsychTest: neuropsychSummary,
+    clinicalEvalData: clinicalSummary,
+    specialistVisit: {
+      status: steps.specialist.status,
+      summary: steps.specialist.summary ?? "전문의 진찰 요약 없음",
+      date: steps.specialist.date,
+    },
+    referral,
+    diagnosis,
+    followupTodos,
+    commLogs,
     timeline,
     checklist,
     auditLogs: buildAuditLogs(baseCase),
     memos: buildMemos(baseCase),
+    neuropsychSummary,
+    clinicalSummary,
+    branchPlan,
+    linkageStatuses,
+    followUpPlan,
+    auditEvents,
     pii: {
+      fullName: baseCase.patientName,
+      birthDate: buildBirthDate(baseCase.age, `${baseCase.id}-birth`),
+      phone: baseCase.phone,
+      address: `${baseCase.id.endsWith("7") ? "서울시 강남구 논현동" : "서울시 강남구 역삼동"} ${101 + (baseCase.age % 10)}동 ${1001 + (baseCase.riskScore % 20)}호`,
+      guardianName: baseCase.guardianPhone ? "보호자(가족)" : undefined,
+      guardianPhone: baseCase.guardianPhone,
+      consentStatus:
+        baseCase.contactStatus === "REACHED" && baseCase.consultStatus === "DONE"
+          ? "완료"
+          : baseCase.contactStatus === "REACHED"
+            ? "진행 중"
+            : "갱신 필요",
+      medicalHistory:
+        baseCase.riskLevel === "high"
+          ? ["고혈압", "당뇨", "고지혈증"]
+          : baseCase.riskLevel === "medium"
+            ? ["고혈압"]
+            : [],
       maskedName: baseCase.patientName,
       maskedPhone: maskPhone(baseCase.phone),
       age: baseCase.age,
@@ -440,3 +784,5 @@ export function getStage2SampleCaseDetail(): Stage2CaseDetailData {
   const sample = generateCases()[3];
   return buildStage2CaseDetailMock(sample);
 }
+
+export const STAGE2_DETAILED_FIXTURE: Stage2CaseDetailData = buildStage2CaseDetailMock(generateCases()[5]);

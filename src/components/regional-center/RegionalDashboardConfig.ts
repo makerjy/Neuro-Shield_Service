@@ -1,7 +1,7 @@
 import type { RegionalKpiKey } from '../../lib/regionalKpiDictionary';
 
 export type RegionalDrilldownKind = 'inflow' | 'queue' | 'sla' | 'recontact' | 'centerRisk';
-export type RegionalKpiUnit = '건' | '%' | '점';
+export type RegionalKpiUnit = '건' | '%' | '점' | '일';
 export type RegionalKpiDirection = 'higherWorse' | 'higherBetter';
 
 export interface RegionalDashboardKpiConfig {
@@ -97,6 +97,51 @@ export const REGIONAL_DASHBOARD_KPIS: RegionalDashboardKpiConfig[] = [
     trendGoal: 40,
     color: '#7c3aed',
     iconBg: 'bg-violet-100 text-violet-700',
+  },
+  {
+    key: 'regionalAdTransitionHotspot',
+    label: 'AD 전환 예측 집중 구역',
+    shortLabel: '전환 위험',
+    unit: '점',
+    direction: 'higherWorse',
+    tooltip: '고위험 전환 신호가 밀집된 구역의 집중도 지표',
+    scopeLine: REGIONAL_SCOPE_LINE,
+    clickAction: '클릭하면 집중 구역·최근 신호 변화·권장 개입을 본다.',
+    drilldownKind: 'centerRisk',
+    mapMetricLabel: '시군구별 AD 전환 위험 집중도',
+    trendGoal: 42,
+    color: '#dc2626',
+    iconBg: 'bg-rose-100 text-rose-700',
+  },
+  {
+    key: 'regionalDxDelayHotspot',
+    label: '감별검사 지연 구역',
+    shortLabel: '검사 지연',
+    unit: '일',
+    direction: 'higherWorse',
+    tooltip: '감별검사 평균 대기일과 지연 비율을 결합한 병목 지표',
+    scopeLine: REGIONAL_SCOPE_LINE,
+    clickAction: '클릭하면 대기 병목 구역·지연 원인·조치 후보를 본다.',
+    drilldownKind: 'queue',
+    mapMetricLabel: '시군구별 감별검사 지연 대기일',
+    trendGoal: 24,
+    color: '#f97316',
+    iconBg: 'bg-orange-100 text-orange-700',
+  },
+  {
+    key: 'regionalScreenToDxRate',
+    label: '선별→정밀연계 전환율 비교',
+    shortLabel: '전환율',
+    unit: '%',
+    direction: 'higherBetter',
+    tooltip: '선별 이후 정밀연계 방문 완료율 비교 지표',
+    scopeLine: REGIONAL_SCOPE_LINE,
+    clickAction: '클릭하면 지역별 전환율 격차와 운영 제안을 본다.',
+    drilldownKind: 'sla',
+    mapMetricLabel: '시군구별 선별→정밀연계 전환율',
+    trendGoal: 68,
+    color: '#0f766e',
+    iconBg: 'bg-teal-100 text-teal-700',
   },
 ];
 

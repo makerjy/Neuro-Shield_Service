@@ -41,6 +41,9 @@ const KPI_LABEL: Record<KpiKey, string> = {
   regionalRecontact: 'SLA 위험',
   regionalDataReadiness: '재접촉 필요',
   regionalGovernance: '센터 리스크',
+  regionalAdTransitionHotspot: 'AD 전환 위험',
+  regionalDxDelayHotspot: '감별검사 지연',
+  regionalScreenToDxRate: '선별→정밀연계 전환율',
 };
 
 const hashSeed = (input: string) => {

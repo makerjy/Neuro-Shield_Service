@@ -28,7 +28,20 @@ type StageView = Extract<StageType, "Stage 1" | "Stage 2" | "Stage 3">;
 
 type Stage1ContactStatus = "미시도" | "시도중" | "성공" | "실패" | "재시도 필요";
 type Stage1Channel = "전화" | "문자" | "보호자";
-type Stage1NextAction = "재시도" | "예약 생성" | "보호자 전환" | "Stage2 전환";
+type Stage1NextAction = "재시도" | "예약 생성" | "보호자 전환" | "Stage2 전환" | "사전조건 점검" | "상태 확인";
+type Stage1OwnerType = "AGENT" | "HUMAN" | "UNASSIGNED";
+type Stage1PriorityTier = "L0" | "L1" | "L2" | "L3";
+type Stage1StatusFilter = "ALL" | "NOT_TRIED" | "RETRY_NEEDED" | "IN_PROGRESS" | "SUCCESS";
+type Stage1OwnerFilter = "ALL" | Stage1OwnerType;
+type Stage1PriorityFilter = "ALL" | "L3_ONLY" | "L2_L3" | "L0_L1";
+
+type Stage1PriorityFactor = {
+  key: "SLA_URGENCY" | "CONTACT_STALENESS" | "RISK_LEVEL" | "RETRY_NEEDED" | "CHANNEL_FRICTION";
+  label: string;
+  weight: number;
+  value: number;
+  contribution: number;
+};
 
 type Stage2Classification = "AD" | "MCI" | "정상" | "보류";
 type Stage2Confirmation = "임시" | "확정";
@@ -49,6 +62,7 @@ type QuickAction = {
   label: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   tone: string;
+  disabled?: boolean;
 };
 
 type StageRowBase = {
@@ -66,8 +80,15 @@ type Stage1Row = StageRowBase & {
   lastContactAttemptAt: string;
   channel: Stage1Channel;
   nextAction: Stage1NextAction;
+  ownerType: Stage1OwnerType;
+  ownerName?: string;
+  ownerReason: string;
+  priorityScore: number;
+  priorityTier: Stage1PriorityTier;
+  priorityFactors: Stage1PriorityFactor[];
   statusRank: number;
   lastContactMs: number;
+  slaUrgencyScore: number;
   slaHint?: "임박" | "지연";
 };
 
@@ -112,6 +133,28 @@ const STAGE_FILTER_OPTIONS: { label: string; value: StageView }[] = [
   { label: "Stage 3", value: "Stage 3" },
 ];
 
+const STAGE1_OWNER_FILTER_OPTIONS: Array<{ label: string; value: Stage1OwnerFilter }> = [
+  { label: "전체", value: "ALL" },
+  { label: "Agent", value: "AGENT" },
+  { label: "상담사", value: "HUMAN" },
+  { label: "미배정", value: "UNASSIGNED" },
+];
+
+const STAGE1_PRIORITY_FILTER_OPTIONS: Array<{ label: string; value: Stage1PriorityFilter }> = [
+  { label: "전체", value: "ALL" },
+  { label: "L3만", value: "L3_ONLY" },
+  { label: "L2~L3", value: "L2_L3" },
+  { label: "L0~L1", value: "L0_L1" },
+];
+
+const STAGE1_STATUS_FILTER_OPTIONS: Array<{ label: string; value: Stage1StatusFilter }> = [
+  { label: "전체", value: "ALL" },
+  { label: "미시도", value: "NOT_TRIED" },
+  { label: "재시도 필요", value: "RETRY_NEEDED" },
+  { label: "시도중", value: "IN_PROGRESS" },
+  { label: "성공", value: "SUCCESS" },
+];
+
 function parseUpdatedMs(updated: string) {
   const date = new Date(updated.replace(" ", "T"));
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
@@ -126,6 +169,200 @@ function addDaysText(updated: string, days: number) {
   if (Number.isNaN(base.getTime())) return updated.slice(0, 10);
   base.setDate(base.getDate() + days);
   return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}-${String(base.getDate()).padStart(2, "0")}`;
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function clamp100(value: number) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function priorityTierFromScore(score: number): Stage1PriorityTier {
+  if (score >= 85) return "L3";
+  if (score >= 70) return "L2";
+  if (score >= 50) return "L1";
+  return "L0";
+}
+
+function priorityTierTone(priorityTier: Stage1PriorityTier) {
+  if (priorityTier === "L3") return "bg-red-50 text-red-700 border-red-200";
+  if (priorityTier === "L2") return "bg-orange-50 text-orange-700 border-orange-200";
+  if (priorityTier === "L1") return "bg-blue-50 text-blue-700 border-blue-200";
+  return "bg-gray-100 text-gray-700 border-gray-200";
+}
+
+function interventionLevelLabel(priorityTier: Stage1PriorityTier) {
+  if (priorityTier === "L3") return "연계 강화";
+  if (priorityTier === "L2") return "접촉";
+  if (priorityTier === "L1") return "안내";
+  return "관찰";
+}
+
+function interventionLevelDetail(priorityTier: Stage1PriorityTier) {
+  if (priorityTier === "L3") return "2차 연계 요청 중심";
+  if (priorityTier === "L2") return "상담사 직접 연락 중심";
+  if (priorityTier === "L1") return "자가점검/정보 제공 중심";
+  return "기록/모니터링 중심";
+}
+
+function ownerTone(ownerType: Stage1OwnerType) {
+  if (ownerType === "AGENT") return "bg-indigo-50 text-indigo-700 border-indigo-200";
+  if (ownerType === "HUMAN") return "bg-emerald-50 text-emerald-700 border-emerald-200";
+  return "bg-gray-100 text-gray-700 border-gray-200";
+}
+
+function ownerLabel(ownerType: Stage1OwnerType) {
+  if (ownerType === "AGENT") return "Agent";
+  if (ownerType === "HUMAN") return "상담사";
+  return "미배정";
+}
+
+function priorityTooltipFactors(row: Stage1Row) {
+  return [...row.priorityFactors].sort((a, b) => b.contribution - a.contribution).slice(0, 3);
+}
+
+function stage1StatusFilterMatch(status: Stage1ContactStatus, filter: Stage1StatusFilter) {
+  if (filter === "ALL") return true;
+  if (filter === "NOT_TRIED") return status === "미시도";
+  if (filter === "RETRY_NEEDED") return status === "재시도 필요" || status === "실패";
+  if (filter === "IN_PROGRESS") return status === "시도중";
+  return status === "성공";
+}
+
+function stage1PriorityFilterMatch(priorityTier: Stage1PriorityTier, filter: Stage1PriorityFilter) {
+  if (filter === "ALL") return true;
+  if (filter === "L3_ONLY") return priorityTier === "L3";
+  if (filter === "L2_L3") return priorityTier === "L3" || priorityTier === "L2";
+  return priorityTier === "L1" || priorityTier === "L0";
+}
+
+function resolveStage1Owner(
+  item: CaseRecord,
+  contactStatus: Stage1ContactStatus,
+  channel: Stage1Channel
+): Pick<Stage1Row, "ownerType" | "ownerName" | "ownerReason"> {
+  const isGateBlocked = item.quality === "경고" || item.profile.phone.trim().length === 0;
+  if (isGateBlocked) {
+    return {
+      ownerType: "UNASSIGNED",
+      ownerName: undefined,
+      ownerReason: "사전 기준 점검 항목이 남아 있어 먼저 채널 검증이 필요합니다.",
+    };
+  }
+
+  const isAutoGuidePreferred = item.path.includes("문자") || item.action.includes("문자");
+  if (isAutoGuidePreferred) {
+    return {
+      ownerType: "AGENT",
+      ownerName: "자동 안내 Agent",
+      ownerReason: "자동안내 우선 경로로 접수되어 자동 발송/상태 확인 흐름이 적용됩니다.",
+    };
+  }
+
+  const requiresHumanFirst =
+    item.risk === "고" ||
+    item.alertTags.includes("이탈 위험") ||
+    (channel === "보호자" && (contactStatus === "재시도 필요" || contactStatus === "실패"));
+
+  if (requiresHumanFirst) {
+    return {
+      ownerType: "HUMAN",
+      ownerName: item.manager,
+      ownerReason: "채널 제약 또는 위험 신호가 있어 상담사 우선 접촉이 필요합니다.",
+    };
+  }
+
+  return {
+    ownerType: "HUMAN",
+    ownerName: item.manager,
+    ownerReason: "기본 운영 기준에서 상담사 직접 확인이 필요한 케이스입니다.",
+  };
+}
+
+function computeStage1Priority(
+  item: CaseRecord,
+  contactStatus: Stage1ContactStatus,
+  channel: Stage1Channel,
+  lastContactMs: number
+): Pick<Stage1Row, "priorityScore" | "priorityTier" | "priorityFactors" | "slaUrgencyScore"> {
+  const hasSlaAlert = item.alertTags.includes("SLA 임박");
+  const slaUrgency =
+    item.status === "임박" || item.status === "지연" || hasSlaAlert
+      ? 1
+      : item.status === "진행중"
+        ? 0.5
+        : item.status === "대기"
+          ? 0.35
+          : item.status === "완료"
+            ? 0.2
+            : 0;
+
+  const hoursSinceLastContact = lastContactMs > 0 ? (Date.now() - lastContactMs) / (1000 * 60 * 60) : 0;
+  const contactStaleness =
+    contactStatus === "미시도"
+      ? 0.6
+      : hoursSinceLastContact >= 48
+        ? 1
+        : hoursSinceLastContact >= 24
+          ? 0.85
+          : hoursSinceLastContact >= 12
+            ? 0.55
+            : hoursSinceLastContact >= 6
+              ? 0.3
+              : hoursSinceLastContact >= 3
+                ? 0.2
+                : 0.1;
+
+  const riskBase = item.risk === "고" ? 1 : item.risk === "중" ? 0.6 : 0.25;
+  const riskBoost = item.alertTags.includes("High MCI") || item.alertTags.includes("이탈 위험") ? 0.2 : 0;
+  const riskLevel = clamp01(riskBase + riskBoost);
+
+  const retryNeeded =
+    contactStatus === "재시도 필요" || contactStatus === "실패"
+      ? 1
+      : contactStatus === "미시도"
+        ? 0.6
+        : contactStatus === "시도중"
+          ? 0.2
+          : 0;
+
+  const channelFrictionBase =
+    item.quality === "경고"
+      ? 0.65
+      : item.quality === "주의"
+        ? 0.35
+        : 0.1;
+  const channelFriction = clamp01(
+    channelFrictionBase +
+      (channel === "보호자" ? 0.2 : 0) +
+      (!item.profile.guardianPhone && (contactStatus === "실패" || contactStatus === "재시도 필요") ? 0.2 : 0)
+  );
+
+  const factors: Stage1PriorityFactor[] = [
+    { key: "SLA_URGENCY", label: "SLA 임박도", weight: 40, value: clamp01(slaUrgency), contribution: 0 },
+    { key: "CONTACT_STALENESS", label: "접촉 공백", weight: 25, value: clamp01(contactStaleness), contribution: 0 },
+    { key: "RISK_LEVEL", label: "위험 신호", weight: 20, value: clamp01(riskLevel), contribution: 0 },
+    { key: "RETRY_NEEDED", label: "재시도 필요", weight: 10, value: clamp01(retryNeeded), contribution: 0 },
+    { key: "CHANNEL_FRICTION", label: "채널 제약", weight: 5, value: clamp01(channelFriction), contribution: 0 },
+  ].map((factor) => ({
+    ...factor,
+    contribution: Number((factor.weight * factor.value).toFixed(1)),
+  }));
+
+  const score = Math.round(
+    clamp100(
+      factors.reduce((sum, factor) => sum + factor.contribution, 0)
+    )
+  );
+
+  return {
+    priorityScore: score,
+    priorityTier: priorityTierFromScore(score),
+    priorityFactors: factors,
+    slaUrgencyScore: clamp01(slaUrgency),
+  };
 }
 
 function stage1ContactTone(status: Stage1ContactStatus) {
@@ -143,6 +380,8 @@ function stage1ChannelTone(channel: Stage1Channel) {
 }
 
 function stage1NextActionTone(action: Stage1NextAction) {
+  if (action === "사전조건 점검") return "bg-gray-100 text-gray-700 border-gray-200";
+  if (action === "상태 확인") return "bg-indigo-50 text-indigo-700 border-indigo-200";
   if (action === "Stage2 전환") return "bg-indigo-50 text-indigo-700 border-indigo-200";
   if (action === "보호자 전환") return "bg-violet-50 text-violet-700 border-violet-200";
   if (action === "예약 생성") return "bg-blue-50 text-blue-700 border-blue-200";
@@ -198,7 +437,7 @@ function deriveStage1Row(item: CaseRecord): Stage1Row {
         ? "보호자"
         : "전화";
 
-  const nextAction: Stage1NextAction =
+  const baseNextAction: Stage1NextAction =
     contactStatus === "성공" && (item.risk === "고" || item.alertTags.includes("재평가 필요"))
       ? "Stage2 전환"
       : contactStatus === "성공" || contactStatus === "시도중"
@@ -215,6 +454,17 @@ function deriveStage1Row(item: CaseRecord): Stage1Row {
     성공: 1,
   };
 
+  const lastContactMs = parseUpdatedMs(item.updated);
+  const owner = resolveStage1Owner(item, contactStatus, channel);
+  const priority = computeStage1Priority(item, contactStatus, channel, lastContactMs);
+
+  const nextAction: Stage1NextAction =
+    owner.ownerType === "UNASSIGNED"
+      ? "사전조건 점검"
+      : owner.ownerType === "AGENT" && (priority.priorityTier === "L3" || priority.priorityTier === "L2")
+        ? "상태 확인"
+        : baseNextAction;
+
   return {
     kind: "Stage 1",
     stage: "Stage 1",
@@ -226,8 +476,15 @@ function deriveStage1Row(item: CaseRecord): Stage1Row {
     lastContactAttemptAt: formatDateTime(item.updated),
     channel,
     nextAction,
+    ownerType: owner.ownerType,
+    ownerName: owner.ownerName,
+    ownerReason: owner.ownerReason,
+    priorityScore: priority.priorityScore,
+    priorityTier: priority.priorityTier,
+    priorityFactors: priority.priorityFactors,
     statusRank: statusRank[contactStatus],
-    lastContactMs: parseUpdatedMs(item.updated),
+    lastContactMs,
+    slaUrgencyScore: priority.slaUrgencyScore,
     slaHint: item.status === "임박" || item.status === "지연" ? item.status : undefined,
   };
 }
@@ -317,14 +574,16 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
   "Stage 1": {
     operationQuestion: "이 케이스는 접촉이 되었는가? 안 되었는가? 다음 행정은 무엇인가?",
     operationHint: "Stage 1은 선별/접촉 관리 관점으로만 표시됩니다.",
-    sortLabel: "접촉 우선순위",
+    sortLabel: "개입 레벨 우선순위",
     defaultSortDescending: true,
     mapRow: (item) => deriveStage1Row(item),
     compare: (a, b) => {
       const rowA = a as Stage1Row;
       const rowB = b as Stage1Row;
-      if (rowB.statusRank !== rowA.statusRank) return rowB.statusRank - rowA.statusRank;
-      return rowB.lastContactMs - rowA.lastContactMs;
+      if (rowB.priorityScore !== rowA.priorityScore) return rowB.priorityScore - rowA.priorityScore;
+      if (rowB.slaUrgencyScore !== rowA.slaUrgencyScore) return rowB.slaUrgencyScore - rowA.slaUrgencyScore;
+      if (rowA.lastContactMs !== rowB.lastContactMs) return rowA.lastContactMs - rowB.lastContactMs;
+      return rowB.statusRank - rowA.statusRank;
     },
     searchBlob: (row) => {
       const target = row as Stage1Row;
@@ -334,6 +593,10 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
         target.channel,
         target.nextAction,
         target.manager,
+        ownerLabel(target.ownerType),
+        target.ownerName ?? "",
+        target.priorityTier,
+        String(target.priorityScore),
       ].join(" ");
     },
     summary: (rows) => {
@@ -368,18 +631,43 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
     },
     quickActions: (row) => {
       const stageRow = row as Stage1Row;
+      if (stageRow.ownerType === "UNASSIGNED") {
+        return [
+          { key: "precheck", label: "사전조건 점검", icon: Filter, tone: "text-gray-700 bg-gray-100 border-gray-200 hover:bg-gray-200" },
+          { key: "verify-channel", label: "채널 점검", icon: MessageSquare, tone: "text-blue-700 bg-blue-50 border-blue-100 hover:bg-blue-100" },
+        ];
+      }
+
+      if (stageRow.ownerType === "AGENT") {
+        const urgent = stageRow.priorityTier === "L3" || stageRow.priorityTier === "L2";
+        return [
+          {
+            key: "agent-run",
+            label: urgent ? "즉시 Agent 실행" : "Agent 상태 확인",
+            icon: MessageSquare,
+            tone: "text-indigo-700 bg-indigo-50 border-indigo-100 hover:bg-indigo-100",
+          },
+          {
+            key: "agent-status",
+            label: "상태 확인",
+            icon: History,
+            tone: "text-blue-700 bg-blue-50 border-blue-100 hover:bg-blue-100",
+          },
+        ];
+      }
+
       return [
-        { key: "retry", label: "접촉 재시도", icon: Phone, tone: "text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100" },
-        { key: "reserve", label: "예약 생성", icon: Calendar, tone: "text-blue-700 bg-blue-50 border-blue-100 hover:bg-blue-100" },
+        { key: "call", label: "전화", icon: Phone, tone: "text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100" },
         {
           key: "guardian",
           label: "보호자 전환",
           icon: UserCheck,
-          tone:
-            stageRow.source.profile.guardianPhone
-              ? "text-violet-700 bg-violet-50 border-violet-100 hover:bg-violet-100"
-              : "text-gray-400 bg-gray-100 border-gray-200",
+          tone: stageRow.source.profile.guardianPhone
+            ? "text-violet-700 bg-violet-50 border-violet-100 hover:bg-violet-100"
+            : "text-gray-400 bg-gray-100 border-gray-200",
+          disabled: !stageRow.source.profile.guardianPhone,
         },
+        { key: "reserve", label: "예약 생성", icon: Calendar, tone: "text-blue-700 bg-blue-50 border-blue-100 hover:bg-blue-100" },
       ];
     },
   },
@@ -500,9 +788,14 @@ export function CaseDashboard({
   const [activeFilterTab, setActiveFilterTab] = useState<CaseAlertFilter>("전체");
   const [stageFilter, setStageFilter] = useState<StageView>("Stage 1");
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState<Stage1OwnerFilter>("ALL");
+  const [priorityFilter, setPriorityFilter] = useState<Stage1PriorityFilter>("ALL");
+  const [statusFilter, setStatusFilter] = useState<Stage1StatusFilter>("ALL");
+  const [isOpsFilterOpen, setIsOpsFilterOpen] = useState(false);
   const [sortDescending, setSortDescending] = useState(true);
   const [hoveredCaseId, setHoveredCaseId] = useState<string | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const opsFilterRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const resolved = resolveInitialCaseFilter(initialFilter);
@@ -515,6 +808,24 @@ export function CaseDashboard({
   useEffect(() => {
     setSortDescending(adapter.defaultSortDescending);
   }, [adapter.defaultSortDescending, stageFilter]);
+
+  useEffect(() => {
+    if (stageFilter !== "Stage 1") setIsOpsFilterOpen(false);
+  }, [stageFilter]);
+
+  useEffect(() => {
+    if (!isOpsFilterOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!opsFilterRef.current) return;
+      if (!opsFilterRef.current.contains(event.target as Node)) {
+        setIsOpsFilterOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [isOpsFilterOpen]);
 
   const scopedRows = useMemo(() => {
     const q = searchKeyword.trim().toLowerCase();
@@ -556,10 +867,20 @@ export function CaseDashboard({
       .filter((entry) => matchesAlertFilter(entry.item, activeFilterTab))
       .map((entry) => entry.row);
 
-    const sorted = [...mapped].sort(adapter.compare);
+    const filtered =
+      stageFilter === "Stage 1"
+        ? (mapped as Stage1Row[]).filter((row) => {
+            const ownerMatched = ownerFilter === "ALL" ? true : row.ownerType === ownerFilter;
+            const priorityMatched = stage1PriorityFilterMatch(row.priorityTier, priorityFilter);
+            const statusMatched = stage1StatusFilterMatch(row.contactStatus, statusFilter);
+            return ownerMatched && priorityMatched && statusMatched;
+          })
+        : mapped;
+
+    const sorted = [...filtered].sort(adapter.compare);
     if (!sortDescending) sorted.reverse();
     return sorted;
-  }, [activeFilterTab, adapter, scopedRows, sortDescending]);
+  }, [activeFilterTab, adapter, ownerFilter, priorityFilter, scopedRows, sortDescending, stageFilter, statusFilter]);
 
   const summary = useMemo(() => adapter.summary(stageRows), [adapter, stageRows]);
   const hoveredRow = useMemo(
@@ -567,11 +888,21 @@ export function CaseDashboard({
     [hoveredCaseId, stageRows]
   );
 
-  const hasActiveFilter = activeFilterTab !== "전체" || searchKeyword.trim().length > 0;
+  const hasStage1OpsFilter = ownerFilter !== "ALL" || priorityFilter !== "ALL" || statusFilter !== "ALL";
+  const activeOpsFilterCount = Number(ownerFilter !== "ALL") + Number(priorityFilter !== "ALL") + Number(statusFilter !== "ALL");
+  const hasActiveFilter =
+    activeFilterTab !== "전체" || searchKeyword.trim().length > 0 || (stageFilter === "Stage 1" && hasStage1OpsFilter);
+
+  const resetOpsFilters = () => {
+    setOwnerFilter("ALL");
+    setPriorityFilter("ALL");
+    setStatusFilter("ALL");
+  };
 
   const resetFilters = () => {
     setActiveFilterTab("전체");
     setSearchKeyword("");
+    resetOpsFilters();
   };
 
   const clearHoverTimer = () => {
@@ -691,6 +1022,113 @@ export function CaseDashboard({
                 </button>
               ))}
 
+              {stageFilter === "Stage 1" && (
+                <div ref={opsFilterRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsOpsFilterOpen((prev) => !prev)}
+                    aria-expanded={isOpsFilterOpen}
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors",
+                      hasStage1OpsFilter
+                        ? "border-blue-200 bg-blue-50 text-blue-700"
+                        : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                    )}
+                  >
+                    <Filter size={12} />
+                    운영 필터
+                    {activeOpsFilterCount > 0 && (
+                      <span className="rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                        {activeOpsFilterCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {isOpsFilterOpen && (
+                    <div className="absolute left-0 top-[calc(100%+8px)] z-40 w-[360px] rounded-xl border border-gray-200 bg-white p-3 shadow-xl">
+                      <div className="space-y-3">
+                        <div>
+                          <p className="mb-1 text-[11px] font-bold text-gray-600">담당</p>
+                          <div className="flex flex-wrap gap-1">
+                            {STAGE1_OWNER_FILTER_OPTIONS.map((option) => (
+                              <button
+                                key={option.value}
+                                onClick={() => setOwnerFilter(option.value)}
+                                className={cn(
+                                  "rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors",
+                                  ownerFilter === option.value
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                                )}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="mb-1 text-[11px] font-bold text-gray-600">개입 레벨</p>
+                          <div className="flex flex-wrap gap-1">
+                            {STAGE1_PRIORITY_FILTER_OPTIONS.map((option) => (
+                              <button
+                                key={option.value}
+                                onClick={() => setPriorityFilter(option.value)}
+                                className={cn(
+                                  "rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors",
+                                  priorityFilter === option.value
+                                    ? "border-orange-200 bg-orange-50 text-orange-700"
+                                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                                )}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <p className="mb-1 text-[11px] font-bold text-gray-600">상태</p>
+                          <div className="flex flex-wrap gap-1">
+                            {STAGE1_STATUS_FILTER_OPTIONS.map((option) => (
+                              <button
+                                key={option.value}
+                                onClick={() => setStatusFilter(option.value)}
+                                className={cn(
+                                  "rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors",
+                                  statusFilter === option.value
+                                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                                    : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                                )}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+                          <span className="text-[10px] text-gray-500">필터가 즉시 테이블에 반영됩니다.</span>
+                          <button
+                            type="button"
+                            onClick={resetOpsFilters}
+                            className="text-[11px] font-semibold text-blue-600 hover:text-blue-700"
+                          >
+                            운영 필터 초기화
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {stageFilter === "Stage 1" && (
+                <span className="text-[10px] text-gray-500">
+                  개입 레벨/담당/상태를 한 번에 설정
+                </span>
+              )}
+
               <div className="group relative">
                 <span className="inline-flex h-7 w-7 cursor-help items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100">
                   <Info size={13} />
@@ -707,7 +1145,7 @@ export function CaseDashboard({
                 <input
                   value={searchKeyword}
                   onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="케이스ID/담당자/상태 검색"
+                  placeholder="케이스ID/담당/상태/개입 레벨 검색"
                   className="w-full bg-transparent text-xs text-gray-700 outline-none placeholder:text-gray-400"
                 />
               </div>
@@ -728,6 +1166,8 @@ export function CaseDashboard({
                   <thead className="sticky top-0 bg-white z-20 shadow-sm">
                     <tr className="bg-gray-50/80 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
                       <th className="px-4 py-3 border-b border-gray-100">케이스 키</th>
+                      <th className="px-4 py-3 border-b border-gray-100">담당</th>
+                      <th className="px-4 py-3 border-b border-gray-100">개입 레벨</th>
                       <th className="px-4 py-3 border-b border-gray-100">접촉 상태</th>
                       <th className="px-4 py-3 border-b border-gray-100">마지막 접촉 시도</th>
                       <th className="px-4 py-3 border-b border-gray-100">접촉 채널</th>
@@ -737,7 +1177,7 @@ export function CaseDashboard({
                   <tbody className="text-sm">
                     {stageRows.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-16 text-center text-xs text-gray-400">
+                        <td colSpan={7} className="px-4 py-16 text-center text-xs text-gray-400">
                           조건에 맞는 케이스가 없습니다.
                         </td>
                       </tr>
@@ -758,6 +1198,33 @@ export function CaseDashboard({
                           <td className="px-4 py-3.5">
                             <p className="font-mono font-medium text-gray-900">{row.caseId}</p>
                             <p className="text-[10px] text-gray-400">담당자 {row.manager}</p>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <div className="group relative inline-flex flex-col">
+                              <span className={cn("inline-flex w-fit rounded border px-2 py-0.5 text-[10px] font-semibold", ownerTone(row.ownerType))}>
+                                {ownerLabel(row.ownerType)}
+                              </span>
+                              <p className="mt-1 text-[10px] text-gray-500">{row.ownerName ?? "배정 필요"}</p>
+                              <div className="pointer-events-none invisible absolute left-0 top-[calc(100%+6px)] z-20 w-56 rounded-lg border border-gray-200 bg-white p-2 text-[11px] text-gray-700 opacity-0 shadow-xl transition-all duration-150 group-hover:visible group-hover:opacity-100">
+                                {row.ownerReason}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <div className="group relative inline-flex flex-col">
+                              <span className={cn("inline-flex w-fit rounded border px-2 py-0.5 text-[10px] font-semibold", priorityTierTone(row.priorityTier))}>
+                                {row.priorityTier} · {interventionLevelLabel(row.priorityTier)}
+                              </span>
+                              <p className="mt-1 text-[10px] text-gray-500">{interventionLevelDetail(row.priorityTier)} · 점수 {row.priorityScore}</p>
+                              <div className="pointer-events-none invisible absolute left-0 top-[calc(100%+6px)] z-20 w-60 rounded-lg border border-gray-200 bg-white p-2 text-[11px] text-gray-700 opacity-0 shadow-xl transition-all duration-150 group-hover:visible group-hover:opacity-100">
+                                <p className="font-semibold text-gray-800">개입 레벨 근거</p>
+                                {priorityTooltipFactors(row).map((factor) => (
+                                  <p key={`${row.caseId}-${factor.key}`} className="mt-1">
+                                    • {factor.label} {factor.contribution.toFixed(1)}점
+                                  </p>
+                                ))}
+                              </div>
+                            </div>
                           </td>
                           <td className="px-4 py-3.5">
                             <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", stage1ContactTone(row.contactStatus))}>
@@ -926,7 +1393,7 @@ export function CaseDashboard({
                 <div className="mb-3 rounded-lg border border-gray-100 bg-gray-50 p-2 text-[11px] text-gray-700">
                   {hoveredRow.kind === "Stage 1" && (
                     <p>
-                      접촉 {hoveredRow.contactStatus} · 채널 {hoveredRow.channel} · 다음 {hoveredRow.nextAction}
+                      {ownerLabel(hoveredRow.ownerType)} · {hoveredRow.priorityTier} {interventionLevelLabel(hoveredRow.priorityTier)}({hoveredRow.priorityScore}) · 접촉 {hoveredRow.contactStatus} · 다음 {hoveredRow.nextAction}
                     </p>
                   )}
                   {hoveredRow.kind === "Stage 2" && (
@@ -946,7 +1413,12 @@ export function CaseDashboard({
                     <button
                       key={`${hoveredRow.caseId}-${action.key}`}
                       onClick={(event) => event.stopPropagation()}
-                      className={cn("inline-flex items-center gap-1 rounded-lg border px-2 py-2 text-[11px] font-semibold", action.tone)}
+                      disabled={action.disabled}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-lg border px-2 py-2 text-[11px] font-semibold",
+                        action.tone,
+                        action.disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"
+                      )}
                     >
                       <action.icon size={12} />
                       {action.label}

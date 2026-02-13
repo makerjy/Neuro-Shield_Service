@@ -3,6 +3,42 @@ export type MciSubClass = "MILD_OK" | "MODERATE" | "HIGH_RISK" | null;
 
 export type StepStatus = "DONE" | "PENDING" | "INPUT_REQUIRED" | "MISSING";
 export type Stage2StepKey = "healthCheck" | "neuropsych" | "clinicalEval" | "specialist";
+export type CaseStage2Status =
+  | "WAITING"
+  | "IN_PROGRESS"
+  | "RESULT_WAITING"
+  | "JUDGMENT_DONE"
+  | "ON_HOLD"
+  | "DISCONTINUED";
+export type WorkflowStep =
+  | "VERIFY_STAGE1_EVIDENCE"
+  | "NEUROPSYCH_TEST"
+  | "CLINICAL_EVAL"
+  | "SPECIALIST_VISIT"
+  | "CONFIRM_DIAGNOSIS"
+  | "CONFIRM_FOLLOWUP";
+export type BottleneckCode =
+  | "NONE"
+  | "RESERVATION_PENDING"
+  | "HOSPITAL_DELAY"
+  | "NO_RESPONSE"
+  | "MISSING_DOCS"
+  | "OTHER";
+export type ReferralStatus =
+  | "BEFORE_REFERRAL"
+  | "REFERRED"
+  | "RESERVATION_REQUESTED"
+  | "RESERVATION_CONFIRMED"
+  | "RESULT_RECEIVED"
+  | "DELAYED"
+  | "RE_REQUESTED";
+export type TodoType =
+  | "NORMAL_REANALYSIS"
+  | "MCI_MILD_TRACKING"
+  | "MCI_MODERATE_TRACKING"
+  | "MCI_HIGH_RISK_DIFF_TEST"
+  | "DEMENTIA_DIFF_TEST"
+  | "NO_RESPONSE_RETRY";
 
 export type Stage2Steps = {
   healthCheck: { status: StepStatus; date?: string; summary?: string };
@@ -27,6 +63,64 @@ export type Stage2Decision = {
   mciSubClass: MciSubClass;
   confidenceNote?: "CAUTION" | "LOW" | "N/A";
   evidence: string[];
+  finalClass?: "NORMAL" | "MCI" | "AD_SUSPECT" | "UNCONFIRMED";
+  decidedAt?: string;
+  decidedBy?: string;
+  rationaleSummary?: string;
+};
+
+export type DomainScore = {
+  domain: "MEMORY" | "ATTENTION" | "EXECUTIVE" | "LANGUAGE" | "VISUOSPATIAL" | "OTHER";
+  score: number;
+  grade: "정상" | "경계" | "저하";
+  summary: string;
+};
+
+export type NeuropsychSummary = {
+  cistTotal: number;
+  domains: DomainScore[];
+  missingCount: number;
+  freshness: "LATEST" | "STALE" | "UNKNOWN";
+  updatedAt: string;
+};
+
+export type ClinicalSummary = {
+  adlImpact: "YES" | "NO" | "UNKNOWN";
+  caregiverNote: string;
+  flags: Array<"MOOD" | "SLEEP" | "MEDICATION" | "DELIRIUM" | "OTHER">;
+  needDifferential: boolean;
+  updatedAt: string;
+};
+
+export type BranchPlan = {
+  branch: "NORMAL" | "MCI" | "AD_SUSPECT" | "UNCONFIRMED";
+  intensityLevel: "L1" | "L2" | "L3";
+  nextActions: Array<{ id: string; label: string; done: boolean }>;
+};
+
+export type Stage2LinkageType = "CENTER" | "HOSPITAL" | "COUNSELING";
+
+export type LinkageStatus = {
+  type: Stage2LinkageType;
+  status: "NOT_CREATED" | "CREATED" | "COMPLETED" | "CANCELED";
+  lastActor?: string;
+  lastAt?: string;
+  nextSchedule?: string;
+};
+
+export type FollowUpPlan = {
+  cadence: "WEEKLY" | "BIWEEKLY" | "MONTHLY";
+  nextDate: string;
+  stage3Enroll: boolean;
+  notes?: string;
+};
+
+export type Stage2AuditEvent = {
+  at: string;
+  actor: string;
+  action: string;
+  reason?: string;
+  summary: string;
 };
 
 export type ProgramDomain = "PHYSICAL" | "COGNITIVE" | "DAILY" | "FAMILY";
@@ -46,6 +140,9 @@ export type Stage2CaseDetail = {
   roleLabel: string;
   stageLabel: "Stage 2";
   workStatus: "WAITING" | "IN_PROGRESS" | "DONE";
+  stage2Status: CaseStage2Status;
+  stage2EnteredAt: string;
+  targetCompletionAt: string;
   lastUpdatedAt: string;
   missingTotal: number;
   steps: Stage2Steps;
@@ -76,6 +173,25 @@ export type Stage2AuditLogItem = {
   message: string;
 };
 
+export type Stage2FollowupTodo = {
+  id: string;
+  type: TodoType;
+  title: string;
+  status: "WAITING" | "IN_PROGRESS" | "DONE";
+  assignee?: string;
+  dueDate?: string;
+  createdAt: string;
+};
+
+export type Stage2CommLog = {
+  id: string;
+  channel: "SMS" | "CALL";
+  templateLabel?: string;
+  result: string;
+  at: string;
+  note?: string;
+};
+
 export type Stage2MemoItem = {
   id: string;
   timestamp: string;
@@ -84,6 +200,15 @@ export type Stage2MemoItem = {
 };
 
 export type Stage2PiiSummary = {
+  fullName: string;
+  birthDate: string;
+  phone: string;
+  address: string;
+  guardianName?: string;
+  guardianPhone?: string;
+  consentStatus: "진행 중" | "완료" | "갱신 필요";
+  medicalHistory: string[];
+  // backward compatibility
   maskedName: string;
   maskedPhone: string;
   age: number;
@@ -118,4 +243,39 @@ export type Stage2CaseDetailData = Stage2CaseDetail & {
   auditLogs: Stage2AuditLogItem[];
   memos: Stage2MemoItem[];
   pii: Stage2PiiSummary;
+  bottleneckCode?: BottleneckCode;
+  bottleneckMemo?: string;
+  stage1EvidenceSummary: string[];
+  neuropsychTest: NeuropsychSummary;
+  clinicalEvalData: ClinicalSummary;
+  specialistVisit: {
+    status: StepStatus;
+    summary: string;
+    date?: string;
+  };
+  referral: {
+    status: ReferralStatus;
+    org?: string;
+    contact?: string;
+    schedule?: string;
+    resultReceivedAt?: string;
+    lastRequestedAt?: string;
+    owner?: string;
+  };
+  diagnosis: {
+    finalClass: Stage2Decision["finalClass"];
+    mciSubtype: MciSubClass;
+    confirmedBy?: string;
+    confirmedAt?: string;
+    rationale?: string;
+  };
+  followupTodos: Stage2FollowupTodo[];
+  commLogs: Stage2CommLog[];
+  neuropsychSummary: NeuropsychSummary;
+  clinicalSummary: ClinicalSummary;
+  branchPlan: BranchPlan;
+  linkageStatuses: LinkageStatus[];
+  followUpPlan: FollowUpPlan;
+  auditEvents: Stage2AuditEvent[];
+  readOnly?: boolean;
 };

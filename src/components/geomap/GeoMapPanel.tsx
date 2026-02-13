@@ -1,18 +1,25 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Palette, ChevronDown, ChevronUp, Eye, EyeOff, Settings2 } from 'lucide-react';
 import { KoreaDrilldownMap, Level } from './KoreaDrilldownMap';
 import { formatGeoValue, getGeoIndicator } from './geoIndicators';
 import { buildComposition, buildMetrics, buildRegionSeries } from './metrics';
 import { ChoroplethScale, formatRange, formatNumber as formatChoroplethNumber, COLOR_PALETTES } from '../../lib/choroplethScale';
+import {
+  geoLevelToAdminLevel,
+  makeRegionId,
+  normalizeRegionCode,
+  type RegionKey,
+} from '../../lib/regionKey';
 
 /* ═════════════════════════════════════════════════════════════
    GeoMap UI State Types - 색상 팔레트 및 범례 컨트롤
 ═════════════════════════════════════════════════════════════ */
-export type MapColorScheme = 'blue' | 'green' | 'purple' | 'orange' | 'red' | 'heat' | 'risk';
+export type MapColorScheme = 'blue' | 'green' | 'teal' | 'purple' | 'orange' | 'red' | 'heat' | 'risk';
 
 const COLOR_SCHEME_LABELS: Record<MapColorScheme, string> = {
   blue: '파랑 (Blue)',
   green: '초록 (Green)',
+  teal: '청록 (Teal)',
   purple: '보라 (Purple)',
   orange: '주황 (Orange)',
   red: '빨강 (Red)',
@@ -58,17 +65,36 @@ type GeoMapPanelProps = {
   className?: string;
   externalLevel?: Level; // 외부에서 제어하는 레벨 (드릴다운 동기화)
   externalSelectedCode?: string; // 외부에서 선택된 지역 코드
-  onRegionSelect?: (payload: { level: Level; code: string; name: string }) => void;
+  onRegionSelect?: (payload: {
+    level: Level;
+    code: string;
+    name: string;
+    regionKey: RegionKey;
+    regionId: string;
+  }) => void;
   onGoBack?: () => void; // 상위 레벨로 돌아가기 콜백
   externalColorScheme?: MapColorScheme; // 외부 KPI 기반 색상 스킴
   hideLegendPanel?: boolean; // 하단 범례 패널 숨김
-  onSubRegionsChange?: (regions: { code: string; name: string }[]) => void; // 현재 표시 중인 하위 지역 목록 전달
+  onSubRegionsChange?: (regions: Array<{
+    code: string;
+    name: string;
+    regionKey: RegionKey;
+    regionId: string;
+  }>) => void; // 현재 표시 중인 하위 지역 목록 전달
   getTooltipExtraLines?: (payload: { level: Level; code: string; name: string; value: number }) => string[];
 };
 
 function getFeatureCode(feature: any): string {
-  return String(
+  return normalizeRegionCode(
     feature?.properties?.code ??
+      feature?.properties?.adm_cd ??
+      feature?.properties?.ADM_CD ??
+      feature?.properties?.sggnm_cd ??
+      feature?.properties?.SGGNM_CD ??
+      feature?.properties?.sigungu_cd ??
+      feature?.properties?.SIGUNGU_CD ??
+      feature?.properties?.emd_cd ??
+      feature?.properties?.EMD_CD ??
       feature?.properties?.CTPRVN_CD ??
       feature?.properties?.SIG_CD ??
       feature?.properties?.EMD_CD ??
@@ -86,18 +112,21 @@ function getFeatureName(feature: any): string {
   );
 }
 
-function normalizeFeatures(features: any[]): any[] {
+function normalizeFeatures(features: any[], level: RegionKey['level']): any[] {
   return features.map((feature) => {
     const code = getFeatureCode(feature);
     const name = getFeatureName(feature);
+    const regionKey: RegionKey = { level, code, name };
     return {
       ...feature,
-      id: code,
+      id: makeRegionId(regionKey),
       properties: {
         ...feature.properties,
         code,
-        name
-      }
+        name,
+        level,
+        regionId: makeRegionId(regionKey),
+      },
     };
   });
 }
@@ -170,6 +199,7 @@ export function GeoMapPanel({
   const [showLegend, setShowLegend] = useState(true);
   const [legendCollapsed, setLegendCollapsed] = useState(true);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
+  const lastSubRegionEmitSignatureRef = useRef<string>('');
 
   // 외부 색상 스킴이 있으면 우선 사용 (KPI 연동)
   const effectiveColorScheme = externalColorScheme ?? colorScheme;
@@ -191,9 +221,9 @@ export function GeoMapPanel({
           emdRes.json()
         ]);
         if (!mounted) return;
-        setCtprvnGeo(normalizeFeatures(ctprvnJson?.features ?? []));
-        setSigGeo(normalizeFeatures(sigJson?.features ?? []));
-        setEmdGeo(normalizeFeatures(emdJson?.features ?? []));
+        setCtprvnGeo(normalizeFeatures(ctprvnJson?.features ?? [], 'REGION'));
+        setSigGeo(normalizeFeatures(sigJson?.features ?? [], 'SIGUNGU'));
+        setEmdGeo(normalizeFeatures(emdJson?.features ?? [], 'EUPMYEONDONG'));
       } catch (err) {
         if (!mounted) return;
         setError('지도 데이터를 불러오는 데 실패했습니다.');
@@ -265,12 +295,20 @@ export function GeoMapPanel({
     // 시군구(sig) 레벨로 변경 - 시도 코드가 필요
     if (externalLevel === 'sig' && externalSelectedCode) {
       const ctprvnCode = externalSelectedCode.slice(0, 2); // 시도 코드 추출
+      const sigCode = externalSelectedCode.length > 2 ? externalSelectedCode.slice(0, 5) : undefined;
       setLevel('sig');
-      setSelectedCodes({ ctprvn: ctprvnCode });
+      setSelectedCodes({
+        ctprvn: ctprvnCode,
+        ...(sigCode ? { sig: sigCode } : {}),
+      });
       // 시도 이름 찾기
       const ctprvnFeature = ctprvnGeo?.find(f => getFeatureCode(f).startsWith(ctprvnCode));
+      const sigFeature = sigCode ? sigGeo?.find(f => getFeatureCode(f) === sigCode) : undefined;
       if (ctprvnFeature) {
-        setSelectedNames({ ctprvn: getFeatureName(ctprvnFeature) });
+        setSelectedNames({
+          ctprvn: getFeatureName(ctprvnFeature),
+          ...(sigFeature ? { sig: getFeatureName(sigFeature) } : {}),
+        });
       }
       return;
     }
@@ -279,18 +317,25 @@ export function GeoMapPanel({
     if (externalLevel === 'emd' && externalSelectedCode) {
       const ctprvnCode = externalSelectedCode.slice(0, 2);
       const sigCode = externalSelectedCode.slice(0, 5);
+      const emdCode = externalSelectedCode.length > 5 ? externalSelectedCode : undefined;
       setLevel('emd');
-      setSelectedCodes({ ctprvn: ctprvnCode, sig: sigCode });
+      setSelectedCodes({
+        ctprvn: ctprvnCode,
+        sig: sigCode,
+        ...(emdCode ? { emd: emdCode } : {}),
+      });
       // 시도/시군구 이름 찾기
       const ctprvnFeature = ctprvnGeo?.find(f => getFeatureCode(f).startsWith(ctprvnCode));
       const sigFeature = sigGeo?.find(f => getFeatureCode(f) === sigCode);
+      const emdFeature = emdCode ? emdGeo?.find(f => getFeatureCode(f) === emdCode) : undefined;
       setSelectedNames({
         ctprvn: ctprvnFeature ? getFeatureName(ctprvnFeature) : undefined,
         sig: sigFeature ? getFeatureName(sigFeature) : undefined,
+        ...(emdFeature ? { emd: getFeatureName(emdFeature) } : {}),
       });
       return;
     }
-  }, [externalLevel, externalSelectedCode, ctprvnGeo, sigGeo]);
+  }, [externalLevel, externalSelectedCode, ctprvnGeo, sigGeo, emdGeo]);
 
   const filteredCtprvn = useMemo(() => {
     if (!ctprvnGeo) return [];
@@ -337,12 +382,43 @@ export function GeoMapPanel({
   // 현재 표시 중인 하위 지역 목록을 외부로 전달
   useEffect(() => {
     if (!onSubRegionsChange || !currentFeatures.length) return;
-    const regions = currentFeatures.map((f: any) => ({
-      code: getFeatureCode(f),
-      name: getFeatureName(f),
-    }));
+    const featureLevel = geoLevelToAdminLevel(level);
+    const seen = new Set<string>();
+    const regions = currentFeatures
+      .map((f: any) => {
+        const code = getFeatureCode(f);
+        const name = getFeatureName(f);
+        return {
+          code,
+          name,
+          regionKey: {
+            level: featureLevel,
+            code,
+            name,
+          } as RegionKey,
+          regionId: makeRegionId({
+            level: featureLevel,
+            code,
+            name,
+          }),
+        };
+      })
+      .filter((item) => {
+        if (!item.code) return false;
+        if (seen.has(item.code)) return false;
+        seen.add(item.code);
+        return true;
+      });
+    if (!regions.length) return;
+    const signature = `${featureLevel}|${regions
+      .slice()
+      .sort((a, b) => a.code.localeCompare(b.code, 'ko-KR'))
+      .map((item) => `${item.code}:${item.name}`)
+      .join('|')}`;
+    if (lastSubRegionEmitSignatureRef.current === signature) return;
+    lastSubRegionEmitSignatureRef.current = signature;
     onSubRegionsChange(regions);
-  }, [currentFeatures, onSubRegionsChange]);
+  }, [currentFeatures, level, onSubRegionsChange]);
 
   const metricPoints = useMemo(() => {
     if (!currentFeatures.length) return [];
@@ -357,21 +433,44 @@ export function GeoMapPanel({
   const handleSelect = (nextLevel: Level, code: string) => {
     const feature = currentFeatures.find((item) => getFeatureCode(item) === code);
     const name = feature ? getFeatureName(feature) : code;
+    const regionKey: RegionKey = {
+      level: geoLevelToAdminLevel(level),
+      code,
+      name,
+    };
+    const regionId = makeRegionId(regionKey);
 
     if (fixedLevel) {
       if (fixedLevel === 'ctprvn') {
         setSelectedCodes({ ctprvn: code });
         setSelectedNames({ ctprvn: name });
-        onRegionSelect?.({ level: 'sig', code, name }); // 다음 레벨로 이동
+        onRegionSelect?.({ level: 'sig', code, name, regionKey, regionId }); // 다음 레벨로 이동
       } else if (fixedLevel === 'sig') {
         setSelectedCodes((prev) => ({ ctprvn: prev.ctprvn, sig: code }));
         setSelectedNames((prev) => ({ ctprvn: prev.ctprvn, sig: name }));
-        onRegionSelect?.({ level: 'emd', code, name }); // 다음 레벨로 이동
+        onRegionSelect?.({ level: 'emd', code, name, regionKey, regionId }); // 다음 레벨로 이동
       } else {
         setSelectedCodes((prev) => ({ ...prev, emd: code }));
         setSelectedNames((prev) => ({ ...prev, emd: name }));
-        onRegionSelect?.({ level: 'emd', code, name });
+        onRegionSelect?.({ level: 'emd', code, name, regionKey, regionId });
       }
+      return;
+    }
+
+    // externalLevel이 주입된 경우 parent drill state를 SSOT로 사용한다.
+    // 내부 레벨을 직접 바꾸지 않고 선택 정보/콜백만 갱신한다.
+    if (externalLevel) {
+      if (level === 'ctprvn') {
+        setSelectedCodes({ ctprvn: code });
+        setSelectedNames({ ctprvn: name });
+      } else if (level === 'sig') {
+        setSelectedCodes((prev) => ({ ctprvn: prev.ctprvn, sig: code }));
+        setSelectedNames((prev) => ({ ctprvn: prev.ctprvn, sig: name }));
+      } else {
+        setSelectedCodes((prev) => ({ ...prev, emd: code }));
+        setSelectedNames((prev) => ({ ...prev, emd: name }));
+      }
+      onRegionSelect?.({ level: nextLevel, code, name, regionKey, regionId });
       return;
     }
 
@@ -380,7 +479,7 @@ export function GeoMapPanel({
       setSelectedCodes({ ctprvn: code });
       setSelectedNames({ ctprvn: name });
       setLevel(nextLevel); // 'sig'로 변경
-      onRegionSelect?.({ level: nextLevel, code, name }); // nextLevel = 'sig'
+      onRegionSelect?.({ level: nextLevel, code, name, regionKey, regionId }); // nextLevel = 'sig'
       return;
     }
 
@@ -389,7 +488,7 @@ export function GeoMapPanel({
       setSelectedCodes((prev) => ({ ctprvn: prev.ctprvn, sig: code }));
       setSelectedNames((prev) => ({ ctprvn: prev.ctprvn, sig: name }));
       setLevel(nextLevel); // 'emd'로 변경
-      onRegionSelect?.({ level: nextLevel, code, name }); // nextLevel = 'emd'
+      onRegionSelect?.({ level: nextLevel, code, name, regionKey, regionId }); // nextLevel = 'emd'
       return;
     }
 
@@ -397,7 +496,7 @@ export function GeoMapPanel({
     if (level === 'emd') {
       setSelectedCodes((prev) => ({ ...prev, emd: code }));
       setSelectedNames((prev) => ({ ...prev, emd: name }));
-      onRegionSelect?.({ level: 'emd', code, name });
+      onRegionSelect?.({ level: 'emd', code, name, regionKey, regionId });
     }
   };
 

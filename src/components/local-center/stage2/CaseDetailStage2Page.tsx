@@ -11,8 +11,6 @@ import {
   Eye,
   ExternalLink,
   ListChecks,
-  MessageSquare,
-  Phone,
   ShieldAlert,
   ShieldCheck,
   Stethoscope,
@@ -30,6 +28,7 @@ import {
 } from "../../ui/dialog";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
+import { ContactLinkageActionsCard } from "../ContactLinkageActionsCard";
 import { CaseDetailPrograms } from "../programs/CaseDetailPrograms";
 import { SmsPanel } from "../sms/SmsPanel";
 import type { SmsTemplate } from "../sms/SmsPanel";
@@ -437,6 +436,7 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
   const [authorizeModalOpen, setAuthorizeModalOpen] = useState(false);
   const [authorizeReason, setAuthorizeReason] = useState("");
   const [smsModalOpen, setSmsModalOpen] = useState(false);
+  const [linkageModalOpen, setLinkageModalOpen] = useState(false);
 
   const healthRef = useRef<HTMLDivElement>(null);
   const neuroRef = useRef<HTMLDivElement>(null);
@@ -450,6 +450,7 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
     setProgramModalOpen(false);
     setAuthorizeModalOpen(false);
     setAuthorizeReason("");
+    setLinkageModalOpen(false);
   }, [data]);
 
   useEffect(() => {
@@ -774,6 +775,10 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
     setProgramModalOpen(true);
   };
 
+  const openLinkagePanel = () => {
+    setLinkageModalOpen(true);
+  };
+
   const saveProgramPlan = () => {
     if (!caseData) return;
     if (programDraftDomains.length === 0) {
@@ -1010,6 +1015,38 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
     },
   ] as const;
 
+  const renderProgramProvisionPanel = () =>
+    shouldActivateProgramLink(caseData) || caseData.decision.class === "DEMENTIA" ? (
+      <CaseDetailPrograms
+        caseId={caseData.caseId}
+        stage={2}
+        resultLabel={
+          caseData.decision.class === "NORMAL" ? "정상"
+          : caseData.decision.class === "MCI" ? "MCI"
+          : caseData.decision.class === "DEMENTIA" ? "치매"
+          : "정상"
+        }
+        mciSeverity={
+          caseData.decision.mciSubClass === "MILD_OK" ? "양호"
+          : caseData.decision.mciSubClass === "MODERATE" ? "중등"
+          : caseData.decision.mciSubClass === "HIGH_RISK" ? "중증"
+          : undefined
+        }
+        riskTags={[]}
+        actorId="OP-001"
+        actorName={caseData.owner}
+      />
+    ) : (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+        {caseData.decision.class === "NORMAL" && "정상 분류는 재분석 트리거 모니터링이 우선이므로 프로그램 연계는 비활성입니다."}
+        {caseData.decision.class === "MCI" &&
+          caseData.decision.mciSubClass === "HIGH_RISK" &&
+          "MCI 위험 분류는 감별검사 권고가 우선이므로 프로그램 연계를 잠시 비활성합니다. 감별검사 경로를 먼저 검토하세요."}
+        {caseData.decision.class === "UNCONFIRMED" &&
+          "분류 미확정 상태에서는 프로그램 연계를 활성화할 수 없습니다."}
+      </div>
+    );
+
   return (
     <div className="min-h-screen bg-[#f4f7fb] pb-24">
       {toastMessage && (
@@ -1026,7 +1063,9 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
                 <Button variant="outline" size="icon" onClick={onBack} aria-label="목록으로 이동">
                   <ArrowLeft className="h-4 w-4" />
                 </Button>
-                <h1 className="text-base font-bold text-slate-900 md:text-lg">{caseData.caseId}</h1>
+                <h1 className="text-base font-bold text-slate-900 md:text-lg">
+                  {caseData.pii.maskedName} · {caseData.pii.age}세
+                </h1>
                 <Badge className="border-blue-200 bg-blue-50 text-blue-800">{caseData.stageLabel}</Badge>
                 <Badge className={cn("border", workStatusTone(caseData.workStatus))}>
                   {WORK_STATUS_LABEL[caseData.workStatus]}
@@ -1336,45 +1375,6 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
             </CardContent>
           </Card>
 
-          {/* ── 프로그램 제공(행정 실행) — 고도화된 UI ── */}
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="border-b border-slate-100 px-4 py-3">
-              <CardTitle className="text-sm font-bold text-slate-900">프로그램 제공(사례관리)</CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 py-4">
-              {shouldActivateProgramLink(caseData) || caseData.decision.class === "DEMENTIA" ? (
-                <CaseDetailPrograms
-                  caseId={caseData.caseId}
-                  stage={2}
-                  resultLabel={
-                    caseData.decision.class === "NORMAL" ? "정상"
-                    : caseData.decision.class === "MCI" ? "MCI"
-                    : caseData.decision.class === "DEMENTIA" ? "치매"
-                    : "정상"
-                  }
-                  mciSeverity={
-                    caseData.decision.mciSubClass === "MILD_OK" ? "양호"
-                    : caseData.decision.mciSubClass === "MODERATE" ? "중등"
-                    : caseData.decision.mciSubClass === "HIGH_RISK" ? "중증"
-                    : undefined
-                  }
-                  riskTags={[]}
-                  actorId="OP-001"
-                  actorName={caseData.owner}
-                />
-              ) : (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-                  {caseData.decision.class === "NORMAL" && "정상 분류는 재분석 트리거 모니터링이 우선이므로 프로그램 연계는 비활성입니다."}
-                  {caseData.decision.class === "MCI" &&
-                    caseData.decision.mciSubClass === "HIGH_RISK" &&
-                    "MCI 위험 분류는 감별검사 권고가 우선이므로 프로그램 연계를 잠시 비활성합니다. 감별검사 경로를 먼저 검토하세요."}
-                  {caseData.decision.class === "UNCONFIRMED" &&
-                    "분류 미확정 상태에서는 프로그램 연계를 활성화할 수 없습니다."}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
           <Card className="border-slate-200 bg-white shadow-sm">
             <button
               type="button"
@@ -1443,21 +1443,12 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
             </CardContent>
           </Card>
 
-          {/* SMS 트리거 버튼 */}
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardContent className="px-4 py-4">
-              <Button
-                className="h-11 w-full gap-2 bg-[#15386a] text-sm font-semibold text-white hover:bg-[#102b4e]"
-                onClick={() => setSmsModalOpen(true)}
-              >
-                <MessageSquare className="h-4 w-4" />
-                상담/문자 실행 (2차)
-              </Button>
-              <p className="mt-2 text-center text-[11px] text-slate-500">
-                접촉 · 예약안내 · 리마인더 문자 발송
-              </p>
-            </CardContent>
-          </Card>
+          <ContactLinkageActionsCard
+            stageLabel="2차"
+            onOpenContact={() => setSmsModalOpen(true)}
+            onOpenLinkage={openLinkagePanel}
+            linkageDescription="프로그램 제공(사례관리) 팝업을 열어 연계를 실행합니다."
+          />
 
           {/* SMS 모달 */}
           <Dialog open={smsModalOpen} onOpenChange={setSmsModalOpen}>
@@ -1476,6 +1467,30 @@ export function CaseDetailStage2Page({ data, onBack, isLoading = false }: CaseDe
                 }}
                 onConsultation={handleStage2Consultation}
               />
+            </DialogContent>
+          </Dialog>
+
+          {/* 연계 모달 */}
+          <Dialog open={linkageModalOpen} onOpenChange={setLinkageModalOpen}>
+            <DialogContent
+              className="!left-1/2 !top-1/2 !translate-x-[-50%] !translate-y-[-50%] !max-w-none gap-0 overflow-hidden p-0"
+              style={{
+                width: "min(96vw, 1720px)",
+                maxWidth: "min(96vw, 1720px)",
+                height: "min(94vh, 980px)",
+              }}
+            >
+              <div className="flex h-full min-h-0 flex-col">
+                <DialogHeader className="border-b border-slate-100 px-4 py-3 text-left">
+                  <DialogTitle className="text-base font-bold text-slate-900">연계</DialogTitle>
+                  <DialogDescription className="text-xs text-slate-600">
+                    운영 규칙: 확진/AI 판단 표현 금지. 안내·확인·연계 톤 사용. 목적 고지 필수.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+                  <div className="min-w-[1080px]">{renderProgramProvisionPanel()}</div>
+                </div>
+              </div>
             </DialogContent>
           </Dialog>
 

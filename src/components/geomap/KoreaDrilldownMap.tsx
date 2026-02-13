@@ -15,6 +15,7 @@ export type KoreaDrilldownMapProps = {
   year?: number;
   valueFormatter?: (value: number) => string;
   colorPalette?: string[]; // 외부에서 색상 팔레트 주입
+  getTooltipExtraLines?: (payload: { level: Level; code: string; name: string; value: number }) => string[];
 };
 
 const MIN_SIZE = 50;
@@ -48,7 +49,8 @@ export function KoreaDrilldownMap({
   unit = '',
   year,
   valueFormatter,
-  colorPalette // 외부 색상 팔레트
+  colorPalette, // 외부 색상 팔레트
+  getTooltipExtraLines,
 }: KoreaDrilldownMapProps) {
   const { ref, width, height } = useResizeObserver<HTMLDivElement>();
   const [tooltip, setTooltip] = useState<{ x: number; y: number; name: string; value: number; code: string } | null>(null);
@@ -235,6 +237,18 @@ export function KoreaDrilldownMap({
           {typeof year === 'number' && (
             <div className="mt-1 text-[11px] text-slate-500">기준연도: {year}년</div>
           )}
+          {getTooltipExtraLines?.({
+            level,
+            code: tooltip.code,
+            name: tooltip.name,
+            value: tooltip.value,
+          })
+            .slice(0, 3)
+            .map((line, idx) => (
+              <div key={idx} className="mt-1 text-[11px] text-slate-500">
+                {line}
+              </div>
+            ))}
         </div>
       )}
     </div>

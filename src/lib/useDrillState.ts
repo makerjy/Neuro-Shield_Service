@@ -11,26 +11,55 @@ const initialState: DrillState = {
   selectedRegion: null,
 };
 
+interface SetScopeOptions {
+  replace?: boolean;
+}
+
 export function useDrillState() {
   const [state, setState] = useState<DrillState>(initialState);
 
+  const setScope = useCallback(
+    (target: { code: string; name: string; level: DrillLevel }, options: SetScopeOptions = {}) => {
+      const replace = options.replace ?? true;
+      setState((prev) => {
+        if (target.level === 'nation') {
+          updateURLParams('nation', 'KR', replace);
+          return initialState;
+        }
+
+        const currentTail = prev.drillPath[prev.drillPath.length - 1];
+        const existingIndex = prev.drillPath.findIndex(
+          (item) => item.level === target.level && item.code === target.code
+        );
+
+        let nextPath: DrillPathItem[];
+        if (existingIndex >= 0) {
+          nextPath = prev.drillPath.slice(0, existingIndex + 1);
+          nextPath[nextPath.length - 1] = {
+            level: target.level,
+            code: target.code,
+            name: target.name,
+          };
+        } else if (currentTail?.level === target.level) {
+          nextPath = [...prev.drillPath.slice(0, -1), target];
+        } else {
+          nextPath = [...prev.drillPath, target];
+        }
+
+        updateURLParams(target.level, target.code, replace);
+        return {
+          drillLevel: target.level,
+          drillPath: nextPath,
+          selectedRegion: target,
+        };
+      });
+    },
+    []
+  );
+
   const drillDown = useCallback((target: { code: string; name: string; level: DrillLevel }) => {
-    setState(prev => {
-      const newPath: DrillPathItem[] = [...prev.drillPath, {
-        level: target.level,
-        code: target.code,
-        name: target.name,
-      }];
-      
-      updateURLParams(target.level, target.code);
-      
-      return {
-        drillLevel: target.level,
-        drillPath: newPath,
-        selectedRegion: target,
-      };
-    });
-  }, []);
+    setScope(target, { replace: true });
+  }, [setScope]);
 
   const drillUp = useCallback(() => {
     setState(prev => {
@@ -39,7 +68,7 @@ export function useDrillState() {
       const newPath = prev.drillPath.slice(0, -1);
       const lastItem = newPath[newPath.length - 1];
       
-      updateURLParams(lastItem.level, lastItem.code);
+      updateURLParams(lastItem.level, lastItem.code, true);
       
       return {
         drillLevel: lastItem.level,
@@ -60,7 +89,7 @@ export function useDrillState() {
       const newPath = prev.drillPath.slice(0, levelIndex + 1);
       const targetItem = newPath[newPath.length - 1];
       
-      updateURLParams(targetItem.level, targetItem.code);
+      updateURLParams(targetItem.level, targetItem.code, true);
       
       return {
         drillLevel: targetItem.level,
@@ -76,7 +105,7 @@ export function useDrillState() {
 
   const resetDrill = useCallback(() => {
     setState(initialState);
-    updateURLParams('nation', 'KR');
+    updateURLParams('nation', 'KR', true);
   }, []);
 
   const setSelectedRegion = useCallback((region: { code: string; name: string; level: DrillLevel } | null) => {
@@ -90,20 +119,26 @@ export function useDrillState() {
     drillTo,
     resetDrill,
     setSelectedRegion,
+    setScope,
   };
 }
 
 /* ─────────────────────────────────────────────────────────────
    URL 쿼리스트링 동기화 유틸리티
 ───────────────────────────────────────────────────────────── */
-function updateURLParams(level: DrillLevel, code: string) {
+function updateURLParams(level: DrillLevel, code: string, replace = true) {
   if (typeof window === 'undefined') return;
   
   const url = new URL(window.location.href);
   url.searchParams.set('level', level);
   url.searchParams.set('region', code);
-  
-  window.history.replaceState({}, '', url.toString());
+
+  if (replace) {
+    window.history.replaceState({}, '', url.toString());
+    return;
+  }
+
+  window.history.pushState({}, '', url.toString());
 }
 
 export function initDrillStateFromURL() {

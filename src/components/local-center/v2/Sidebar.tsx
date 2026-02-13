@@ -5,10 +5,10 @@ import {
   Calendar, 
   BarChart3, 
   Settings,
-  ShieldAlert,
   LogOut,
 } from "lucide-react";
 import { cn, type TabType } from "./shared";
+import { NeuroShieldLogo } from '../../ui/NeuroShieldLogo';
 
 interface SidebarProps {
   activeTab: TabType;
@@ -28,7 +28,7 @@ export function Sidebar({
   onLogout,
 }: SidebarProps) {
   const menuItems = [
-    { id: "main" as const, label: "메인 대시보드", icon: LayoutDashboard },
+    { id: "main" as const, label: "센터 운영 대시보드", icon: LayoutDashboard },
     { id: "cases" as const, label: "케이스 대시보드", icon: Users },
     { id: "calendar" as const, label: "캘린더", icon: Calendar },
     { id: "reports" as const, label: "보고서", icon: BarChart3 },
@@ -37,14 +37,8 @@ export function Sidebar({
 
   return (
     <aside className="w-64 bg-slate-800 border-r border-slate-700 text-white flex flex-col shrink-0">
-      <div className="p-4 flex items-center gap-3 border-b border-slate-700">
-        <div className="w-9 h-9 bg-blue-600 rounded-lg flex items-center justify-center">
-          <ShieldAlert className="text-white" size={20} />
-        </div>
-        <div>
-          <h1 className="font-bold text-sm leading-tight">Neuro-Shield</h1>
-          <p className="text-[10px] text-slate-400">기초센터 운영시스템</p>
-        </div>
+      <div className="p-4 border-b border-slate-700">
+        <NeuroShieldLogo size={36} showText subtitle="기초센터 운영시스템" variant="dark" />
       </div>
 
       <nav className="flex-1 py-4 px-3 space-y-1">

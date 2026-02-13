@@ -18,6 +18,8 @@ import {
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback } from '../ui/avatar';
 import { Badge } from '../ui/badge';
+import { NeuroShieldLogo } from '../ui/NeuroShieldLogo';
+import { AppHeaderTitle, HEADER_TITLE_MAP } from '../ui/AppHeaderTitle';
 
 interface CentralCenterLayoutProps {
   children: React.ReactNode;
@@ -29,7 +31,7 @@ interface CentralCenterLayoutProps {
 }
 
 const navigationItems = [
-  { id: 'national-dashboard', label: '전국운영대시보드', icon: Home, roles: ['central_admin', 'policy_maker'] },
+  { id: 'national-dashboard', label: '중앙 운영 대시보드', icon: Home, roles: ['central_admin', 'policy_maker'] },
   { id: 'model-apply', label: '모델 적용 센터', icon: Brain, roles: ['central_admin', 'policy_maker'] },
   { id: 'model-governance', label: '모델/규칙 변경 관리', icon: Shield, roles: ['central_admin'] },
   { id: 'quality-monitoring', label: '데이터&모델 품질', icon: Database, roles: ['central_admin', 'policy_maker'] },
@@ -81,10 +83,7 @@ export function CentralCenterLayout({
         <div className="h-16 flex items-center justify-between px-4 border-b border-slate-700">
           {sidebarOpen ? (
             <>
-              <div>
-                <h1 className="font-bold text-lg text-white">Neuro-Shield</h1>
-                <p className="text-xs text-slate-400">보건복지부 중앙관리</p>
-              </div>
+              <NeuroShieldLogo size={36} showText subtitle="보건복지부 중앙관리" variant="dark" />
               <Button
                 variant="ghost"
                 size="sm"
@@ -146,21 +145,16 @@ export function CentralCenterLayout({
         {/* Header */}
         <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6">
           <div className="flex items-center gap-3">
-            {/* 현재 페이지 타이틀 */}
             {(() => {
               const current = navigationItems.find(n => n.id === currentPage);
               const Icon = current?.icon || Home;
-              const label = current?.label || '전국운영대시보드';
+              const mapped = HEADER_TITLE_MAP[currentPage as keyof typeof HEADER_TITLE_MAP];
               return (
-                <div className="flex items-center gap-2.5">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 shadow-sm">
-                    <Icon className="h-4 w-4 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="text-[15px] font-bold text-slate-800 leading-tight">{label}</h2>
-                    <p className="text-[10px] text-slate-400 leading-tight">Neuro-Shield 중앙관리 시스템</p>
-                  </div>
-                </div>
+                <AppHeaderTitle
+                  title={mapped?.title ?? current?.label ?? '중앙 운영 대시보드'}
+                  subtitle={mapped?.subtitle ?? 'Neuro-Shield 중앙관리 시스템'}
+                  icon={<Icon className="h-4 w-4 text-white" />}
+                />
               );
             })()}
           </div>

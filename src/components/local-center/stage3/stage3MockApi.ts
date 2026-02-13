@@ -76,7 +76,7 @@ function buildBaseCase(caseId: string): Stage3Case {
     caseId,
     stage: 3,
     subject: {
-      maskedName: `${source.patientName.slice(0, 1)}*${source.patientName.slice(-1)}`,
+      maskedName: source.patientName,
       age: source.age,
       maskedPhone: maskPhone(source.phone),
       pseudonymKey: `PS-${caseId.slice(-4)}`,

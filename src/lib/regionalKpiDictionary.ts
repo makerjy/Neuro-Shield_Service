@@ -402,9 +402,9 @@ export const OPS_TO_GEO_INDICATOR: Record<RegionalKpiKey, string> = {
 
 /** KPI → 지도 색상 스키마 */
 export const OPS_COLOR_SCHEME: Record<RegionalKpiKey, string> = {
-  regionalSla: 'red',
+  regionalSla: 'blue',
   regionalQueueRisk: 'orange',
-  regionalRecontact: 'orange',
-  regionalDataReadiness: 'green',
+  regionalRecontact: 'red',
+  regionalDataReadiness: 'orange',
   regionalGovernance: 'purple',
 };

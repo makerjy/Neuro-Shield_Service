@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowLeft, Shield, Building2, User, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { NeuroShieldLogoLarge } from '../ui/NeuroShieldLogo';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -194,11 +195,7 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
       <div className="w-full max-w-6xl">
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="flex items-center justify-center mb-4">
-            <Shield className="h-16 w-16 text-primary" />
-          </div>
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">Neuro-Shield</h1>
-          <p className="text-gray-600">통합 정신건강 관리 시스템</p>
+          <NeuroShieldLogoLarge size={88} />
         </div>
 
         {/* Role Selection */}

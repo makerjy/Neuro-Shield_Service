@@ -148,7 +148,11 @@ const makeCharts = (region: RegionKey, kpi: KPI): Charts => {
     { name: '품질', value: Math.round(20 + rnd() * 40) }
   ];
 
-  const centers = SIDO_OPTIONS.filter((item) => item.code !== 'all').slice(0, 8);
+  const centers = region.level === 'nation'
+    ? SIDO_OPTIONS.filter((item) => item.code !== 'all').slice(0, 8)
+    : region.level === 'sido' && region.sidoCode
+      ? (SIGUNGU_OPTIONS[region.sidoCode] ?? []).slice(0, 8)
+      : SIDO_OPTIONS.filter((item) => item.code !== 'all').slice(0, 8);
   const barLoadByCenter = centers.map((center) => ({
     name: center.label,
     value: Math.round(30 + rnd() * 70)
@@ -166,7 +170,12 @@ const makeCharts = (region: RegionKey, kpi: KPI): Charts => {
     };
   });
 
-  const regions = SIDO_OPTIONS.filter((item) => item.code !== 'all');
+  // 드릴다운 레벨에 따라 하위 지역 목록 결정
+  const regions = region.level === 'nation'
+    ? SIDO_OPTIONS.filter((item) => item.code !== 'all')
+    : region.level === 'sido' && region.sidoCode
+      ? (SIGUNGU_OPTIONS[region.sidoCode] ?? [])
+      : SIDO_OPTIONS.filter((item) => item.code !== 'all');
   const riskMatrix: RiskMatrixPoint[] = regions.map((r) => ({
     regionId: r.code,
     regionName: r.label,
@@ -288,9 +297,17 @@ const makeCentralKpiSummary = (rnd: () => number): CentralKpiSummary[] => [
 ];
 
 const makeCentralRegionMetrics = (
-  rnd: () => number
+  rnd: () => number,
+  regionKey: RegionKey
 ): Record<CentralKpiKey, CentralRegionMetric[]> => {
-  const regions = SIDO_OPTIONS.filter((s) => s.code !== "all");
+  // 드릴다운 레벨에 따라 하위 지역 목록 결정
+  const regions =
+    regionKey.level === 'nation'
+      ? SIDO_OPTIONS.filter((s) => s.code !== "all")
+      : regionKey.level === 'sido' && regionKey.sidoCode
+        ? (SIGUNGU_OPTIONS[regionKey.sidoCode] ?? [])
+        : SIDO_OPTIONS.filter((s) => s.code !== "all");
+
   const result: Record<string, CentralRegionMetric[]> = {};
 
   const ranges: Record<CentralKpiKey, [number, number]> = {
@@ -433,7 +450,7 @@ export async function fetchCentralDashboard(
   const rnd = makeBase(regionKey);
   return {
     kpiSummaries: makeCentralKpiSummary(rnd),
-    regionMetrics: makeCentralRegionMetrics(rnd),
+    regionMetrics: makeCentralRegionMetrics(rnd, regionKey),
     chartData: makeCentralChartData(rnd),
   };
 }

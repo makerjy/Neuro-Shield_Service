@@ -5,7 +5,6 @@ import {
   BarChart3, 
   Settings, 
   Bell,
-  Search,
   LogOut,
   Menu,
   X,
@@ -16,8 +15,9 @@ import {
   Layers,
 } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Input } from '../ui/input';
 import { Avatar, AvatarFallback } from '../ui/avatar';
+import { NeuroShieldLogo } from '../ui/NeuroShieldLogo';
+import { AppHeaderTitle, HEADER_TITLE_MAP } from '../ui/AppHeaderTitle';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -102,10 +102,7 @@ export function LocalCenterLayout({
         <div className="h-16 flex items-center justify-between px-4 border-b border-gray-200">
           {sidebarOpen ? (
             <>
-              <div>
-                <h1 className="font-bold text-lg text-blue-600">Neuro-Shield</h1>
-                <p className="text-xs text-gray-500">치매안심센터</p>
-              </div>
+              <NeuroShieldLogo size={36} showText subtitle="치매안심센터" variant="light" />
               <Button
                 variant="ghost"
                 size="sm"
@@ -170,16 +167,20 @@ export function LocalCenterLayout({
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
-          <div className="flex items-center gap-4 flex-1">
-            <div className="relative max-w-md flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                type="text"
-                placeholder="시민 이름, 전화번호, 예약번호 검색..."
-                className="pl-10 bg-gray-50"
-              />
-            </div>
+        <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6">
+          <div className="flex items-center gap-4">
+            {(() => {
+              const current = navigationItems.find(n => n.id === currentPage);
+              const Icon = current?.icon || Home;
+              const mapped = HEADER_TITLE_MAP[currentPage as keyof typeof HEADER_TITLE_MAP];
+              return (
+                <AppHeaderTitle
+                  title={mapped?.title ?? current?.label ?? '케이스 관리'}
+                  subtitle={mapped?.subtitle ?? 'Neuro-Shield 치매안심센터 케이스 시스템'}
+                  icon={<Icon className="h-4 w-4 text-white" />}
+                />
+              );
+            })()}
           </div>
 
           <div className="flex items-center gap-4">

@@ -3,26 +3,39 @@ import {
   Bell, 
   Search, 
   CheckCircle2,
+  LayoutDashboard,
+  Users,
+  Calendar,
+  BarChart3,
+  Settings,
 } from "lucide-react";
 import { type TabType } from "./shared";
+import { AppHeaderTitle, HEADER_TITLE_MAP } from '../../ui/AppHeaderTitle';
+
+const TAB_ICONS: Record<string, React.ElementType> = {
+  main: LayoutDashboard,
+  cases: Users,
+  calendar: Calendar,
+  reports: BarChart3,
+  settings: Settings,
+};
 
 interface HeaderProps {
   activeTab: TabType;
 }
 
 export function Header({ activeTab }: HeaderProps) {
-  const tabNames: Record<string, string> = {
-    main: "운영 대시보드",
-    cases: "케이스 관리 (Cases)",
-    calendar: "업무 일정 (Calendar)",
-    reports: "성과 분석 (Reports)",
-    settings: "시스템 설정 (Settings)",
-  };
+  const Icon = TAB_ICONS[activeTab] || LayoutDashboard;
+  const mapped = HEADER_TITLE_MAP[activeTab as keyof typeof HEADER_TITLE_MAP];
 
   return (
-    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0 z-10">
+    <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0 z-10">
       <div className="flex items-center gap-6">
-        <h2 className="text-xl font-bold text-gray-800">{tabNames[activeTab]}</h2>
+        <AppHeaderTitle
+          title={mapped?.title ?? activeTab}
+          subtitle={mapped?.subtitle ?? 'Neuro-Shield 치매안심센터 운영 시스템'}
+          icon={<Icon className="h-4 w-4 text-white" />}
+        />
       </div>
 
       <div className="flex items-center gap-4">

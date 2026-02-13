@@ -169,3 +169,16 @@ html {
 [data-slot="button"] {
   border-radius: calc(var(--radius) + 2px);
 }
+
+@keyframes ns-loading-overlay-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(330%);
+  }
+}
+
+.ns-loading-overlay-bar {
+  animation: ns-loading-overlay-slide 1.15s ease-in-out infinite;
+}

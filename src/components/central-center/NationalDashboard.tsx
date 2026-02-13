@@ -31,11 +31,16 @@ import { getKPIsByPanel, getKPIsForLevel, fetchKPIData, getChartEnabledKPIs } fr
 import { KPIDefinition, DrillLevel, DonutDataItem, BarDataItem } from '../../lib/kpi.types';
 import { Activity, Shield, Database, ExternalLink as ExternalLinkIcon } from 'lucide-react';
 import type { TabContext } from '../../lib/useTabContext';
-import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS, fetchCentralKpis, fetchCentralFunnel, fetchCentralBottlenecks, fetchCentralLinkage, fetchCentralRegions, fetchCentralDashboardBundle } from '../../mocks/mockCentralOps';
+import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS } from '../../mocks/mockCentralOps';
 import type { CentralKpiId, CentralTimeWindow, CentralKpiValue, FunnelStage, BottleneckMetric, LinkageMetric, RegionComparisonRow } from '../../lib/kpi.types';
-import { getCentralKpiList, CENTRAL_KPI_COLORS, FUNNEL_STAGE_LABELS } from '../../lib/centralKpiDictionary';
-import { KPI_THEMES, KPI_ID_TO_KEY, type KpiBundle, type DashboardData, type CentralKpiKey } from '../../lib/centralKpiTheme';
+import { getCentralKpiList, CENTRAL_KPI_COLORS } from '../../lib/centralKpiDictionary';
+import { KPI_THEMES, KPI_ID_TO_KEY, type KpiBundle, type CentralKpiKey } from '../../lib/centralKpiTheme';
 import { AlertTriangle, Users, Clock, Link2, ClipboardList } from 'lucide-react';
+import { WorkflowStrip } from '../workflow/WorkflowStrip';
+import type { WorkflowStep } from '../workflow/types';
+import { useDashboardData } from '../../hooks/useDashboardData';
+import { LoadingOverlay } from '../ui/LoadingOverlay';
+import { AnimatedNumber } from '../ui/AnimatedNumber';
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    ResizeObserver 인라인 훅 (새 파일 생성 금지에 따른 인라인 구현)
@@ -281,6 +286,9 @@ function KPIWidget({ kpi, data, statsScopeKey, activeDonutIndex, setActiveDonutI
                  startAngle={90} endAngle={-270} strokeWidth={0} paddingAngle={2}
                  activeIndex={activeDonutIndex ?? undefined} activeShape={renderActiveDonutShape}
                  label={renderDonutLabel} labelLine={false}
+                 isAnimationActive
+                 animationDuration={460}
+                 animationEasing="ease-out"
                  onMouseEnter={(_, idx) => setActiveDonutIndex(idx)}
                  onMouseLeave={() => setActiveDonutIndex(null)}>
               {donutData.map((entry, idx) => (
@@ -365,6 +373,9 @@ function KPIWidget({ kpi, data, statsScopeKey, activeDonutIndex, setActiveDonutI
             <Bar 
               dataKey="value" 
               radius={[6, 6, 0, 0]}
+              isAnimationActive
+              animationDuration={460}
+              animationEasing="ease-out"
               label={({ x, y, width, value }) => (
                 <text 
                   x={x + width / 2} 
@@ -541,6 +552,9 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: {
               dataKey="value" 
               fill={`url(#kpiGrad-${kpiDef.id})`}
               stroke="none"
+              isAnimationActive
+              animationDuration={500}
+              animationEasing="ease-out"
             />
             {/* 라인 */}
             <Line 
@@ -549,6 +563,9 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: {
               stroke={lineColor} 
               strokeWidth={2}
               dot={false}
+              isAnimationActive
+              animationDuration={500}
+              animationEasing="ease-out"
               activeDot={{ r: 4, fill: lineColor, stroke: '#fff', strokeWidth: 2 }}
             />
           </ComposedChart>
@@ -808,6 +825,9 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
                 stroke={def.color}
                 strokeWidth={2}
                 dot={false}
+                isAnimationActive
+                animationDuration={500}
+                animationEasing="ease-out"
                 activeDot={{ r: 4, fill: def.color, stroke: '#fff', strokeWidth: 2 }}
                 connectNulls
               />
@@ -1029,7 +1049,10 @@ function CentralKpiCard({ kpi, def, isActive, onClick, tooltipLines, tooltipColo
       </div>
       {/* value row */}
       <div className="flex items-end gap-1.5">
-        <span className={`text-lg font-bold tabular-nums ${isActive ? colors.text : 'text-gray-800'}`}>{kpi.value}{def.unit}</span>
+        <span className={`text-lg font-bold tabular-nums ${isActive ? colors.text : 'text-gray-800'}`}>
+          <AnimatedNumber value={kpi.value} decimals={def.unit === '%' ? 1 : 0} />
+          {def.unit}
+        </span>
         <span className={`text-[11px] font-medium ${deltaColor}`}>
           {kpi.delta7d > 0 ? '+' : ''}{kpi.delta7d}pp
         </span>
@@ -1056,32 +1079,39 @@ function CentralKpiCard({ kpi, def, isActive, onClick, tooltipLines, tooltipColo
 
 /* ── Funnel Panel ── */
 function FunnelPanel({ stages }: { stages: FunnelStage[] }) {
-  const maxCount = stages.length > 0 ? Math.max(...stages.map(s => s.count)) : 1;
+  const total = stages[0]?.count ?? 0;
+  const workflowSteps: WorkflowStep[] = stages.map((stage, index) => {
+    const percentOfTotal = total > 0 ? Number(((stage.count / total) * 100).toFixed(1)) : 0;
+    const conversionFromPrev = index === 0 ? undefined : stage.conversionRate;
+    const status =
+      conversionFromPrev == null
+        ? "neutral"
+        : conversionFromPrev >= 80
+          ? "good"
+          : conversionFromPrev >= 55
+            ? "warn"
+            : "bad";
+
+    return {
+      id: `funnel-${stage.stage}-${index}`,
+      title: stage.label,
+      value: stage.count,
+      subLabel: "전체 대비",
+      percentOfTotal,
+      conversionFromPrev,
+      status,
+    };
+  });
+
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-3">
       <div className="text-xs font-semibold text-gray-700 mb-3">전국 파이프라인 퍼널</div>
-      <div className="space-y-1.5">
-        {stages.map((s, i) => {
-          const pct = (s.count / maxCount) * 100;
-          const labelDef = FUNNEL_STAGE_LABELS.find(f => f.stage === s.stage);
-          const color = labelDef?.color || '#94a3b8';
-          return (
-            <div key={s.stage} className="flex items-center gap-2">
-              <span className="w-[90px] text-[11px] text-gray-600 truncate text-right">{s.label}</span>
-              <div className="flex-1 h-5 bg-gray-100 rounded overflow-hidden relative">
-                <div className="h-full rounded transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
-                <span className="absolute inset-0 flex items-center pl-2 text-[10px] font-semibold text-white mix-blend-difference">
-                  {s.count.toLocaleString()}
-                </span>
-              </div>
-              {i > 0 && s.conversionRate != null && (
-                <span className="w-[42px] text-[10px] text-gray-500 text-right">{s.conversionRate}%</span>
-              )}
-              {i === 0 && <span className="w-[42px]" />}
-            </div>
-          );
-        })}
-      </div>
+      <WorkflowStrip
+        steps={workflowSteps}
+        ariaLabel="전국 파이프라인 퍼널 단계 흐름"
+        density="compact"
+        layout="scroll"
+      />
     </div>
   );
 }
@@ -1220,7 +1250,7 @@ interface NationalDashboardProps {
 
 export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   // SSOT: 단일 상태로 통합
-  const [selectedKpiId, setSelectedKpiId] = useState<string>('total_cases');
+  const selectedKpiId = 'total_cases';
   const [periodType, setPeriodType] = useState<'weekly' | 'monthly' | 'quarterly' | 'yearly_cum'>('weekly');
   // analyticsPeriod를 periodType에서 자동 파생 (기간 통합: 센터 패널 기간 토글이 전체 분석 기간 제어)
   const analyticsPeriod = useMemo<'week' | 'month' | 'quarter' | 'year'>(() => {
@@ -1252,7 +1282,6 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
 
   // 지도/히트맵 KPI는 상단 KPI 선택과 동일하게 사용
   const selectedMapKpiId = selectedKpiId;
-  const mapViewMode = visualizationMode;
   
   // ResizeObserver 훅으로 컨테이너 크기 추적 (반응형)
   const [containerRef, containerSize] = useResizeObserver<HTMLDivElement>();
@@ -1266,24 +1295,13 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
 
   /* ── 중앙센터 운영감사형 KPI 상태 ── */
   const [centralWindow, setCentralWindow] = useState<CentralTimeWindow>('LAST_7D');
-  const [centralKpis, setCentralKpis] = useState<CentralKpiValue[]>([]);
   const [activeCentralKpi, setActiveCentralKpi] = useState<CentralKpiId>('SIGNAL_QUALITY');
   const [showDrilldown, setShowDrilldown] = useState(false);
-  const [centralLoading, setCentralLoading] = useState(false);
-  // Drilldown data
-  const [funnelData, setFunnelData] = useState<FunnelStage[]>([]);
-  const [bottleneckData, setBottleneckData] = useState<BottleneckMetric[]>([]);
-  const [linkageData, setLinkageData] = useState<LinkageMetric[]>([]);
-  const [regionData, setRegionData] = useState<RegionComparisonRow[]>([]);
   const centralKpiDefs = useMemo(() => getCentralKpiList(), []);
-
-  /* ── KPI Bundle (모든 패널의 SSOT) ── */
-  const [dashData, setDashData] = useState<DashboardData | null>(null);
 
   // 현재 선택된 KPI의 테마 & 번들
   const activeKpiKey = useMemo<CentralKpiKey>(() => KPI_ID_TO_KEY[activeCentralKpi], [activeCentralKpi]);
   const activeTheme = useMemo(() => KPI_THEMES[activeKpiKey], [activeKpiKey]);
-  const currentBundle = useMemo<KpiBundle | null>(() => dashData ? dashData[activeKpiKey] : null, [dashData, activeKpiKey]);
 
   /* ── KPI → MapColorScheme 매핑 ── */
   const kpiColorScheme = useMemo<MapColorScheme>(() => {
@@ -1297,44 +1315,8 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     return map[activeCentralKpi];
   }, [activeCentralKpi]);
 
-  // Central KPI data fetch
-  useEffect(() => {
-    let cancelled = false;
-    setCentralLoading(true);
-    Promise.all([
-      fetchCentralKpis(centralWindow),
-      fetchCentralDashboardBundle(centralWindow),
-    ]).then(([res, bundle]) => {
-      if (!cancelled) {
-        setCentralKpis(res.kpis);
-        setDashData(bundle);
-        setCentralLoading(false);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [centralWindow]);
-
-  // Drilldown data fetch
-  useEffect(() => {
-    if (!showDrilldown) return;
-    let cancelled = false;
-    Promise.all([
-      fetchCentralFunnel(centralWindow),
-      fetchCentralBottlenecks(centralWindow),
-      fetchCentralLinkage(centralWindow),
-      fetchCentralRegions(centralWindow),
-    ]).then(([funnel, bn, link, reg]) => {
-      if (cancelled) return;
-      setFunnelData(funnel.stages);
-      setBottleneckData(bn.metrics);
-      setLinkageData(link.metrics);
-      setRegionData(reg.rows);
-    });
-    return () => { cancelled = true; };
-  }, [showDrilldown, centralWindow]);
-
   // 드릴다운 상태 (Zustand)
-  const { drillLevel, drillPath, selectedRegion, drillDown, drillUp, drillTo, resetDrill } = useDrillState();
+  const { drillLevel, drillPath, selectedRegion, drillUp, drillTo, resetDrill, setScope } = useDrillState();
   const statsScopeKey = selectedRegion?.name || 'national';
   
   // 반응형 레이아웃 모드 결정
@@ -1377,6 +1359,56 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   }, [leftKPIs, rightKPIs, bottomKPIs, bulletKPIs, selectedRegion, drillLevel, periodType]);
 
   /* ─────────────────────────────────────────────────────────────
+     공통: 드릴레벨에 따른 하위 지역 목록 결정 (모든 통계 패널 공유)
+  ───────────────────────────────────────────────────────────── */
+  const NATION_REGIONS_FULL = [
+    { id: '11', name: '서울특별시' }, { id: '21', name: '부산광역시' }, { id: '22', name: '대구광역시' },
+    { id: '23', name: '인천광역시' }, { id: '24', name: '광주광역시' }, { id: '25', name: '대전광역시' },
+    { id: '26', name: '울산광역시' }, { id: '29', name: '세종특별자치시' }, { id: '31', name: '경기도' },
+    { id: '33', name: '충청북도' }, { id: '34', name: '충청남도' }, { id: '35', name: '전라북도' },
+    { id: '36', name: '전라남도' }, { id: '37', name: '경상북도' }, { id: '38', name: '경상남도' },
+    { id: '39', name: '제주특별자치도' }, { id: '32', name: '강원도' },
+  ];
+
+  const currentSubRegions = useMemo<{ id: string; name: string }[]>(() => {
+    if (drillLevel === 'nation') return NATION_REGIONS_FULL;
+    if (mapSubRegions.length > 0) return mapSubRegions;
+    // 정적 매핑 폴백
+    if (drillLevel === 'sido') {
+      const fullToShort: Record<string, string> = {
+        '서울특별시':'서울','부산광역시':'부산','대구광역시':'대구','인천광역시':'인천',
+        '광주광역시':'광주','대전광역시':'대전','울산광역시':'울산','세종특별자치시':'세종',
+        '경기도':'경기','충청북도':'충북','충청남도':'충남','전북특별자치도':'전북','전라북도':'전북',
+        '전라남도':'전남','경상북도':'경북','경상남도':'경남','제주특별자치도':'제주',
+        '강원특별자치도':'강원','강원도':'강원',
+      };
+      const rawName = selectedRegion?.name || '';
+      const shortName = fullToShort[rawName] || rawName.replace(/특별자치도|특별자치시|광역시|특별시|도$/g, '').trim() || rawName;
+      return SIDO_SIGUNGU_MAP[shortName] || NATION_REGIONS_FULL;
+    }
+    return NATION_REGIONS_FULL;
+  }, [drillLevel, mapSubRegions, selectedRegion]);
+
+  const scope = useMemo(() => ({
+    level: drillLevel,
+    regionCode: selectedRegion?.code,
+    regionName: selectedRegion?.name,
+    subRegions: currentSubRegions,
+  }), [drillLevel, selectedRegion, currentSubRegions]);
+
+  const {
+    centralKpis,
+    dashData,
+    drilldownData,
+    loadingStage,
+    isScopeChangeLoading,
+    prefetchScope,
+  } = useDashboardData(scope, centralWindow, activeCentralKpi, { loadDrilldown: showDrilldown });
+
+  const { funnelData, bottleneckData, linkageData, regionData } = drilldownData;
+  const currentBundle = useMemo<KpiBundle | null>(() => dashData ? dashData[activeKpiKey] : null, [dashData, activeKpiKey]);
+
+  /* ─────────────────────────────────────────────────────────────
      트리맵 데이터 (지역별 케이스) - 히트맵 스타일 + 시간필터 연동
   ───────────────────────────────────────────────────────────── */
   const treemapData = useMemo(() => {
@@ -1384,25 +1416,11 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     const multiplier = analyticsPeriod === 'week' ? 1 : analyticsPeriod === 'month' ? 4.2 : analyticsPeriod === 'year' ? 52 : 13;
     const filterKey = `${statsScopeKey}-${analyticsPeriod}`; // 기간별 다른 시드
     
-    // 지역별 데이터 생성
-    const rawData = [
-      { name: '경기도', size: Math.round(seededValue(`${filterKey}-tree-경기`, 2500, 3500) * multiplier) },
-      { name: '경상남도', size: Math.round(seededValue(`${filterKey}-tree-경남`, 1800, 2500) * multiplier) },
-      { name: '부산광역시', size: Math.round(seededValue(`${filterKey}-tree-부산`, 1500, 2200) * multiplier) },
-      { name: '인천광역시', size: Math.round(seededValue(`${filterKey}-tree-인천`, 1200, 1800) * multiplier) },
-      { name: '충청남도', size: Math.round(seededValue(`${filterKey}-tree-충남`, 1000, 1500) * multiplier) },
-      { name: '전라남도', size: Math.round(seededValue(`${filterKey}-tree-전남`, 900, 1400) * multiplier) },
-      { name: '경상북도', size: Math.round(seededValue(`${filterKey}-tree-경북`, 800, 1300) * multiplier) },
-      { name: '대구광역시', size: Math.round(seededValue(`${filterKey}-tree-대구`, 700, 1100) * multiplier) },
-      { name: '서울특별시', size: Math.round(seededValue(`${filterKey}-tree-서울`, 600, 1000) * multiplier) },
-      { name: '충청북도', size: Math.round(seededValue(`${filterKey}-tree-충북`, 500, 900) * multiplier) },
-      { name: '강원특별자치도', size: Math.round(seededValue(`${filterKey}-tree-강원`, 400, 800) * multiplier) },
-      { name: '전북특별자치도', size: Math.round(seededValue(`${filterKey}-tree-전북`, 350, 700) * multiplier) },
-      { name: '제주특별자치도', size: Math.round(seededValue(`${filterKey}-tree-제주`, 300, 600) * multiplier) },
-      { name: '울산광역시', size: Math.round(seededValue(`${filterKey}-tree-울산`, 400, 700) * multiplier) },
-      { name: '광주광역시', size: Math.round(seededValue(`${filterKey}-tree-광주`, 450, 750) * multiplier) },
-      { name: '세종특별자치시', size: Math.round(seededValue(`${filterKey}-tree-세종`, 250, 500) * multiplier) },
-    ];
+    // 드릴레벨에 따른 하위 지역별 데이터 생성
+    const rawData = currentSubRegions.map(r => ({
+      name: r.name,
+      size: Math.round(seededValue(`${filterKey}-tree-${r.id}`, 250, 3500) * multiplier),
+    }));
     
     // 최대/최소 값 계산
     const maxSize = Math.max(...rawData.map(d => d.size));
@@ -1425,7 +1443,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
       ...item,
       fill: getHeatmapColor(item.size),
     }));
-  }, [statsScopeKey, analyticsPeriod, activeTheme.palette]);
+  }, [statsScopeKey, analyticsPeriod, activeTheme.palette, currentSubRegions]);
 
   const totalCases = useMemo(() => treemapData.reduce((sum, item) => sum + item.size, 0), [treemapData]);
   
@@ -1452,24 +1470,11 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     const range = rangeMap[selectedMapKpiId] ?? { min: 10, max: 100 };
     const seedPrefix = `${statsScopeKey}-${selectedMapKpiId}-heat`;
 
-    const rawData = [
-      { name: '경기도', value: seededValue(`${seedPrefix}-경기`, range.min, range.max) },
-      { name: '경상남도', value: seededValue(`${seedPrefix}-경남`, range.min, range.max) },
-      { name: '부산광역시', value: seededValue(`${seedPrefix}-부산`, range.min, range.max) },
-      { name: '인천광역시', value: seededValue(`${seedPrefix}-인천`, range.min, range.max) },
-      { name: '충청남도', value: seededValue(`${seedPrefix}-충남`, range.min, range.max) },
-      { name: '전라남도', value: seededValue(`${seedPrefix}-전남`, range.min, range.max) },
-      { name: '경상북도', value: seededValue(`${seedPrefix}-경북`, range.min, range.max) },
-      { name: '대구광역시', value: seededValue(`${seedPrefix}-대구`, range.min, range.max) },
-      { name: '서울특별시', value: seededValue(`${seedPrefix}-서울`, range.min, range.max) },
-      { name: '충청북도', value: seededValue(`${seedPrefix}-충북`, range.min, range.max) },
-      { name: '강원특별자치도', value: seededValue(`${seedPrefix}-강원`, range.min, range.max) },
-      { name: '전북특별자치도', value: seededValue(`${seedPrefix}-전북`, range.min, range.max) },
-      { name: '제주특별자치도', value: seededValue(`${seedPrefix}-제주`, range.min, range.max) },
-      { name: '울산광역시', value: seededValue(`${seedPrefix}-울산`, range.min, range.max) },
-      { name: '광주광역시', value: seededValue(`${seedPrefix}-광주`, range.min, range.max) },
-      { name: '세종특별자치시', value: seededValue(`${seedPrefix}-세종`, range.min, range.max) },
-    ];
+    // 드릴레벨에 따른 하위 지역별 히트맵 데이터
+    const rawData = currentSubRegions.map(r => ({
+      name: r.name,
+      value: seededValue(`${seedPrefix}-${r.id}`, range.min, range.max),
+    }));
 
     const maxValue = Math.max(...rawData.map((d) => d.value));
     const minValue = Math.min(...rawData.map((d) => d.value));
@@ -1499,7 +1504,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
         textColor: lightSet.has(fill) ? '#1e293b' : '#ffffff',
       };
     });
-  }, [statsScopeKey, selectedMapKpiId, activeTheme.palette]);
+  }, [statsScopeKey, selectedMapKpiId, activeTheme.palette, currentSubRegions]);
 
   /* ─────────────────────────────────────────────────────────────
      SLA × 데이터 충족률 2×2 리스크 매트릭스 데이터
@@ -1688,12 +1693,11 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   };
 
   const stageByRegionData = useMemo(() => {
-    const regions = ['서울', '부산', '대구', '인천', '광주', '대전', '울산', '세종',
-                     '경기', '충북', '충남', '전북', '전남', '경북', '경남', '제주', '강원'];
-    return regions.map(name => {
-      const seed = `${statsScopeKey}-${analyticsPeriod}-stage-${name}`;
+    return currentSubRegions.map(r => {
+      const seed = `${statsScopeKey}-${analyticsPeriod}-stage-${r.id}`;
+      const shortName = r.name.length > 3 ? r.name.replace(/특별자치도|특별자치시|광역시|특별시|도$/g, '').trim() || r.name.slice(0, 2) : r.name;
       return {
-        regionName: name.length > 3 ? name.slice(0, 2) : name,
+        regionName: shortName.length > 4 ? shortName.slice(0, 4) : shortName,
         incoming: Math.round(seededValue(`${seed}-inc`, 50, 300)),
         inProgress: Math.round(seededValue(`${seed}-inp`, 100, 500)),
         needRecontact: Math.round(seededValue(`${seed}-nrc`, 20, 150)),
@@ -1701,7 +1705,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
         completed: Math.round(seededValue(`${seed}-cmp`, 200, 800)),
       };
     });
-  }, [statsScopeKey, analyticsPeriod]);
+  }, [statsScopeKey, analyticsPeriod, currentSubRegions]);
 
   /* ─────────────────────────────────────────────────────────────
      연령 × 상태 분포 (5그룹 × 4상태) - Left Panel용
@@ -1778,6 +1782,12 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
      - sig 클릭 -> 'sig' 전달 -> sido 드릴레벨로 이동
      - emd 클릭 -> 'emd' 전달 -> sigungu 드릴레벨로 이동
   ───────────────────────────────────────────────────────────── */
+  const getNextDrillLevel = useCallback((level: DrillLevel): DrillLevel => {
+    if (level === 'nation') return 'sido';
+    if (level === 'sido') return 'sigungu';
+    return 'sigungu';
+  }, []);
+
   const handleRegionSelect = useCallback(({ level, code, name }: { level: string; code: string; name: string }) => {
     // GeoMapPanel에서 이미 다음 레벨(sig/emd)로 변환해서 전달함
     // sig -> sido, emd -> sigungu 드릴레벨로 매핑
@@ -1787,10 +1797,24 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     };
     const newLevel = drillLevelMap[level];
     if (newLevel) {
-      console.log('[DrillDown] 지역 선택:', { geoLevel: level, code, name, drillLevel: newLevel });
-      drillDown({ code, name, level: newLevel });
+      prefetchScope({ level: newLevel, regionCode: code, regionName: name });
+      setScope({ code, name, level: newLevel }, { replace: true });
     }
-  }, [drillDown]);
+  }, [prefetchScope, setScope]);
+
+  useEffect(() => {
+    if (!currentBundle?.worstRegions?.length) return;
+    const nextLevel = getNextDrillLevel(drillLevel);
+    currentBundle.worstRegions.slice(0, 3).forEach((region) => {
+      prefetchScope({
+        level: nextLevel,
+        regionCode: region.regionCode,
+        regionName: region.regionName,
+      });
+    });
+  }, [currentBundle, drillLevel, getNextDrillLevel, prefetchScope]);
+
+  const overlayVisible = loadingStage === 'loadingScopeChange' || loadingStage === 'refreshing';
 
   return (
     <div ref={containerRef} className="flex flex-col bg-gray-50 h-full min-h-0">
@@ -1952,7 +1976,8 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
       {/* ═══════════════════════════════════════════════════════════
           SCROLL CONTAINER - 통계/지도/차트 전용 스크롤 영역
       ═══════════════════════════════════════════════════════════ */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div className="relative flex-1 overflow-y-auto min-h-0">
+      <div className={`transition-opacity duration-300 ${overlayVisible ? 'opacity-60' : 'opacity-100'}`}>
 
       {/* ═══════════════════════════════════════════════════════════
           MAIN CONTENT - CSS Grid 3열 레이아웃
@@ -2005,9 +2030,11 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
               return (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-gray-500">전국 값</span>
+                    <span className="text-[12px] text-gray-500">
+                      {drillLevel === 'nation' ? '전국 값' : `${selectedRegion?.name?.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim() || '지역'} 값`}
+                    </span>
                     <span className="text-sm font-bold" style={{ color: activeTheme.primaryColor }}>
-                      {activeTheme.valueFormatter(national.value)}
+                      <AnimatedNumber value={national.value} formatter={(value) => activeTheme.valueFormatter(value)} />
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -2073,18 +2100,25 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                     key={r.regionCode}
                     role="button"
                     tabIndex={0}
+                    onMouseEnter={() => {
+                      prefetchScope({
+                        level: getNextDrillLevel(drillLevel),
+                        regionCode: r.regionCode,
+                        regionName: r.regionName,
+                      });
+                    }}
                     onClick={() => {
-                      const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
-                      drillDown({ code: r.regionCode, name: r.regionName, level: nextLevel });
+                      const nextLevel = getNextDrillLevel(drillLevel);
+                      setScope({ code: r.regionCode, name: r.regionName, level: nextLevel }, { replace: true });
                     }}
                     onKeyDown={e => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        const nextLevel = drillLevel === 'nation' ? 'sido' : drillLevel === 'sido' ? 'sigungu' : 'emd';
-                        drillDown({ code: r.regionCode, name: r.regionName, level: nextLevel });
+                        const nextLevel = getNextDrillLevel(drillLevel);
+                        setScope({ code: r.regionCode, name: r.regionName, level: nextLevel }, { replace: true });
                       }
                     }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 transition-colors cursor-pointer select-none"
+                    className={`w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 transition-colors cursor-pointer select-none ${isScopeChangeLoading ? 'animate-pulse' : ''}`}
                   >
                     {/* 순위 번호 */}
                     <span className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
@@ -2201,8 +2235,8 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                     );
                   }} />
                   <Legend formatter={(v: string) => v === 'slaViolation' ? 'SLA 위반률' : '재접촉 필요율'} wrapperStyle={{ fontSize: '13px' }} />
-                  <Bar dataKey="slaViolation" fill="#ef4444" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="recontactNeed" fill="#f59e0b" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="slaViolation" fill="#ef4444" radius={[3, 3, 0, 0]} isAnimationActive animationDuration={460} animationEasing="ease-out" />
+                  <Bar dataKey="recontactNeed" fill="#f59e0b" radius={[3, 3, 0, 0]} isAnimationActive animationDuration={460} animationEasing="ease-out" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -2295,7 +2329,6 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             <div className="p-2 min-h-0">
               {visualizationMode === 'geomap' ? (
                 <GeoMapPanel
-                  key={`national-${selectedKpiId}-${periodType}`}
                   indicatorId={selectedKpiId}
                   periodType={periodType}
                   year={2026}
@@ -2318,7 +2351,9 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                       data={mapHeatmapData}
                       dataKey="size"
                       stroke="#fff"
-                      isAnimationActive={false}
+                      isAnimationActive
+                      animationDuration={520}
+                      animationEasing="ease-out"
                       content={CustomTreemapContent}
                     />
                   </ResponsiveContainer>
@@ -2414,7 +2449,10 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                       <PieChart>
                         <Pie data={currentBundle.breakdown} cx="50%" cy="50%" innerRadius={35} outerRadius={60}
                           dataKey="value" startAngle={90} endAngle={-270} paddingAngle={2} strokeWidth={0}
-                          label={renderDonutLabel} labelLine={false}>
+                          label={renderDonutLabel} labelLine={false}
+                          isAnimationActive
+                          animationDuration={460}
+                          animationEasing="ease-out">
                           {currentBundle.breakdown.map((entry, idx) => (
                             <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
                           ))}
@@ -2438,7 +2476,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                         <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#4b5563' }} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} tickLine={false} axisLine={false} width={30} />
                         <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '8px' }} />
-                        <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+                        <Bar dataKey="value" radius={[3, 3, 0, 0]} isAnimationActive animationDuration={460} animationEasing="ease-out">
                           {currentBundle.breakdown.map((entry, idx) => (
                             <Cell key={idx} fill={entry.color || activeTheme.palette[idx % activeTheme.palette.length]} />
                           ))}
@@ -2475,6 +2513,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                       <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#4b5563' }} width={60} />
                       <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '8px' }} />
                       <Bar dataKey="value" radius={[0, 3, 3, 0]} fill={activeTheme.primaryColor}
+                        isAnimationActive animationDuration={460} animationEasing="ease-out"
                         label={{ position: 'right', fontSize: 10, fill: '#374151', formatter: (v: number) => v.toLocaleString() }}>
                         {currentBundle.cause.slice(0, showCauseMore ? currentBundle.cause.length : 3).map((_, idx) => (
                           <Cell key={idx} fill={activeTheme.palette[Math.min(idx + 1, activeTheme.palette.length - 2)]} />
@@ -2524,8 +2563,9 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                       <ReferenceLine y={activeTheme.target} stroke="#ef4444" strokeDasharray="4 2" strokeWidth={1.5}
                         label={{ value: `목표 ${activeTheme.valueFormatter(activeTheme.target)}`, fontSize: 10, fill: '#ef4444', position: 'right' }} />
                     )}
-                    <Area type="monotone" dataKey="value" fill="url(#kpiTrendGrad)" stroke="none" />
+                    <Area type="monotone" dataKey="value" fill="url(#kpiTrendGrad)" stroke="none" isAnimationActive animationDuration={500} animationEasing="ease-out" />
                     <Line type="monotone" dataKey="value" stroke={activeTheme.primaryColor} strokeWidth={2}
+                      isAnimationActive animationDuration={500} animationEasing="ease-out"
                       dot={false} activeDot={{ r: 4, fill: activeTheme.primaryColor, stroke: '#fff', strokeWidth: 2 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -2572,9 +2612,10 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                         </div>
                       );
                     }} />
-                    <Scatter data={riskMatrixData} onClick={(entry: any) => {
+                    <Scatter data={riskMatrixData} isAnimationActive animationDuration={480} animationEasing="ease-out" onClick={(entry: any) => {
                       if (entry?.regionId) {
-                        drillDown({ code: entry.regionId, name: entry.regionName, level: 'sido' });
+                        const nextLevel = getNextDrillLevel(drillLevel);
+                        setScope({ code: entry.regionId, name: entry.regionName, level: nextLevel }, { replace: true });
                       }
                     }}>
                       {riskMatrixData.map((entry, idx) => {
@@ -2624,7 +2665,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                     }} />
                     <Legend formatter={(value: string) => STAGE_LABELS[value] || value} wrapperStyle={{ fontSize: '11px' }} />
                     {STAGE_KEYS.map(key => (
-                      <Bar key={key} dataKey={key} stackId="stage" fill={STAGE_COLORS_MAP[key]} />
+                      <Bar key={key} dataKey={key} stackId="stage" fill={STAGE_COLORS_MAP[key]} isAnimationActive animationDuration={460} animationEasing="ease-out" />
                     ))}
                   </BarChart>
                 </ResponsiveContainer>
@@ -2662,7 +2703,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                 <div className="text-[12px] text-gray-500 mb-2">{selectedMapCard.label} (행정구역별)</div>
                 <div className="h-[140px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <Treemap data={mapHeatmapData} dataKey="size" aspectRatio={4/3} stroke="#fff" content={<CustomTreemapContent />} />
+                    <Treemap data={mapHeatmapData} dataKey="size" aspectRatio={4/3} stroke="#fff" isAnimationActive animationDuration={520} animationEasing="ease-out" content={<CustomTreemapContent />} />
                   </ResponsiveContainer>
                 </div>
               </div>
@@ -2689,7 +2730,11 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
           </div>
         )}
       </div>
-
+      </div>
+      <LoadingOverlay
+        visible={overlayVisible}
+        stage={loadingStage === 'refreshing' ? 'refreshing' : 'scopeChange'}
+      />
       </div>{/* end scroll container */}
     </div>
   );

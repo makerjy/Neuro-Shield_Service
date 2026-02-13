@@ -954,13 +954,20 @@ export async function fetchCentralCases(
 import type { KpiBundle, CentralKpiKey, DashboardData, CentralRegionMetric } from '../lib/centralKpiTheme';
 
 export async function fetchCentralDashboardBundle(
-  window: CentralTimeWindow = 'LAST_7D'
+  window: CentralTimeWindow = 'LAST_7D',
+  regionList?: { code: string; name: string }[],
+  drillLevel?: string,
+  regionCode?: string
 ): Promise<DashboardData> {
-  await delay(250);
-  const seed = `bundle-${window}`;
+  // delay 제거 — 즉시 응답
+  const scopeKey = regionCode ? `${drillLevel}-${regionCode}` : 'nation';
+  const seed = `bundle-${window}-${scopeKey}`;
+
+  // 드릴다운 시 전달받은 하위 지역 목록 사용, 없으면 전국 17개 시도
+  const activeRegions = (regionList && regionList.length > 0) ? regionList : REGION_LIST;
 
   const makeRegions = (kpiKey: string, min: number, max: number): CentralRegionMetric[] =>
-    REGION_LIST.map(r => ({
+    activeRegions.map(r => ({
       regionCode: r.code,
       regionName: r.name,
       value: Number(_sv(`${seed}-${kpiKey}-${r.code}`, min, max).toFixed(1)),

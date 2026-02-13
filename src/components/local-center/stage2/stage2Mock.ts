@@ -37,11 +37,6 @@ function toDateTime(date: string, seed: string): string {
   return `${date} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
-function maskName(name: string): string {
-  if (name.length <= 1) return `${name}*`;
-  return `${name.slice(0, 1)}${"*".repeat(Math.max(1, name.length - 1))}`;
-}
-
 function countMissing(baseCase: Case): number {
   let missing = 0;
   if (baseCase.secondExamStatus === "NONE") missing += 1;
@@ -424,7 +419,7 @@ export function buildStage2CaseDetailMock(baseCase: Case): Stage2CaseDetailData 
     auditLogs: buildAuditLogs(baseCase),
     memos: buildMemos(baseCase),
     pii: {
-      maskedName: maskName(baseCase.patientName),
+      maskedName: baseCase.patientName,
       maskedPhone: maskPhone(baseCase.phone),
       age: baseCase.age,
       gender: baseCase.gender,

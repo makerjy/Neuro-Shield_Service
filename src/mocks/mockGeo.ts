@@ -31,6 +31,12 @@ export const SIGUNGU_OPTIONS: Record<string, RegionOption[]> = {
     { code: '26030', label: '동구' },
     { code: '26040', label: '영도' }
   ],
+  '27': [
+    { code: '27010', label: '중구' },
+    { code: '27020', label: '동구' },
+    { code: '27030', label: '서구' },
+    { code: '27040', label: '남구' }
+  ],
   '29': [
     { code: '29010', label: '한솔' },
     { code: '29020', label: '나성' },
@@ -41,6 +47,40 @@ export const SIGUNGU_OPTIONS: Record<string, RegionOption[]> = {
     { code: '31020', label: '성남' },
     { code: '31030', label: '용인' },
     { code: '31040', label: '고양' }
+  ],
+  '41': [
+    { code: '41010', label: '청주' },
+    { code: '41020', label: '충주' },
+    { code: '41030', label: '제천' },
+    { code: '41040', label: '보은' }
+  ],
+  '44': [
+    { code: '44010', label: '전주' },
+    { code: '44020', label: '군산' },
+    { code: '44030', label: '익산' },
+    { code: '44040', label: '정읍' }
+  ],
+  '46': [
+    { code: '46010', label: '목포' },
+    { code: '46020', label: '여수' },
+    { code: '46030', label: '순천' },
+    { code: '46040', label: '나주' }
+  ],
+  '47': [
+    { code: '47010', label: '포항' },
+    { code: '47020', label: '경주' },
+    { code: '47030', label: '김천' },
+    { code: '47040', label: '안동' }
+  ],
+  '48': [
+    { code: '48010', label: '창원' },
+    { code: '48020', label: '진주' },
+    { code: '48030', label: '통영' },
+    { code: '48040', label: '김해' }
+  ],
+  '50': [
+    { code: '50010', label: '제주시' },
+    { code: '50020', label: '서귀포' }
   ]
 };
 

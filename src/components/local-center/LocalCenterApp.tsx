@@ -51,11 +51,6 @@ export function LocalCenterApp({
     setCaseSubView('detail');
   };
 
-  const handleOpenCaseService = (caseId: string, entry: 'call' | 'sms' = 'call') => {
-    setSelectedCaseId(caseId);
-    setCaseSubView(entry === 'sms' ? 'sms' : 'consultation');
-  };
-
   const renderContent = () => {
     if (selectedCaseId && activeTab === 'cases') {
       if (caseSubView === 'consultation') {
@@ -102,7 +97,6 @@ export function LocalCenterApp({
           caseId={selectedCaseId}
           stage={selectedCaseStage}
           onBack={resetCaseSelection}
-          onOpenConsultation={handleOpenCaseService}
         />
       );
     }

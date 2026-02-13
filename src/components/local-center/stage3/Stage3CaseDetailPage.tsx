@@ -30,6 +30,7 @@ import {
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { cn } from "../../ui/utils";
+import { ContactLinkageActionsCard } from "../ContactLinkageActionsCard";
 import { CaseDetailPrograms } from "../programs/CaseDetailPrograms";
 import { SmsPanel } from "../sms/SmsPanel";
 import type { SmsTemplate } from "../sms/SmsPanel";
@@ -206,6 +207,7 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
   const [supportReason, setSupportReason] = useState("");
   const [mriExpanded, setMriExpanded] = useState(false);
   const [smsModalOpen, setSmsModalOpen] = useState(false);
+  const [linkageModalOpen, setLinkageModalOpen] = useState(false);
   const [selectedFailTag, setSelectedFailTag] = useState<
     Stage3Case["communication"]["history"][number]["reasonTag"] | null
   >(null);
@@ -252,6 +254,10 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
   const todayActions = sortedActions.filter((item) => (item.dueInDays ?? 0) <= 1).slice(0, 3);
   const weeklyActions = sortedActions.filter((item) => (item.dueInDays ?? 0) > 1 && (item.dueInDays ?? 8) <= 7);
 
+  const openLinkagePanel = () => {
+    setLinkageModalOpen(true);
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-xl border border-slate-200 bg-white">
@@ -270,6 +276,18 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
       </div>
     );
   }
+
+  const renderProgramProvisionPanel = () => (
+    <CaseDetailPrograms
+      caseId={stage3.caseId}
+      stage={3}
+      resultLabel={stage3.risk.zone === "danger" ? "치매" : "MCI"}
+      mciSeverity={stage3.risk.zone === "danger" ? undefined : "중증"}
+      riskTags={stage3.risk.triggers.filter((t) => t.satisfied).map((t) => t.label)}
+      actorId="OP-001"
+      actorName={stage3.owner.name}
+    />
+  );
 
   const runOptimistic = async (
     action: Stage3Case["ops"]["recommendedActions"][number],
@@ -432,23 +450,6 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
             </CardContent>
           </Card>
 
-          {/* ── 프로그램 제공(행정 실행) — Stage3 정밀관리 ── */}
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="border-b border-slate-100 px-4 py-3">
-              <CardTitle className="text-sm font-bold text-slate-900">프로그램 제공(정밀관리)</CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 py-4">
-              <CaseDetailPrograms
-                caseId={stage3.caseId}
-                stage={3}
-                resultLabel={stage3.risk.zone === "danger" ? "치매" : "MCI"}
-                mciSeverity={stage3.risk.zone === "danger" ? undefined : "중증"}
-                riskTags={stage3.risk.triggers.filter(t => t.satisfied).map(t => t.label)}
-                actorId="OP-001"
-                actorName={stage3.owner.name}
-              />
-            </CardContent>
-          </Card>
         </section>
 
         <section className="space-y-4 xl:col-span-3">
@@ -458,21 +459,12 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
             onSelectFailTag={setSelectedFailTag}
           />
 
-          {/* SMS 트리거 버튼 */}
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardContent className="px-4 py-4">
-              <Button
-                className="h-11 w-full gap-2 bg-[#15386a] text-sm font-semibold text-white hover:bg-[#102b4e]"
-                onClick={() => setSmsModalOpen(true)}
-              >
-                <MessageSquare className="h-4 w-4" />
-                상담/문자 실행 (3차)
-              </Button>
-              <p className="mt-2 text-center text-[11px] text-slate-500">
-                접촉 · 예약안내 · 리마인더 문자 발송
-              </p>
-            </CardContent>
-          </Card>
+          <ContactLinkageActionsCard
+            stageLabel="3차"
+            onOpenContact={() => setSmsModalOpen(true)}
+            onOpenLinkage={openLinkagePanel}
+            linkageDescription="프로그램 제공(정밀관리) 팝업을 열어 연계를 실행합니다."
+          />
 
           {/* SMS 모달 */}
           <Dialog open={smsModalOpen} onOpenChange={setSmsModalOpen}>
@@ -491,6 +483,30 @@ export function Stage3CaseDetailPage({ caseId, onBack }: Stage3CaseDetailPagePro
                 }}
                 onConsultation={handleStage3Consultation}
               />
+            </DialogContent>
+          </Dialog>
+
+          {/* 연계 모달 */}
+          <Dialog open={linkageModalOpen} onOpenChange={setLinkageModalOpen}>
+            <DialogContent
+              className="!left-1/2 !top-1/2 !translate-x-[-50%] !translate-y-[-50%] !max-w-none gap-0 overflow-hidden p-0"
+              style={{
+                width: "min(96vw, 1720px)",
+                maxWidth: "min(96vw, 1720px)",
+                height: "min(94vh, 980px)",
+              }}
+            >
+              <div className="flex h-full min-h-0 flex-col">
+                <DialogHeader className="border-b border-slate-100 px-4 py-3 text-left">
+                  <DialogTitle className="text-base font-bold text-slate-900">연계</DialogTitle>
+                  <DialogDescription className="text-xs text-slate-600">
+                    운영 규칙: 확진/AI 판단 표현 금지. 안내·확인·연계 톤 사용. 목적 고지 필수.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+                  <div className="min-w-[1080px]">{renderProgramProvisionPanel()}</div>
+                </div>
+              </div>
             </DialogContent>
           </Dialog>
 
@@ -658,7 +674,9 @@ export function CaseIdentityBar({
           </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-base font-bold text-slate-900">{stage3.caseId}</h1>
+              <h1 className="text-base font-bold text-slate-900">
+                {stage3.subject.maskedName} · {stage3.subject.age}세
+              </h1>
               <Badge className="border-blue-200 bg-blue-50 text-blue-800">Stage 3</Badge>
               <Badge className={cn("border", zoneTone(stage3.risk.zone))}>{statusLabel(stage3.status)}</Badge>
             </div>

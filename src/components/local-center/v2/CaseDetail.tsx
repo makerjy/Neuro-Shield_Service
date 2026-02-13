@@ -35,16 +35,46 @@ import {
 } from "./caseRecords";
 import { CaseDetailStage2 } from "../CaseDetailStage2";
 import { CaseDetailStage3 } from "../CaseDetailStage3";
-import { Stage1CaseIdentity, Stage1OpsDetail } from "./stage1/Stage1OpsDetail";
+import { Stage1OpsDetail, type Stage1HeaderSummary } from "./stage1/Stage1OpsDetail";
 
 interface CaseDetailProps {
   caseId: string;
   stage: StageType;
   onBack: () => void;
-  onOpenConsultation?: (caseId: string, entry: "call" | "sms") => void;
 }
 
-export function CaseDetail({ caseId, stage, onBack, onOpenConsultation }: CaseDetailProps) {
+function formatDateTime(isoLike?: string) {
+  if (!isoLike) return "-";
+  const d = new Date(isoLike);
+  if (Number.isNaN(d.getTime())) return isoLike;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(
+    d.getHours()
+  ).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function stage1StrategyLabel(summary: Stage1HeaderSummary | null) {
+  if (!summary) return "-";
+  if (summary.contactMode === "MANUAL_OVERRIDE") {
+    return `수동 변경 (${summary.effectiveMode === "HUMAN_FIRST" ? "상담사 우선" : "자동안내 우선"})`;
+  }
+  return summary.effectiveMode === "HUMAN_FIRST" ? "상담사 우선" : "자동안내 우선";
+}
+
+function stage1SlaLabel(summary: Stage1HeaderSummary | null) {
+  if (!summary) return "-";
+  if (summary.slaLevel === "OVERDUE") return "지연";
+  if (summary.slaLevel === "DUE_SOON") return "임박";
+  return "정상";
+}
+
+export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
+  const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
+  const [stage1HeaderSummary, setStage1HeaderSummary] = useState<Stage1HeaderSummary | null>(null);
+  const stage1IdentityLine =
+    stage === "Stage 1" && profile
+      ? `연령대 ${toAgeBand(profile.profile.age)} · 연락처 ${maskPhone(profile.profile.phone)} · 케이스키 ${profile.id}`
+      : null;
+
   if (stage === "Stage 2") {
     return <CaseDetailStage2 caseId={caseId} onBack={onBack} />;
   }
@@ -52,50 +82,73 @@ export function CaseDetail({ caseId, stage, onBack, onOpenConsultation }: CaseDe
     return <CaseDetailStage3 caseId={caseId} onBack={onBack} />;
   }
 
-  const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
-
   return (
     <div className="flex h-full flex-col bg-[#f4f7fb]">
       {/* 상단 스티키 헤더 */}
-      <div className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={onBack}
-            className="rounded-full border border-slate-200 bg-white p-2 transition-colors hover:bg-slate-50"
-          >
-            <ChevronLeft size={20} />
-          </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-gray-900">{caseId}</h2>
-              <span className="rounded border border-blue-200 bg-blue-50 px-3.5 py-1.5 text-sm font-bold text-blue-700">
-                {stage}
-              </span>
+      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={onBack}
+              className="rounded-full border border-slate-200 bg-white p-2 transition-colors hover:bg-slate-50"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold text-gray-900">{caseId}</h2>
+                <span className="rounded border border-blue-200 bg-blue-50 px-3.5 py-1.5 text-sm font-bold text-blue-700">
+                  {stage}
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
+                <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
+                <span className="w-px h-2 bg-gray-200"></span>
+                <span>
+                  현재 상태: <span className="font-bold text-blue-700">{profile?.status ?? "진행중"}</span>
+                </span>
+                {stage1IdentityLine ? (
+                  <>
+                    <span className="w-px h-2 bg-gray-200"></span>
+                    <span className="text-gray-600">{stage1IdentityLine}</span>
+                  </>
+                ) : null}
+              </p>
             </div>
-            <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
-              <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
-              <span className="w-px h-2 bg-gray-200"></span>
-              <span>
-                현재 상태: <span className="font-bold text-blue-700">{profile?.status ?? "진행중"}</span>
-              </span>
-            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button className="flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+              <Activity size={14} /> 운영 지원 요청
+            </button>
+            <button className="flex items-center gap-2 rounded-lg bg-[#15386a] px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:shadow-md">
+              다음 액션 1순위 실행 <ArrowRightCircle size={14} />
+            </button>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
-            <Activity size={14} /> 운영 지원 요청
-          </button>
-          <button className="flex items-center gap-2 rounded-lg bg-[#15386a] px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:shadow-md">
-            다음 액션 1순위 실행 <ArrowRightCircle size={14} />
-          </button>
-        </div>
+
+        {stage === "Stage 1" && stage1HeaderSummary ? (
+          <div className="mt-3 rounded-xl border border-slate-700 bg-gradient-to-r from-slate-900 to-slate-800 px-3 py-2 text-white">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+              <span className="rounded-md bg-white/15 px-2 py-1">접촉 방식 {stage1StrategyLabel(stage1HeaderSummary)}</span>
+              <span className="rounded-md bg-white/15 px-2 py-1">SLA {stage1SlaLabel(stage1HeaderSummary)}</span>
+              <span className="rounded-md bg-white/15 px-2 py-1">데이터 품질 {stage1HeaderSummary.qualityScore}%</span>
+              <span className="rounded-md bg-white/15 px-2 py-1">누락 {stage1HeaderSummary.missingCount}건</span>
+              <span className="rounded-md bg-white/15 px-2 py-1">경고 {stage1HeaderSummary.warningCount}건</span>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-200">
+              최근 업데이트 {formatDateTime(stage1HeaderSummary.lastUpdatedAt)} · 운영 참고: 접촉 방식은 사전 기준으로 제안되며 최종 실행은 담당자가 수행합니다.
+            </p>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {stage === "Stage 1" ? (
           <>
-            <Stage1CaseIdentity caseRecord={profile} />
-            <Stage1OpsDetail caseRecord={profile} onOpenConsultation={onOpenConsultation} />
+            <Stage1OpsDetail
+              caseRecord={profile}
+              onHeaderSummaryChange={setStage1HeaderSummary}
+            />
           </>
         ) : (
           <>

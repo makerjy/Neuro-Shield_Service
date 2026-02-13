@@ -63,6 +63,7 @@ type GeoMapPanelProps = {
   externalColorScheme?: MapColorScheme; // 외부 KPI 기반 색상 스킴
   hideLegendPanel?: boolean; // 하단 범례 패널 숨김
   onSubRegionsChange?: (regions: { code: string; name: string }[]) => void; // 현재 표시 중인 하위 지역 목록 전달
+  getTooltipExtraLines?: (payload: { level: Level; code: string; name: string; value: number }) => string[];
 };
 
 function getFeatureCode(feature: any): string {
@@ -128,7 +129,8 @@ export function GeoMapPanel({
   onGoBack,
   externalColorScheme,
   hideLegendPanel = false,
-  onSubRegionsChange
+  onSubRegionsChange,
+  getTooltipExtraLines,
 }: GeoMapPanelProps) {
   const indicator = getGeoIndicator(indicatorId);
   const scopeKey = JSON.stringify(scope);
@@ -549,6 +551,16 @@ export function GeoMapPanel({
     return `${sign}${formatGeoValue(Math.abs(value), indicator)}`;
   };
 
+  const tooltipExtraLines = useMemo(() => {
+    if (!activeMetric || !getTooltipExtraLines) return [] as string[];
+    return getTooltipExtraLines({
+      level,
+      code: activeMetric.code,
+      name: activeMetric.name,
+      value: activeMetric.value,
+    });
+  }, [activeMetric, getTooltipExtraLines, level]);
+
   return (
     <div className={`${isPortal ? 'border border-gray-200' : 'border-2 border-gray-300'} bg-white ${className || ''}`}>
       <div className={`${isPortal ? 'border-b border-gray-200' : 'border-b-2 border-gray-300'} px-4 py-3`}>
@@ -616,11 +628,20 @@ export function GeoMapPanel({
             </div>
             <div className="rounded-lg border border-gray-200 bg-white p-3">
               <div className="text-gray-500">선택 지역</div>
-              <div className="text-sm font-semibold text-gray-900">{activeName}</div>
-              <div className="text-xs text-gray-500">
-                {activeMetric ? formatGeoValue(activeMetric.value, indicator) : '-'}
-              </div>
-            </div>
+                  <div className="text-sm font-semibold text-gray-900">{activeName}</div>
+                  <div className="text-xs text-gray-500">
+                    {activeMetric ? formatGeoValue(activeMetric.value, indicator) : '-'}
+                  </div>
+                  {tooltipExtraLines.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {tooltipExtraLines.slice(0, 3).map((line, idx) => (
+                        <div key={idx} className="text-[11px] text-gray-500">
+                          {line}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
           </div>
         )}
 
@@ -648,6 +669,7 @@ export function GeoMapPanel({
                     year={year}
                     valueFormatter={(value) => formatGeoValue(value, indicator)}
                     colorPalette={currentColors}
+                    getTooltipExtraLines={getTooltipExtraLines}
                   />
                 )}
               </div>

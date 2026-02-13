@@ -30,6 +30,9 @@ export type GeoMapPanelProps = {
   drillLabel?: string;
   canDrillUp?: boolean;
   onDrillUp?: () => void;
+  /* 외부 드릴다운 동기화 */
+  externalLevel?: 'ctprvn' | 'sig' | 'emd';
+  externalSelectedCode?: string;
 };
 
 export function GeoMapPanel({
@@ -47,7 +50,9 @@ export function GeoMapPanel({
   selectedKpi,
   drillLabel,
   canDrillUp,
-  onDrillUp
+  onDrillUp,
+  externalLevel,
+  externalSelectedCode,
 }: GeoMapPanelProps) {
   const kpiColorScheme: MapColorScheme = selectedKpi
     ? (getKpiPalette(selectedKpi) as MapColorScheme)
@@ -141,7 +146,10 @@ export function GeoMapPanel({
           hideBreadcrumb
           hintText="지도 클릭 시 하위 단계 이동"
           onRegionSelect={onRegionSelect}
+          onGoBack={onDrillUp}
           externalColorScheme={kpiColorScheme}
+          externalLevel={externalLevel}
+          externalSelectedCode={externalSelectedCode}
           hideLegendPanel
         />
         {children && (

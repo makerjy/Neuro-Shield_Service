@@ -20,6 +20,7 @@ type LeftKpiPanelProps = {
   selectedKpi?: string;
   onSelectKpi?: (key: string) => void;
   centralData?: CentralDashboardData | null;
+  regionLabel?: string;
 };
 
 type CardItem = {
@@ -36,7 +37,7 @@ const statusClass = (status?: 'normal' | 'warn' | 'risk') => {
   return 'border-gray-200 text-gray-900';
 };
 
-export function LeftKpiPanel({ variant = 'national', kpi, loading, partial, selectedKpi, onSelectKpi, centralData }: LeftKpiPanelProps) {
+export function LeftKpiPanel({ variant = 'national', kpi, loading, partial, selectedKpi, onSelectKpi, centralData, regionLabel }: LeftKpiPanelProps) {
   const [expanded, setExpanded] = useState(false);
 
   if (loading) {
@@ -215,7 +216,7 @@ export function LeftKpiPanel({ variant = 'national', kpi, loading, partial, sele
       {currentRegionData.length > 0 && (
         <div className="rounded-md border border-gray-200 bg-white p-4">
           <div className="text-xs font-semibold text-gray-700 mb-2">
-            {currentTheme.label} — 지역 Top / Bottom
+            {currentTheme.label} — {regionLabel ?? '전국'} 지역 Top / Bottom
           </div>
 
           {/* Top 3 */}

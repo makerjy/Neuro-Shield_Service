@@ -162,10 +162,10 @@ export const KPI_PALETTE_MAP: Record<string, keyof typeof COLOR_PALETTES> = {
   bottleneckRisk: 'red',
   dataReadiness: 'green',
   governanceSafety: 'heat',
-  regionalSla: 'red',
+  regionalSla: 'blue',
   regionalQueueRisk: 'orange',
-  regionalRecontact: 'orange',
-  regionalDataReadiness: 'green',
+  regionalRecontact: 'red',
+  regionalDataReadiness: 'orange',
   regionalGovernance: 'purple',
 };
 

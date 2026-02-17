@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { 
   ArrowUpRight, 
   ArrowDownRight, 
@@ -25,6 +25,7 @@ import {
 import { cn, type StageType } from "./shared";
 import { GeoMapPanel } from "../../geomap/GeoMapPanel";
 import { REGIONAL_SCOPES } from "../../geomap/regions";
+import { applyDrilldownFilter, useDashboardStats } from "./caseSSOT";
 
 interface KPIProps {
   label: string;
@@ -56,33 +57,6 @@ const KPICard = ({ label, value, change, isUp, color, onClick }: KPIProps) => (
     </div>
   </div>
 );
-
-const mciDistribution = [
-  { name: "Low", value: 45, color: "#059669" },
-  { name: "Moderate", value: 35, color: "#d97706" },
-  { name: "High", value: 20, color: "#dc2626" },
-];
-
-const highRiskMciList = [
-  { id: "CASE-0121", age: 69, probability: "85%", period: "6개월", nextAction: "3차 감별 권고" },
-  { id: "CASE-0254", age: 74, probability: "78%", period: "12개월", nextAction: "추적 강화" },
-  { id: "CASE-0310", age: 81, probability: "92%", period: "3개월", nextAction: "3차 감별 권고" },
-];
-
-const pipelineData = [
-  { name: "1차 선별", count: 1240, rate: 100, drop: 5, wait: 1.2 },
-  { name: "2차 평가", count: 850, rate: 68, drop: 12, wait: 4.5 },
-  { name: "MCI", count: 320, rate: 25, drop: 8, wait: 7.2 },
-  { name: "High MCI", count: 145, rate: 11, drop: 4, wait: 12.0 },
-  { name: "3차 감별", count: 88, rate: 7, drop: 2, wait: 15.4 },
-];
-
-const priorityTasks = [
-  { id: "CASE-0012", age: 78, stage: "Stage 2", reason: "재평가 트리거 (점수 하락)", action: "전화", sla: "1h 임박" },
-  { id: "CASE-0045", age: 82, stage: "Stage 3", reason: "연락 실패 3회 초과", action: "방문예약", sla: "지연" },
-  { id: "CASE-0092", age: 75, stage: "Stage 1", reason: "데이터 품질 경고", action: "정보보완", sla: "3h 남음" },
-  { id: "CASE-0121", age: 69, stage: "Stage 2", reason: "고위험 MCI 전환 징후", action: "3차의뢰", sla: "5h 남음" },
-];
 
 /* ── KOSTAT 2018 GeoJSON 기준 시군구 코드 (행정안전부 코드와 다름!) ── */
 const SEOUL_SIG_CODE_BY_DISTRICT: Record<string, string> = {
@@ -141,32 +115,52 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
   onSelectCase: (id: string, stage: StageType) => void,
   centerName?: string,
 }) {
+  const stats = useDashboardStats();
   const mapScope = resolveLocalMapScope(centerName);
   const [hoveredPipelineStep, setHoveredPipelineStep] = useState<string | null>(null);
+  const mciDistribution = useMemo(
+    () =>
+      stats.mciDistribution.length > 0
+        ? stats.mciDistribution
+        : [
+            { name: "Low", value: 0, color: "#059669" },
+            { name: "Moderate", value: 0, color: "#d97706" },
+            { name: "High", value: 0, color: "#dc2626" },
+          ],
+    [stats.mciDistribution],
+  );
+  const highRiskMciList = stats.highRiskMciList;
+  const pipelineData = stats.pipelineData;
+  const priorityTasks = stats.priorityTasks;
+
+  const handleDrilldown = (filter: string) => {
+    applyDrilldownFilter(filter);
+    onNavigateToCases(filter);
+  };
 
   return (
     <div className="space-y-6">
       {/* 1) 상단 KPI 요약 바 */}
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <KPICard 
-          label="오늘 연락 필요" value="42" change="+12%" isUp={true} color="bg-blue-600" 
-          onClick={() => onNavigateToCases("SLA 임박")}
+          label="오늘 연락 필요" value={stats.contactNeeded.toLocaleString()} change="실시간" isUp={true} color="bg-blue-600" 
+          onClick={() => handleDrilldown("SLA 임박")}
         />
         <KPICard 
-          label="2차 대기" value="128" change="-4%" isUp={false} color="bg-orange-500" 
-          onClick={() => onNavigateToCases("연계 대기")}
+          label="2차 대기" value={stats.stage2Waiting.toLocaleString()} change="실시간" isUp={false} color="bg-orange-500" 
+          onClick={() => handleDrilldown("연계 대기")}
         />
         <KPICard 
-          label="고위험 MCI" value="14" change="+2" isUp={true} color="bg-red-600" 
-          onClick={() => onNavigateToCases("High MCI")}
+          label="고위험 MCI" value={stats.highRiskMci.toLocaleString()} change="실시간" isUp={true} color="bg-red-600" 
+          onClick={() => handleDrilldown("High MCI")}
         />
         <KPICard 
-          label="3차 대기" value="31" change="+5%" isUp={true} color="bg-purple-600" 
-          onClick={() => onNavigateToCases("3차 감별")}
+          label="3차 대기" value={stats.stage3Waiting.toLocaleString()} change="실시간" isUp={true} color="bg-purple-600" 
+          onClick={() => handleDrilldown("3차 감별")}
         />
         <KPICard 
-          label="이탈자" value="8" change="-12%" isUp={false} color="bg-gray-500" 
-          onClick={() => onNavigateToCases("이탈 위험")}
+          label="이탈자" value={stats.churnRisk.toLocaleString()} change="실시간" isUp={false} color="bg-gray-500" 
+          onClick={() => handleDrilldown("이탈 위험")}
         />
       </div>
 
@@ -205,7 +199,7 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
               return (
                 <button
                   key={step.name}
-                  onClick={() => onNavigateToCases(step.name)}
+                  onClick={() => handleDrilldown(step.name)}
                   onPointerEnter={(event) => {
                     if (event.pointerType !== "touch") {
                       setHoveredPipelineStep(step.name);
@@ -293,7 +287,7 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
               오늘의 우선 업무
             </h3>
             <button 
-              onClick={() => onNavigateToCases("SLA 임박")}
+              onClick={() => handleDrilldown("SLA 임박")}
               className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1"
             >
               전체 보기 <ChevronRight size={14} />
@@ -392,20 +386,26 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
           
           <div className="flex-1 space-y-3">
             <p className="text-[10px] font-bold text-gray-400 uppercase">고위험 MCI 리스트 (High)</p>
-            {highRiskMciList.map((mci) => (
-              <div key={mci.id} className="p-2.5 bg-gray-50 rounded-lg border border-gray-100 flex items-center justify-between">
-                <div>
-                  <p className="text-[11px] font-bold text-blue-600">{mci.id} <span className="text-gray-400 text-[10px]">({mci.age}세)</span></p>
-                  <p className="text-[9px] text-red-600 font-bold">전환 가능성 {mci.probability} | {mci.period}</p>
-                </div>
-                <button 
-                  onClick={() => onSelectCase(mci.id, "Stage 2")}
-                  className="px-2 py-1 bg-white border border-gray-200 rounded text-[9px] font-bold text-gray-600 hover:bg-gray-100"
-                >
-                  {mci.nextAction}
-                </button>
+            {highRiskMciList.length === 0 ? (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-[11px] text-gray-600">
+                현재 고위험 MCI 케이스가 없습니다.
               </div>
-            ))}
+            ) : (
+              highRiskMciList.map((mci) => (
+                <div key={mci.id} className="p-2.5 bg-gray-50 rounded-lg border border-gray-100 flex items-center justify-between">
+                  <div>
+                    <p className="text-[11px] font-bold text-blue-600">{mci.id} <span className="text-gray-400 text-[10px]">({mci.age}세)</span></p>
+                    <p className="text-[9px] text-red-600 font-bold">전환 가능성 {mci.probability} | {mci.period}</p>
+                  </div>
+                  <button 
+                    onClick={() => onSelectCase(mci.id, "Stage 2")}
+                    className="px-2 py-1 bg-white border border-gray-200 rounded text-[9px] font-bold text-gray-600 hover:bg-gray-100"
+                  >
+                    {mci.nextAction}
+                  </button>
+                </div>
+              ))
+            )}
           </div>
           <button className="mt-4 w-full py-2 bg-red-50 text-red-700 text-xs font-bold rounded-lg hover:bg-red-100 transition-colors">
             3차 감별 권고 일괄 실행

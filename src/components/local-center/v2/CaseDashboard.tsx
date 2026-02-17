@@ -17,12 +17,12 @@ import {
 import { cn, type StageType } from "./shared";
 import {
   ALERT_FILTER_TABS,
-  CASE_RECORDS,
   matchesAlertFilter,
   resolveInitialCaseFilter,
   type CaseAlertFilter,
   type CaseRecord,
 } from "./caseRecords";
+import { useCaseDashboardRecords } from "./caseSSOT";
 
 type StageView = Extract<StageType, "Stage 1" | "Stage 2" | "Stage 3">;
 
@@ -490,25 +490,30 @@ function deriveStage1Row(item: CaseRecord): Stage1Row {
 }
 
 function deriveStage2Row(item: CaseRecord): Stage2Row {
+  const stage2 = item.computed?.stage2;
+  const classificationLabel = stage2?.predictedLabel;
   const classification: Stage2Classification =
-    item.path.includes("High MCI") || (item.risk === "고" && item.quality === "경고")
-      ? "AD"
-      : item.path.includes("MCI") || item.alertTags.includes("MCI 미등록")
-        ? "MCI"
-        : item.risk === "저" && item.status === "완료"
+    stage2?.modelAvailable && classificationLabel
+      ? classificationLabel === "치매"
+        ? "AD"
+        : classificationLabel === "정상"
           ? "정상"
-          : "보류";
+          : "MCI"
+      : "보류";
 
-  const confirmation: Stage2Confirmation = item.status === "완료" ? "확정" : "임시";
+  const confirmation: Stage2Confirmation = stage2?.modelAvailable ? "확정" : "임시";
 
   const nextPath: Stage2NextPath =
-    classification === "보류" || item.quality === "경고"
+    !stage2?.modelAvailable
       ? "추가 검사"
       : classification === "정상"
         ? "종료"
         : "Stage3";
 
   const rationaleParts = [item.path];
+  if (stage2?.missing && stage2.missing.length > 0) {
+    rationaleParts.push(`누락 ${stage2.missing.slice(0, 2).join(", ")}`);
+  }
   if (item.alertTags.length > 0) rationaleParts.push(`신호 ${item.alertTags.slice(0, 2).join(", ")}`);
   if (item.quality !== "양호") rationaleParts.push(`품질 ${item.quality}`);
 
@@ -537,12 +542,17 @@ function deriveStage2Row(item: CaseRecord): Stage2Row {
 }
 
 function deriveStage3Row(item: CaseRecord): Stage3Row {
+  const stage3 = item.computed?.stage3;
   const trackingStatus: Stage3TrackingStatus =
-    item.alertTags.includes("이탈 위험") || item.status === "지연"
-      ? "이탈 위험"
-      : item.risk === "고" || item.status === "임박"
-        ? "악화"
-        : "안정";
+    stage3?.modelAvailable
+      ? stage3.label === "HIGH"
+        ? "이탈 위험"
+        : stage3.label === "MID"
+          ? "악화"
+          : "안정"
+      : item.alertTags.includes("이탈 위험") || item.status === "지연"
+        ? "이탈 위험"
+        : "악화";
 
   const intensity: Stage3Intensity =
     trackingStatus === "이탈 위험"
@@ -801,6 +811,7 @@ export function CaseDashboard({
   onSelectCase: (id: string, stage: StageType) => void;
   initialFilter: string | null;
 }) {
+  const caseRecords = useCaseDashboardRecords();
   const [activeFilterTab, setActiveFilterTab] = useState<CaseAlertFilter>("전체");
   const [stageFilter, setStageFilter] = useState<StageView>("Stage 1");
   const [searchKeyword, setSearchKeyword] = useState("");
@@ -845,7 +856,7 @@ export function CaseDashboard({
 
   const scopedRows = useMemo(() => {
     const q = searchKeyword.trim().toLowerCase();
-    return CASE_RECORDS
+    return caseRecords
       .filter((item) => item.stage === stageFilter)
       .map((item) => {
         const row = adapter.mapRow(item);
@@ -856,7 +867,7 @@ export function CaseDashboard({
         };
       })
       .filter((entry) => (q ? entry.searchBlob.includes(q) : true));
-  }, [adapter, searchKeyword, stageFilter]);
+  }, [adapter, caseRecords, searchKeyword, stageFilter]);
 
   const alertTabCounts = useMemo(() => {
     const counts = Object.fromEntries(ALERT_FILTER_TABS.map((tab) => [tab, 0])) as Record<CaseAlertFilter, number>;
@@ -870,13 +881,13 @@ export function CaseDashboard({
 
   const stageCounts = useMemo(() => {
     const counts: Record<StageView, number> = { "Stage 1": 0, "Stage 2": 0, "Stage 3": 0 };
-    for (const item of CASE_RECORDS) {
+    for (const item of caseRecords) {
       if (item.stage === "Stage 1" || item.stage === "Stage 2" || item.stage === "Stage 3") {
         counts[item.stage] += 1;
       }
     }
     return counts;
-  }, []);
+  }, [caseRecords]);
 
   const stageRows = useMemo(() => {
     const mapped = scopedRows
@@ -1456,7 +1467,7 @@ export function CaseDashboard({
 
           <div className="p-3 bg-gray-50 text-[10px] text-gray-500 border-t border-gray-100 flex items-center justify-between">
             <span>
-              {stageFilter} 필터 결과: 1 - {stageRows.length} of {CASE_RECORDS.filter((item) => item.stage === stageFilter).length}
+              {stageFilter} 필터 결과: 1 - {stageRows.length} of {caseRecords.filter((item) => item.stage === stageFilter).length}
             </span>
             <div className="flex items-center gap-3">
               <span className="italic">Stage를 바꾸면 컬럼/상태배지/퀵액션/정렬기준이 즉시 전환됩니다.</span>

@@ -40,6 +40,26 @@ export type CaseRecord = {
   quality: CaseQuality;
   profile: Profile;
   alertTags: AlertTag[];
+  computed?: {
+    stage2?: {
+      modelAvailable?: boolean;
+      predictedLabel?: "정상" | "MCI" | "치매";
+      mciBand?: "양호" | "중간" | "위험";
+      completed?: boolean;
+      missing?: string[];
+    };
+    stage3?: {
+      modelAvailable?: boolean;
+      label?: "LOW" | "MID" | "HIGH";
+      completed?: boolean;
+      missing?: string[];
+    };
+    ops?: {
+      bookingPendingCount?: number;
+      approvalsPendingCount?: number;
+      dataQualityScore?: number;
+    };
+  };
 };
 
 export type Stage1InterventionGuide = {

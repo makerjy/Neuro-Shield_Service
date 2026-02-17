@@ -47,6 +47,7 @@ import {
 import { SmsPanel } from "../../sms/SmsPanel";
 import { CaseDetailPrograms } from "../../programs/CaseDetailPrograms";
 import { Stage2ClassificationViz } from "../../stage2/Stage2ClassificationViz";
+import { ModelGateGuard } from "../../shared/ModelGateGuard";
 import type { SmsTemplate as StdSmsTemplate, SmsTemplateVars, CallScriptStep as StdCallScriptStep } from "../../sms/SmsPanel";
 import type { SmsHistoryItem } from "../../sms/smsService";
 import {
@@ -56,6 +57,18 @@ import {
   maskPhone,
   type CaseRecord,
 } from "../caseRecords";
+import {
+  confirmCaseStage2Model,
+  recordCaseEvent,
+  runCaseStage3Model,
+  setCaseBookingPending,
+  setCaseNextStep,
+  type EventType,
+  type Stage2Route,
+  updateCaseStage2Evidence,
+  updateCaseStage3Evidence,
+  useCaseEntity,
+} from "../caseSSOT";
 import type {
   AgentJobStatus,
   ChannelResult,
@@ -171,7 +184,9 @@ export type Stage1HeaderSummary = {
     completionPct: number;
     requiredDataPct: number;
     completedCount: number;
-    classificationLabel: "정상" | "MCI" | "치매";
+    classificationLabel: "정상" | "MCI" | "치매" | "결과대기";
+    modelAvailable?: boolean;
+    missingEvidence?: string[];
     mciStage?: "양호" | "적정" | "위험";
     stage3EntryNeeded: boolean;
     enteredAt?: string;
@@ -181,8 +196,10 @@ export type Stage1HeaderSummary = {
   };
   stage3Meta?: {
     opsStatus: Stage3OpsStatus;
-    risk2yNowPct: number;
-    risk2yLabel: Stage3RiskSummary["risk2y_label"];
+    risk2yNowPct?: number;
+    risk2yLabel?: Stage3RiskSummary["risk2y_label"];
+    modelAvailable?: boolean;
+    missingEvidence?: string[];
     trend: Stage3RiskSummary["trend"];
     modelVersion: string;
     riskUpdatedAt: string;
@@ -1035,18 +1052,42 @@ function inferStage2Probs(label: Stage2ClassLabel, mciStage?: Stage2MciStageLabe
   return { NORMAL: 0.78, MCI: 0.17, AD: 0.05 };
 }
 
-function countStage2CompletedTests(tests: Stage2Diagnosis["tests"]): number {
+function stage2ClassLabelFromModel(label?: "정상" | "MCI" | "치매"): Stage2ClassLabel | undefined {
+  if (!label) return undefined;
+  if (label === "정상") return "정상";
+  if (label === "치매") return "치매";
+  return "MCI";
+}
+
+function stage2MciStageFromModel(band?: "양호" | "중간" | "위험"): Stage2MciStageLabel | undefined {
+  if (!band) return undefined;
+  if (band === "중간") return "적정";
+  return band;
+}
+
+function stage3ResultFromDiffLabel(label: Stage3DiffDraft["resultLabel"]): "POS" | "NEG" | "UNK" {
+  if (label === "양성 신호") return "POS";
+  if (label === "음성 신호") return "NEG";
+  return "UNK";
+}
+
+function countStage2CompletedTests(tests: Stage2Diagnosis["tests"], route: Stage2Route = "HOSPITAL"): number {
   return (
     Number(Boolean(tests.specialist)) +
-    Number(typeof tests.mmse === "number") +
+    Number(route === "CENTER" ? true : typeof tests.mmse === "number") +
     Number(typeof tests.cdr === "number") +
     Number(Boolean(tests.neuroCognitiveType))
   );
 }
 
-function stage2StatusFromTests(tests: Stage2Diagnosis["tests"], hasClassification: boolean): Stage2Diagnosis["status"] {
-  const completed = countStage2CompletedTests(tests);
-  if (hasClassification || completed >= 4) return "COMPLETED";
+function stage2StatusFromTests(
+  tests: Stage2Diagnosis["tests"],
+  hasClassification: boolean,
+  route: Stage2Route = "HOSPITAL",
+): Stage2Diagnosis["status"] {
+  const requiredCount = route === "CENTER" ? 3 : 4;
+  const completed = countStage2CompletedTests(tests, route);
+  if (hasClassification || completed >= requiredCount) return "COMPLETED";
   if (completed > 0) return "IN_PROGRESS";
   return "NOT_STARTED";
 }
@@ -1055,6 +1096,8 @@ function buildInitialStage2Diagnosis(caseRecord?: CaseRecord): Stage2Diagnosis {
   const label = inferStage2Label(caseRecord);
   const mciStage = label === "MCI" ? inferStage2MciStage(caseRecord) : undefined;
   const hasStarted = caseRecord?.status === "진행중" || caseRecord?.status === "임박" || caseRecord?.status === "지연";
+  const route: Stage2Route =
+    caseRecord?.path?.includes("의뢰") || caseRecord?.path?.includes("병원") ? "HOSPITAL" : "CENTER";
   const tests: Stage2Diagnosis["tests"] = {
     specialist: hasStarted ? caseRecord?.risk !== "저" : false,
     mmse: undefined,
@@ -1063,7 +1106,7 @@ function buildInitialStage2Diagnosis(caseRecord?: CaseRecord): Stage2Diagnosis {
   };
 
   return {
-    status: stage2StatusFromTests(tests, false),
+    status: stage2StatusFromTests(tests, false, route),
     tests,
     classification: hasStarted
       ? {
@@ -3541,6 +3584,15 @@ export function Stage1OpsDetail({
   const isStage3Mode = mode === "stage3";
   const isStage2OpsView = isStage3Mode && surfaceStage === "Stage 2";
   const stageLabel = isStage2Mode || isStage2OpsView ? "2차" : isStage3Mode ? "3차" : "1차";
+  const ssotCase = useCaseEntity(caseRecord?.id);
+  const stage2Evidence = ssotCase?.computed.evidence.stage2;
+  const stage3Evidence = ssotCase?.computed.evidence.stage3;
+  const ssotModel2 = ssotCase?.computed.model2;
+  const ssotModel3 = ssotCase?.computed.model3;
+  const stage2ModelAvailable = Boolean(stage2Evidence?.completed && ssotModel2?.available);
+  const stage3ModelAvailable = Boolean(stage3Evidence?.completed && ssotModel3?.available);
+  const stage2GateMissing = stage2Evidence?.missing ?? [];
+  const stage3GateMissing = stage3Evidence?.missing ?? [];
   const smsTemplateCatalog = isStage2Mode ? STAGE2_SMS_TEMPLATES : isStage3Mode ? STAGE3_SMS_TEMPLATES : SMS_TEMPLATES;
   const panelSmsTemplates = isStage2Mode ? STAGE2_STD_TEMPLATES : isStage3Mode ? STAGE3_STD_TEMPLATES : STAGE1_STD_TEMPLATES;
   const defaultSmsTemplateId = smsTemplateCatalog[0]?.id ?? "";
@@ -3982,27 +4034,69 @@ export function Stage1OpsDetail({
     setAuditLogs((prev) => [entry, ...prev]);
   };
 
+  const timelineEventTypeToSsot = (event: ContactEvent): EventType => {
+    if (event.type === "CALL_ATTEMPT") return "CONTACT_RESULT";
+    if (event.type === "SMS_SENT" || event.type === "MESSAGE_SENT" || event.type === "AGENT_SMS_SENT") return "CONTACT_SENT";
+    if (event.type === "LINKAGE_CREATED") return "BOOKING_CREATED";
+    if (event.type === "LINKAGE_APPROVED" || event.type === "LINKAGE_COMPLETED") return "BOOKING_CONFIRMED";
+    if (event.type === "DIFF_SCHEDULED") return "STAGE3_DIFF_SCHEDULED";
+    if (event.type === "DIFF_RESULT_APPLIED") return "STAGE3_RESULTS_RECORDED";
+    if (event.type === "RISK_SERIES_UPDATED" || event.type === "RISK_REVIEWED") return "STAGE3_RISK_UPDATED";
+    if (event.type === "STAGE2_RESULTS_RECORDED") return "STAGE2_RESULTS_RECORDED";
+    if (event.type === "STAGE2_CLASS_CONFIRMED") return "STAGE2_CLASS_CONFIRMED";
+    if (event.type === "STAGE2_NEXT_STEP_SET") return "STAGE2_NEXT_STEP_SET";
+    if (event.type === "STATUS_CHANGE" && (event.from.includes("Stage") || event.to.includes("Stage"))) return "STAGE_CHANGE";
+    return "DATA_SYNCED";
+  };
+
   const appendTimeline = (event: ContactEvent) => {
     setDetail((prev) => ({ ...prev, timeline: [event, ...prev.timeline] }));
+    if (caseRecord?.id) {
+      recordCaseEvent(
+        caseRecord.id,
+        timelineEventTypeToSsot(event),
+        {
+          timelineType: event.type,
+          at: event.at,
+        },
+        detail.header.assigneeName,
+      );
+    }
   };
 
   const saveStage2TestInputs = () => {
     const hasClassification = Boolean(stage2Diagnosis.classification?.label);
-    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, hasClassification);
+    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, hasClassification, stage2Route);
     setStage2Diagnosis((prev) => ({
       ...prev,
       status: nextStatus,
     }));
+
+    if (caseRecord?.id) {
+      updateCaseStage2Evidence(
+        caseRecord.id,
+        {
+          specialist: Boolean(stage2Diagnosis.tests.specialist),
+          mmse: typeof stage2Diagnosis.tests.mmse === "number" ? stage2Diagnosis.tests.mmse : null,
+          cdrOrGds: typeof stage2Diagnosis.tests.cdr === "number" ? stage2Diagnosis.tests.cdr : null,
+          neuroType: stage2Diagnosis.tests.neuroCognitiveType ?? null,
+        },
+        {
+          route: stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "HOSPITAL" : "CENTER",
+          actorId: detail.header.assigneeName,
+        },
+      );
+    }
 
     appendTimeline({
       type: "STATUS_CHANGE",
       at: nowIso(),
       from: "검사입력",
       to: "검사입력",
-      reason: `Stage2 검사 입력 반영 (${countStage2CompletedTests(stage2Diagnosis.tests)}/4)`,
+      reason: `Stage2 검사 입력 반영 (${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount})`,
       by: detail.header.assigneeName,
     });
-    appendAuditLog(`Stage2 검사 결과 입력 반영: ${countStage2CompletedTests(stage2Diagnosis.tests)}/4`);
+    appendAuditLog(`Stage2 검사 결과 입력 반영: ${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount}`);
     toast.success("검사 결과 입력이 반영되었습니다.");
   };
 
@@ -4017,7 +4111,7 @@ export function Stage1OpsDetail({
     const probs = inferStage2Probs(label, mciStage);
     const nextStep = inferStage2NextStep(label);
     const now = nowIso();
-    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, true);
+    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, true, stage2Route);
 
     setStage2Diagnosis((prev) => ({
       ...prev,
@@ -4030,6 +4124,14 @@ export function Stage1OpsDetail({
       nextStep,
     }));
     setStage2ConfirmedAt(now);
+
+    if (caseRecord?.id) {
+      confirmCaseStage2Model(caseRecord.id, label, {
+        mciBand: mciStage === "적정" ? "중간" : mciStage,
+        rationale: stage2RationaleDraft.trim(),
+        actorId: detail.header.assigneeName,
+      });
+    }
 
     appendTimeline({
       type: "STATUS_CHANGE",
@@ -4048,6 +4150,14 @@ export function Stage1OpsDetail({
       ...prev,
       nextStep,
     }));
+
+    if (caseRecord?.id && nextStep) {
+      setCaseNextStep(caseRecord.id, nextStep, {
+        actorId: detail.header.assigneeName,
+        summary,
+      });
+    }
+
     appendTimeline({
       type: "PLAN_UPDATED",
       at: nowIso(),
@@ -4071,6 +4181,11 @@ export function Stage1OpsDetail({
         note: "Stage2 검사 예약 등록",
       },
     }));
+
+    if (caseRecord?.id) {
+      setCaseBookingPending(caseRecord.id, 0, detail.header.assigneeName);
+    }
+
     appendTimeline({
       type: "LINKAGE_CREATED",
       at: nowIso(),
@@ -4656,6 +4771,34 @@ export function Stage1OpsDetail({
       });
       appendAuditLog(isStage2OpsView ? "진단검사 결과 입력" : "감별 결과 입력");
     }
+
+    if (caseRecord?.id && action === "APPLY_RESULT") {
+      const resultValue = stage3ResultFromDiffLabel(stage3DiffDraft.resultLabel);
+      updateCaseStage3Evidence(
+        caseRecord.id,
+        {
+          biomarker: stage3DiffDraft.testBiomarker,
+          imaging: stage3DiffDraft.testBrainImaging,
+          biomarkerResult: stage3DiffDraft.testBiomarker ? resultValue : null,
+          imagingResult: stage3DiffDraft.testBrainImaging ? resultValue : null,
+          performedAt: now,
+        },
+        detail.header.assigneeName,
+      );
+      runCaseStage3Model(caseRecord.id, detail.header.assigneeName);
+    }
+
+    if (caseRecord?.id && action === "SCHEDULE") {
+      recordCaseEvent(
+        caseRecord.id,
+        "STAGE3_DIFF_SCHEDULED",
+        {
+          scheduledAt: withHoursFromNow(72),
+        },
+        detail.header.assigneeName,
+      );
+    }
+
     toast.success("처리 완료(감사 로그 기록됨)");
   };
 
@@ -4814,6 +4957,9 @@ export function Stage1OpsDetail({
       messageSent: true,
       calendarSynced: true,
     }));
+    if (caseRecord?.id) {
+      setCaseBookingPending(caseRecord.id, 0, detail.header.assigneeName);
+    }
 
     appendTimeline({
       type: "SMS_SENT",
@@ -4853,6 +4999,7 @@ export function Stage1OpsDetail({
     toast.success("예약/문자/캘린더 패키지가 기록되었습니다.");
   }, [
     appendAuditLog,
+    caseRecord?.id,
     detail.header.assigneeName,
     detail.header.caseId,
     handleStage3DiffPathAction,
@@ -5838,7 +5985,7 @@ export function Stage1OpsDetail({
     [detail.stage3?.recommendedActions],
   );
   const stage3DiffReadyForRisk =
-    detail.stage3?.diffPathStatus === "SCHEDULED" || detail.stage3?.diffPathStatus === "COMPLETED";
+    stage3ModelAvailable && (detail.stage3?.diffPathStatus === "SCHEDULED" || detail.stage3?.diffPathStatus === "COMPLETED");
   const activeProgramDraft = useMemo(
     () => stage3Programs.find((program) => program.id === stage3ProgramDrawerId) ?? null,
     [stage3ProgramDrawerId, stage3Programs]
@@ -5849,9 +5996,6 @@ export function Stage1OpsDetail({
   const stage1TaskCurrentCard = activeStage1Modal ? stage1FlowCards.find((card) => card.id === activeStage1Modal) ?? null : null;
   const stage3TaskStepIndex = stage3TaskModalStep ? stage3TaskOrder.indexOf(stage3TaskModalStep) : -1;
   const stage3TaskCurrentCard = stage3TaskModalStep ? stage1FlowCards.find((card) => card.id === stage3TaskModalStep) ?? null : null;
-  const stage3CaseResultLabel: "정상" | "MCI" | "치매" = "MCI";
-  const stage3MciSeverity: "양호" | "적정" | "위험" | undefined =
-    caseRecord?.risk === "고" ? "위험" : caseRecord?.risk === "저" ? "양호" : "적정";
   const stage3FollowUpLocked = stage1FlowCards.find((card) => card.id === "FOLLOW_UP")?.status === "BLOCKED";
   const linkageLockedOnBoard = isStage3Mode ? stage3FollowUpLocked : !isStage2Mode;
   const agentGateStatus = useMemo(() => resolveAgentGateStatus(detail.policyGates), [detail.policyGates]);
@@ -5859,33 +6003,37 @@ export function Stage1OpsDetail({
   const agentRetryIntervalHours = detail.contactPlan?.maxRetryPolicy.intervalHours ?? 24;
   const agentMaxRetries = detail.contactPlan?.maxRetryPolicy.maxRetries ?? 2;
   const agentTemplateVersion = detail.contactPlan?.templateId ?? (isStage2Mode ? "S2_CONTACT_BASE" : isStage3Mode ? "S3_CONTACT_BASE" : "S1_CONTACT_BASE");
-  const stage2CompletedCount = countStage2CompletedTests(stage2Diagnosis.tests);
-  const stage2CompletionPct = Math.round((stage2CompletedCount / 4) * 100);
-  const stage2CurrentLabel: Stage2ClassLabel = stage2Diagnosis.classification?.label ?? stage2ClassificationDraft;
-  const stage2CurrentMciStage = stage2Diagnosis.classification?.mciStage;
-  const stage2Stage3EntryNeeded = stage2NeedsStage3(stage2CurrentLabel);
+  const stage2Route = ssotCase?.stage2Route ?? (stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "HOSPITAL" : "CENTER");
+  const stage2RequiredTestCount = stage2Route === "HOSPITAL" ? 4 : 3;
+  const stage2CompletedCount = stage2Evidence ? stage2RequiredTestCount - stage2Evidence.missing.length : countStage2CompletedTests(stage2Diagnosis.tests);
+  const stage2CompletionPct = Math.round((Math.max(0, stage2CompletedCount) / stage2RequiredTestCount) * 100);
+  const stage2DisplayLabel = stage2ModelAvailable ? stage2ClassLabelFromModel(ssotModel2?.predictedLabel) : undefined;
+  const stage2DisplayMciStage = stage2ModelAvailable ? stage2MciStageFromModel(ssotModel2?.mciBand) : undefined;
+  const stage3CaseResultLabel: "정상" | "MCI" | "치매" = stage2DisplayLabel ?? "MCI";
+  const stage3MciSeverity: "양호" | "적정" | "위험" | undefined =
+    caseRecord?.risk === "고" ? "위험" : caseRecord?.risk === "저" ? "양호" : "적정";
+  const stage2CurrentLabel: Stage2ClassLabel = stage2DisplayLabel ?? stage2ClassificationDraft;
+  const stage2CurrentMciStage = stage2DisplayMciStage;
+  const stage2Stage3EntryNeeded = stage2ModelAvailable ? stage2NeedsStage3(stage2CurrentLabel) : false;
   const stage2TargetDelayDays = Math.max(
     0,
     Math.floor((Date.now() - new Date(stage2TargetAt).getTime()) / (1000 * 60 * 60 * 24)),
   );
   const stage2MissingRequirements = [
-    typeof stage2Diagnosis.tests.mmse === "number" ? null : "MMSE 점수 미입력",
-    typeof stage2Diagnosis.tests.cdr === "number" ? null : "CDR/GDS 점수 미입력",
-    stage2Diagnosis.tests.neuroCognitiveType ? null : "신경인지검사 유형 미선택",
-    stage2Diagnosis.tests.specialist ? null : "전문의 소견 미확인",
+    ...stage2GateMissing,
     stage2RationaleDraft.trim().length > 0 ? null : "확정 근거 1줄 미입력",
   ].filter(Boolean) as string[];
-  const stage2ResultMissingCount = [
-    typeof stage2Diagnosis.tests.mmse === "number",
-    typeof stage2Diagnosis.tests.cdr === "number",
-    Boolean(stage2Diagnosis.tests.neuroCognitiveType),
-    Boolean(stage2Diagnosis.tests.specialist),
-  ].filter((done) => !done).length;
+  const stage2ResultMissingCount = stage2GateMissing.length;
   const stage2BookingWaitingCount =
     Number(detail.linkageStatus !== "BOOKING_DONE") + Number(stage2Diagnosis.status !== "COMPLETED");
-  const stage2ClassificationConfirmed = Boolean(stage2ConfirmedAt);
-  const stage2CanConfirm = stage2MissingRequirements.length === 0;
-  const stage2RequiredDataPct = Math.max(0, Math.round(((5 - stage2MissingRequirements.length) / 5) * 100));
+  const stage2ClassificationConfirmed = Boolean(
+    stage2ConfirmedAt ||
+      ssotCase?.status === "CLASS_CONFIRMED" ||
+      ssotCase?.status === "NEXT_STEP_SET" ||
+      ssotCase?.stage === 3,
+  );
+  const stage2CanConfirm = stage2ModelAvailable && stage2MissingRequirements.length === 0;
+  const stage2RequiredDataPct = Math.max(0, Math.round(((stage2RequiredTestCount + 1 - stage2MissingRequirements.length) / (stage2RequiredTestCount + 1)) * 100));
   const stage2NextActionLabel =
     stage2Diagnosis.status === "NOT_STARTED"
       ? "검사 결과 입력"
@@ -5895,12 +6043,20 @@ export function Stage1OpsDetail({
           ? "분류 확정"
           : "다음 단계 결정";
   const stage2DraftMciStage = stage2ClassificationDraft === "MCI" ? inferStage2MciStage(caseRecord) : undefined;
-  const stage2DraftProbs = inferStage2Probs(stage2ClassificationDraft, stage2DraftMciStage);
-  const stage2ResolvedLabel: Stage2ClassLabel = stage2Diagnosis.classification?.label ?? stage2ClassificationDraft;
-  const stage2ResolvedMciStage: Stage2MciStageLabel | undefined =
-    stage2ResolvedLabel === "MCI" ? stage2Diagnosis.classification?.mciStage ?? stage2DraftMciStage : undefined;
-  const stage2ResolvedProbs =
-    stage2Diagnosis.classification?.probs ?? inferStage2Probs(stage2ResolvedLabel, stage2ResolvedMciStage);
+  const stage2DraftProbs = stage2ModelAvailable ? inferStage2Probs(stage2ClassificationDraft, stage2DraftMciStage) : undefined;
+  const stage2ResolvedLabel: Stage2ClassLabel = stage2DisplayLabel ?? stage2ClassificationDraft;
+  const stage2ResolvedMciStage: Stage2MciStageLabel | undefined = stage2DisplayMciStage ?? (stage2ResolvedLabel === "MCI" ? stage2DraftMciStage : undefined);
+  const stage2ResolvedProbs = stage2ModelAvailable ? (ssotModel2?.probs ?? inferStage2Probs(stage2ResolvedLabel, stage2ResolvedMciStage)) : undefined;
+  const focusStage2ResultInput = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const target = document.getElementById("stage2-step2-input");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+  const focusStage3ResultInput = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const target = document.getElementById("stage3-step2-input");
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   const confirmDiscardResponseDraft = useCallback(() => {
     if (isOutcomeSaving) return false;
@@ -6377,13 +6533,23 @@ export function Stage1OpsDetail({
 
     if (stage3TaskModalStep === "PRECHECK") {
       if (isStage2OpsView) {
-        const requiredCount = Object.values(stage2PlanRequiredDraft).filter(Boolean).length;
+        const requiredPlanKeys: Array<keyof typeof stage2PlanRequiredDraft> =
+          stage2PlanRouteDraft === "HOSPITAL_REFERRAL"
+            ? ["specialist", "mmse", "cdrOrGds", "neuroCognitive"]
+            : ["specialist", "cdrOrGds", "neuroCognitive"];
+        const requiredPlanLabelByKey: Record<keyof typeof stage2PlanRequiredDraft, string> = {
+          specialist: "전문의 진찰",
+          mmse: "MMSE",
+          cdrOrGds: "CDR 또는 GDS",
+          neuroCognitive: "신경인지검사",
+        };
+        const missingPlanItems = requiredPlanKeys.filter((key) => !stage2PlanRequiredDraft[key]);
         if (!stage3ReviewDraft.consentConfirmed) {
           toast.error("Stage1 결과/동의 정보 확인 체크가 필요합니다.");
           return;
         }
-        if (requiredCount < 4) {
-          toast.error("필수 검사 4항목을 모두 계획에 포함해야 합니다.");
+        if (missingPlanItems.length > 0) {
+          toast.error(`필수 검사 계획 누락: ${missingPlanItems.map((item) => requiredPlanLabelByKey[item]).join(", ")}`);
           return;
         }
         if (stage3ReviewDraft.strategyMemo.trim().length < 20) {
@@ -6518,7 +6684,7 @@ export function Stage1OpsDetail({
           };
         });
         saveStage2TestInputs();
-        const summary = `필수 검사 입력 완료 (${countStage2CompletedTests(stage2Diagnosis.tests)}/4)`;
+        const summary = `필수 검사 입력 완료 (${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount})`;
         appendTimeline({
           type: "STAGE2_RESULTS_RECORDED",
           at: now,
@@ -6879,8 +7045,10 @@ export function Stage1OpsDetail({
               completionPct: stage2CompletionPct,
               requiredDataPct: stage2RequiredDataPct,
               completedCount: stage2CompletedCount,
-              classificationLabel: stage2CurrentLabel,
-              mciStage: stage2CurrentLabel === "MCI" ? stage2ResolvedMciStage : undefined,
+              classificationLabel: stage2ModelAvailable ? stage2CurrentLabel : "결과대기",
+              modelAvailable: stage2ModelAvailable,
+              missingEvidence: stage2GateMissing,
+              mciStage: stage2ModelAvailable && stage2CurrentLabel === "MCI" ? stage2ResolvedMciStage : undefined,
               stage3EntryNeeded: stage2Stage3EntryNeeded,
               enteredAt: stage2EnteredAt,
               targetAt: stage2TargetAt,
@@ -6892,8 +7060,18 @@ export function Stage1OpsDetail({
         mode === "stage3" && detail.stage3
           ? {
               opsStatus: detail.stage3.headerMeta.opsStatus,
-              risk2yNowPct: isStage2OpsView ? stage2OpsDelayRiskPct ?? 0 : toPercentValue(detail.stage3.transitionRisk.risk2y_now),
-              risk2yLabel: isStage2OpsView ? stage2OpsRiskLabel : deriveStage3RiskLabel(detail.stage3.transitionRisk.risk2y_now),
+              risk2yNowPct: isStage2OpsView
+                ? stage2OpsDelayRiskPct ?? 0
+                : stage3ModelAvailable
+                  ? toPercentValue(detail.stage3.transitionRisk.risk2y_now)
+                  : undefined,
+              risk2yLabel: isStage2OpsView
+                ? stage2OpsRiskLabel
+                : stage3ModelAvailable
+                  ? deriveStage3RiskLabel(detail.stage3.transitionRisk.risk2y_now)
+                  : undefined,
+              modelAvailable: isStage2OpsView ? stage2ModelAvailable : stage3ModelAvailable,
+              missingEvidence: isStage2OpsView ? stage2GateMissing : stage3GateMissing,
               trend: isStage2OpsView ? stage2OpsTrend : detail.stage3.transitionRisk.trend,
               modelVersion: isStage2OpsView ? "stage2-ops-v1.0" : detail.stage3.transitionRisk.modelVersion,
               riskUpdatedAt: detail.stage3.transitionRisk.updatedAt,
@@ -6933,6 +7111,10 @@ export function Stage1OpsDetail({
     stage2Stage3EntryNeeded,
     stage2TargetAt,
     stage2TargetDelayDays,
+    stage2ModelAvailable,
+    stage3ModelAvailable,
+    stage2GateMissing,
+    stage3GateMissing,
     strategyBadge,
     warningCount,
     isStage2OpsView,
@@ -6972,8 +7154,8 @@ export function Stage1OpsDetail({
       {
         key: "STEP 2",
         title: "검사 결과 입력",
-        status: stage2CompletedCount >= 4 ? "DONE" : stage2CompletedCount > 0 ? "IN_PROGRESS" : "PENDING",
-        reason: `필수 4항목 중 ${stage2CompletedCount}개 완료`,
+        status: stage2CompletedCount >= stage2RequiredTestCount ? "DONE" : stage2CompletedCount > 0 ? "IN_PROGRESS" : "PENDING",
+        reason: `필수 ${stage2RequiredTestCount}항목 중 ${stage2CompletedCount}개 완료`,
       },
       {
         key: "STEP 3",
@@ -6997,8 +7179,13 @@ export function Stage1OpsDetail({
       },
       {
         label: "MMSE",
-        done: typeof stage2Diagnosis.tests.mmse === "number",
-        sub: typeof stage2Diagnosis.tests.mmse === "number" ? `점수 ${stage2Diagnosis.tests.mmse}` : "미입력",
+        done: stage2Route === "CENTER" ? true : typeof stage2Diagnosis.tests.mmse === "number",
+        sub:
+          stage2Route === "CENTER" && typeof stage2Diagnosis.tests.mmse !== "number"
+            ? "센터 직접 수행 경로: 선택 입력"
+            : typeof stage2Diagnosis.tests.mmse === "number"
+              ? `점수 ${stage2Diagnosis.tests.mmse}`
+              : "미입력",
       },
       {
         label: "CDR or GDS",
@@ -7056,41 +7243,47 @@ export function Stage1OpsDetail({
                   </article>
                 ))}
                 <p className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
-                  완료율 {stage2CompletedCount}/4 ({stage2CompletionPct}%)
+                  완료율 {stage2CompletedCount}/{stage2RequiredTestCount} ({stage2CompletionPct}%)
                 </p>
               </div>
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h3 className="text-sm font-bold text-slate-900">Stage2 분류 결과 카드</h3>
-              <p className="mt-3 text-xs text-slate-500">결과 라벨</p>
-              <p className="mt-1 text-lg font-bold text-slate-900">
-                {stage2Diagnosis.classification?.label ?? "미확정"}
-                {stage2Diagnosis.classification?.label === "MCI" && stage2Diagnosis.classification.mciStage
-                  ? ` (${stage2Diagnosis.classification.mciStage})`
-                  : ""}
-              </p>
-              <div className="mt-3 space-y-2 text-xs">
-                {([
-                  { key: "NORMAL", label: "NORMAL", pct: toPercentUnknown(stage2Diagnosis.classification?.probs?.NORMAL) ?? 0, tone: "bg-emerald-500" },
-                  { key: "MCI", label: "MCI", pct: toPercentUnknown(stage2Diagnosis.classification?.probs?.MCI) ?? 0, tone: "bg-blue-500" },
-                  { key: "AD", label: "AD", pct: toPercentUnknown(stage2Diagnosis.classification?.probs?.AD) ?? 0, tone: "bg-rose-500" },
-                ] as const).map((entry) => (
-                  <div key={entry.key}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-slate-700">{entry.label}</span>
-                      <span className="text-[11px] text-slate-600">{entry.pct}%</span>
-                    </div>
-                    <div className="mt-1 h-2 rounded-full bg-slate-100">
-                      <div className={cn("h-2 rounded-full", entry.tone)} style={{ width: `${entry.pct}%` }} />
-                    </div>
+              {stage2ModelAvailable ? (
+                <>
+                  <p className="mt-3 text-xs text-slate-500">결과 라벨</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {stage2DisplayLabel ?? "미확정"}
+                    {stage2DisplayLabel === "MCI" && stage2DisplayMciStage ? ` (${stage2DisplayMciStage})` : ""}
+                  </p>
+                  <div className="mt-3 space-y-2 text-xs">
+                    {([
+                      { key: "NORMAL", label: "NORMAL", pct: toPercentUnknown(stage2ResolvedProbs?.NORMAL) ?? 0, tone: "bg-emerald-500" },
+                      { key: "MCI", label: "MCI", pct: toPercentUnknown(stage2ResolvedProbs?.MCI) ?? 0, tone: "bg-blue-500" },
+                      { key: "AD", label: "AD", pct: toPercentUnknown(stage2ResolvedProbs?.AD) ?? 0, tone: "bg-rose-500" },
+                    ] as const).map((entry) => (
+                      <div key={entry.key}>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold text-slate-700">{entry.label}</span>
+                          <span className="text-[11px] text-slate-600">{entry.pct}%</span>
+                        </div>
+                        <div className="mt-1 h-2 rounded-full bg-slate-100">
+                          <div className={cn("h-2 rounded-full", entry.tone)} style={{ width: `${entry.pct}%` }} />
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-[11px] text-slate-700">
-                <p>신경심리검사 및 임상평가 기반 분류</p>
-                <p>운영 참고용 ANN 세분화 결과 포함</p>
-              </div>
+                  <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-[11px] text-slate-700">
+                    <p>신경심리검사 및 임상평가 기반 분류</p>
+                    <p>운영 참고용 ANN 세분화 결과 포함</p>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-3">
+                  <ModelGateGuard stage={2} missing={stage2GateMissing} onOpenStep={focusStage2ResultInput} />
+                </div>
+              )}
             </section>
           </aside>
 
@@ -7129,7 +7322,7 @@ export function Stage1OpsDetail({
               </div>
             </section>
 
-            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <section id="stage2-step2-input" className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h3 className="text-sm font-bold text-slate-900">STEP 2. 검사 결과 입력</h3>
               <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                 <label className="text-[11px] text-slate-600">
@@ -7235,23 +7428,29 @@ export function Stage1OpsDetail({
                   <p className="mt-1">{stage2ClassificationDraft === "MCI" ? stage2DraftMciStage ?? "산출 대기" : "-"}</p>
                 </div>
               </div>
-              <div className="mt-2 space-y-2 text-xs">
-                {([
-                  { key: "NORMAL", label: "NORMAL", pct: toPercentUnknown(stage2DraftProbs.NORMAL) ?? 0, tone: "bg-emerald-500" },
-                  { key: "MCI", label: "MCI", pct: toPercentUnknown(stage2DraftProbs.MCI) ?? 0, tone: "bg-blue-500" },
-                  { key: "AD", label: "AD", pct: toPercentUnknown(stage2DraftProbs.AD) ?? 0, tone: "bg-rose-500" },
-                ] as const).map((entry) => (
-                  <div key={entry.key}>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-slate-700">{entry.label}</span>
-                      <span className="text-[11px] text-slate-600">{entry.pct}%</span>
+              {stage2ModelAvailable && stage2DraftProbs ? (
+                <div className="mt-2 space-y-2 text-xs">
+                  {([
+                    { key: "NORMAL", label: "NORMAL", pct: toPercentUnknown(stage2DraftProbs.NORMAL) ?? 0, tone: "bg-emerald-500" },
+                    { key: "MCI", label: "MCI", pct: toPercentUnknown(stage2DraftProbs.MCI) ?? 0, tone: "bg-blue-500" },
+                    { key: "AD", label: "AD", pct: toPercentUnknown(stage2DraftProbs.AD) ?? 0, tone: "bg-rose-500" },
+                  ] as const).map((entry) => (
+                    <div key={entry.key}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-slate-700">{entry.label}</span>
+                        <span className="text-[11px] text-slate-600">{entry.pct}%</span>
+                      </div>
+                      <div className="mt-1 h-2 rounded-full bg-slate-100">
+                        <div className={cn("h-2 rounded-full", entry.tone)} style={{ width: `${entry.pct}%` }} />
+                      </div>
                     </div>
-                    <div className="mt-1 h-2 rounded-full bg-slate-100">
-                      <div className={cn("h-2 rounded-full", entry.tone)} style={{ width: `${entry.pct}%` }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <ModelGateGuard stage={2} missing={stage2GateMissing} onOpenStep={focusStage2ResultInput} />
+                </div>
+              )}
               <label className="mt-3 block text-[11px] text-slate-600">
                 확정 근거 1줄(필수)
                 <textarea
@@ -7279,8 +7478,8 @@ export function Stage1OpsDetail({
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <h3 className="text-sm font-bold text-slate-900">STEP 4. 다음 단계 결정</h3>
               <p className="mt-2 text-[11px] text-slate-600">
-                분류 확정 후에만 버튼이 활성화됩니다. 현재 라벨: {stage2CurrentLabel}
-                {stage2CurrentLabel === "MCI" && stage2CurrentMciStage ? ` (${stage2CurrentMciStage})` : ""}
+                분류 확정 후에만 버튼이 활성화됩니다. 현재 라벨: {stage2ModelAvailable ? stage2CurrentLabel : "결과대기"}
+                {stage2ModelAvailable && stage2CurrentLabel === "MCI" && stage2CurrentMciStage ? ` (${stage2CurrentMciStage})` : ""}
               </p>
               <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
                 <button
@@ -7437,6 +7636,12 @@ export function Stage1OpsDetail({
             stage2WaitingCount={stage2BookingWaitingCount}
             stage2ResultMissingCount={stage2ResultMissingCount}
             stage2ClassificationConfirmed={stage2ClassificationConfirmed}
+            stage2ModelAvailable={stage2ModelAvailable}
+            stage3ModelAvailable={stage3ModelAvailable}
+            stage2MissingEvidence={stage2GateMissing}
+            stage3MissingEvidence={stage3GateMissing}
+            onOpenStage2Input={focusStage2ResultInput}
+            onOpenStage3Input={focusStage3ResultInput}
           />
 
           <ContactFlowPanel flowCards={stage1FlowCards} onAction={handleFlowAction} mode={mode} stage2OpsView={isStage2OpsView} />
@@ -7936,8 +8141,8 @@ export function Stage1OpsDetail({
                   const opsStats = buildCaseOpsStats({
                     detail,
                     modelPriorityValue,
-                    stage2ResultLabel: stage3CaseResultLabel,
-                    stage2MciSeverity: stage3MciSeverity,
+                    stage2ResultLabel: stage2ModelAvailable ? stage3CaseResultLabel : undefined,
+                    stage2MciSeverity: stage2ModelAvailable ? stage3MciSeverity : undefined,
                     stage2TestAt: caseRecord?.updated,
                     stage2Org: "협력기관 평가 기록",
                   });
@@ -7946,12 +8151,18 @@ export function Stage1OpsDetail({
                     { key: "MCI", label: "MCI" },
                     { key: "NORMAL", label: "정상" },
                   ];
-                  const hasStage2Probs = stage2ProbEntries.some(
+                  const hasStage2Probs = stage2ModelAvailable && stage2ProbEntries.some(
                     (entry) => opsStats.stage2.probs?.[entry.key] != null,
                   );
-                  const stage3RiskNowPct = toPercentUnknown(opsStats.stage3.risk2yNow);
-                  const stage3RiskAt2yPct = toPercentUnknown(opsStats.stage3.riskAt2y);
-                  const stage3StatusLabel = opsStats.stage3.status === "RESULT_APPLIED" ? (isStage2OpsView ? "결과수신 완료" : "반영 완료") : isStage2OpsView ? "결과수신 대기" : "검사결과 대기";
+                  const stage3RiskNowPct = stage3ModelAvailable ? toPercentUnknown(opsStats.stage3.risk2yNow) : undefined;
+                  const stage3RiskAt2yPct = stage3ModelAvailable ? toPercentUnknown(opsStats.stage3.riskAt2y) : undefined;
+                  const stage3StatusLabel = !stage3ModelAvailable
+                    ? "결과수신 대기"
+                    : opsStats.stage3.status === "RESULT_APPLIED"
+                      ? (isStage2OpsView ? "결과수신 완료" : "반영 완료")
+                      : isStage2OpsView
+                        ? "결과수신 대기"
+                        : "검사결과 대기";
                   if (isStage2OpsView) {
                     const reservationAttemptCount = detail.timeline.filter(
                       (event) =>
@@ -8182,8 +8393,8 @@ export function Stage1OpsDetail({
                         >
                           <p className="text-[10px] font-semibold text-indigo-600">Stage2 결과</p>
                           <p className="mt-1 text-xs font-bold text-slate-900">
-                            {opsStats.stage2.resultLabel ?? "확실하지 않음"}
-                            {opsStats.stage2.mciSeverity ? `(${opsStats.stage2.mciSeverity})` : ""}
+                            {stage2ModelAvailable ? opsStats.stage2.resultLabel ?? "미확정" : "결과대기"}
+                            {stage2ModelAvailable && opsStats.stage2.mciSeverity ? `(${opsStats.stage2.mciSeverity})` : ""}
                           </p>
                           <p className="mt-1 text-[10px] text-slate-500">{formatDateTime(opsStats.stage2.testAt)}</p>
                         </div>
@@ -8224,7 +8435,9 @@ export function Stage1OpsDetail({
                           <p className="mt-1 text-xs font-bold text-slate-900">
                             {stage3RiskNowPct == null ? "확실하지 않음(데이터 없음)" : `${stage3RiskNowPct}%`}
                           </p>
-                          <p className="mt-1 text-[10px] text-slate-500">{isStage2OpsView ? "진행 위험" : "전환위험"} {opsStats.stage3.risk2yLabel ?? "-"}</p>
+                          <p className="mt-1 text-[10px] text-slate-500">
+                            {isStage2OpsView ? "진행 위험" : "전환위험"} {stage3ModelAvailable ? opsStats.stage3.risk2yLabel ?? "-" : "결과대기"}
+                          </p>
                         </div>
                         <div
                           title={isStage2OpsView ? "목표일 기준 지연 추정치입니다." : "현재 추세 기반 2년 후 예측값입니다."}
@@ -8276,8 +8489,8 @@ export function Stage1OpsDetail({
                               <p className="mt-1 text-[11px] text-slate-700">
                                 결과 라벨:{" "}
                                 <strong>
-                                  {opsStats.stage2.resultLabel ?? "확실하지 않음"}
-                                  {opsStats.stage2.mciSeverity ? `(${opsStats.stage2.mciSeverity})` : ""}
+                                  {stage2ModelAvailable ? opsStats.stage2.resultLabel ?? "미확정" : "결과대기"}
+                                  {stage2ModelAvailable && opsStats.stage2.mciSeverity ? `(${opsStats.stage2.mciSeverity})` : ""}
                                 </strong>
                               </p>
                               <p className="mt-1 text-[10px] text-slate-500">
@@ -8310,7 +8523,7 @@ export function Stage1OpsDetail({
                               <p className="mt-1 text-[11px] text-slate-700">
                                 전환위험:{" "}
                                 <strong>
-                                  {opsStats.stage3.risk2yLabel ?? "확실하지 않음"} ({stage3RiskNowPct == null ? "-" : `${stage3RiskNowPct}%`})
+                                  {stage3ModelAvailable ? opsStats.stage3.risk2yLabel ?? "미확정" : "결과대기"} ({stage3RiskNowPct == null ? "-" : `${stage3RiskNowPct}%`})
                                 </strong>
                               </p>
                               <div className="mt-1 flex flex-wrap items-center gap-1">
@@ -8331,7 +8544,7 @@ export function Stage1OpsDetail({
                                 ) : null}
                               </div>
                               <p className="mt-1 text-[10px] text-slate-500">
-                                신뢰수준 {opsStats.stage3.confidence ?? "-"} · 재평가 {formatDateTime(opsStats.stage3.nextReevalAt)}
+                                신뢰수준 {stage3ModelAvailable ? opsStats.stage3.confidence ?? "-" : "결과대기"} · 재평가 {formatDateTime(opsStats.stage3.nextReevalAt)}
                               </p>
                               <p className="mt-1 text-[10px] text-slate-500">
                                 다음 추적 {formatDateTime(opsStats.stage3.nextContactAt)} · 2년 후 예측 {stage3RiskAt2yPct ?? "-"}%
@@ -8539,7 +8752,7 @@ export function Stage1OpsDetail({
                   ];
                   if (isStage2OpsView) {
                     return (
-                      <section className="rounded-lg border border-gray-200 bg-white p-4">
+                      <section id="stage3-step2-input" className="rounded-lg border border-gray-200 bg-white p-4">
                         <h4 className="text-sm font-bold text-slate-900">검사 결과 입력</h4>
                         <p className="mt-1 text-[11px] text-gray-600">
                           MMSE/CDR(GDS)/신경인지검사/전문의 소견을 입력하고 누락 항목을 0으로 맞춥니다.
@@ -8648,7 +8861,7 @@ export function Stage1OpsDetail({
                   const highPriorityRecs = ragRecommendations.slice(0, 3);
 
                   return (
-                    <section className="rounded-lg border border-gray-200 bg-white p-4">
+                    <section id="stage3-step2-input" className="rounded-lg border border-gray-200 bg-white p-4">
                       <h4 className="text-sm font-bold text-slate-900">{isStage2OpsView ? "2차 1단계 신경심리검사 실행" : "감별검사/뇌영상 경로 실행"}</h4>
                       <p className="mt-1 text-[11px] text-gray-600">
                         {isStage2OpsView
@@ -8958,12 +9171,16 @@ export function Stage1OpsDetail({
                   </div>
 
                   <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <Stage2ClassificationViz
-                      probs={stage2DraftProbs}
-                      predictedLabel={stage2ClassificationDraft}
-                      mciSeverity={stage2DraftMciStage}
-                      mciScore={stage2ClassificationDraft === "MCI" ? (stage2DraftMciStage === "위험" ? 82 : stage2DraftMciStage === "양호" ? 34 : 58) : undefined}
-                    />
+                    {stage2ModelAvailable && stage2DraftProbs ? (
+                      <Stage2ClassificationViz
+                        probs={stage2DraftProbs}
+                        predictedLabel={stage2ClassificationDraft}
+                        mciSeverity={stage2DraftMciStage}
+                        mciScore={stage2ClassificationDraft === "MCI" ? (stage2DraftMciStage === "위험" ? 82 : stage2DraftMciStage === "양호" ? 34 : 58) : undefined}
+                      />
+                    ) : (
+                      <ModelGateGuard stage={2} missing={stage2GateMissing} onOpenStep={focusStage2ResultInput} />
+                    )}
                   </div>
 
                   <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
@@ -9017,7 +9234,11 @@ export function Stage1OpsDetail({
                   <p className="mt-1 text-[11px] text-gray-600">
                     감별경로 예약/결과 입력 이후에만 위험 추세 검토를 완료할 수 있습니다.
                   </p>
-                  {!stage3DiffReadyForRisk ? (
+                  {!stage3ModelAvailable ? (
+                    <div className="mt-3">
+                      <ModelGateGuard stage={3} missing={stage3GateMissing} onOpenStep={focusStage3ResultInput} />
+                    </div>
+                  ) : !stage3DiffReadyForRisk ? (
                     <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-800">
                       감별경로 상태가 {detail.stage3?.diffPathStatus ?? "NONE"} 입니다. STEP2에서 예약 또는 완료 상태를 먼저 기록해 주세요.
                     </div>
@@ -9136,14 +9357,18 @@ export function Stage1OpsDetail({
                       빠른 실행보드는 제거되었고, 아래 프로그램 제공 UI에서 선택/실행을 기록합니다.
                       <span className="ml-1 font-semibold text-slate-800">추천 상위 3개 일괄 추가</span> 기능은 유지됩니다.
                     </p>
-                    <CaseDetailPrograms
-                      caseId={detail.header.caseId}
-                      stage={3}
-                      resultLabel={stage3CaseResultLabel}
-                      mciSeverity={stage3MciSeverity}
-                      riskTags={detail.header.riskGuardrails ?? []}
-                      actorName={detail.header.assigneeName}
-                    />
+                    {stage2ModelAvailable ? (
+                      <CaseDetailPrograms
+                        caseId={detail.header.caseId}
+                        stage={3}
+                        resultLabel={stage3CaseResultLabel}
+                        mciSeverity={stage3MciSeverity}
+                        riskTags={detail.header.riskGuardrails ?? []}
+                        actorName={detail.header.assigneeName}
+                      />
+                    ) : (
+                      <ModelGateGuard stage={2} missing={stage2GateMissing} onOpenStep={focusStage2ResultInput} />
+                    )}
                   </div>
 
                   <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
@@ -12078,7 +12303,7 @@ function RiskTrendChart({
 const STAGE2_TASK_CHECKLIST: Record<Stage1FlowCardId, string[]> = {
   PRECHECK: [
     "Stage1 선별 결과와 Stage2 진입 근거 확인",
-    "필수 검사 4항목(전문의/MMSE/CDR·GDS/신경인지) 수행 계획 확정",
+    "필수 검사 항목(전문의/MMSE/CDR·GDS/신경인지) 수행 계획 확정",
     "수행 경로(협약병원 의뢰/센터 직접 수행) 선택",
     "기관/담당자/목표일 설정",
   ],
@@ -12137,6 +12362,12 @@ export function Stage1ScorePanel({
   stage2WaitingCount,
   stage2ResultMissingCount,
   stage2ClassificationConfirmed,
+  stage2ModelAvailable = false,
+  stage3ModelAvailable = false,
+  stage2MissingEvidence = [],
+  stage3MissingEvidence = [],
+  onOpenStage2Input,
+  onOpenStage3Input,
 }: {
   scoreSummary: Stage1Detail["scoreSummary"];
   modelPriorityValue: number;
@@ -12160,6 +12391,12 @@ export function Stage1ScorePanel({
   stage2WaitingCount?: number;
   stage2ResultMissingCount?: number;
   stage2ClassificationConfirmed?: boolean;
+  stage2ModelAvailable?: boolean;
+  stage3ModelAvailable?: boolean;
+  stage2MissingEvidence?: string[];
+  stage3MissingEvidence?: string[];
+  onOpenStage2Input?: () => void;
+  onOpenStage3Input?: () => void;
 }) {
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
@@ -12195,10 +12432,11 @@ export function Stage1ScorePanel({
       const topStripItems = [
         {
           label: "분류 결과",
-          value:
-            stage2ResultLabel === "MCI"
+          value: stage2ModelAvailable
+            ? stage2ResultLabel === "MCI"
               ? `${stage2ResultLabel}(${stage2MciStageDisplayLabel(stage2MciStage)})`
-              : stage2ResultLabel ?? "미확정",
+              : stage2ResultLabel ?? "미확정"
+            : "결과대기",
           hint: "모델 분류 결과(운영 참고)",
         },
         {
@@ -12209,7 +12447,7 @@ export function Stage1ScorePanel({
         {
           label: "검사 완료율",
           value: `${stage2CompletionPct ?? 0}%`,
-          hint: "필수 4항목 기준",
+          hint: "필수 검사 항목 기준",
         },
         {
           label: "필수자료 충족도",
@@ -12251,12 +12489,16 @@ export function Stage1ScorePanel({
           </div>
 
           <div className="mt-4">
-            <Stage2ClassificationViz
-              probs={stage2Probs}
-              predictedLabel={stage2ResultLabel}
-              mciSeverity={stage2MciStage}
-              mciScore={stage2MciScore}
-            />
+            {stage2ModelAvailable ? (
+              <Stage2ClassificationViz
+                probs={stage2Probs}
+                predictedLabel={stage2ResultLabel}
+                mciSeverity={stage2MciStage}
+                mciScore={stage2MciScore}
+              />
+            ) : (
+              <ModelGateGuard stage={2} missing={stage2MissingEvidence} onOpenStep={onOpenStage2Input} />
+            )}
           </div>
 
           <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
@@ -12294,7 +12536,7 @@ export function Stage1ScorePanel({
             <article className="rounded-xl border border-amber-200 bg-amber-50 p-3">
               <p className="text-[11px] font-semibold text-amber-800">결과 입력 누락 항목</p>
               <p className="mt-1 text-lg font-bold text-amber-900">{stage2ResultMissingCount ?? 0}건</p>
-              <p className="text-[10px] text-amber-700">필수 4항목(MMSE/CDR/신경인지/전문의) 기준</p>
+              <p className="text-[10px] text-amber-700">필수 검사 항목(MMSE/CDR/신경인지/전문의) 기준</p>
             </article>
             <article className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
               <p className="text-[11px] font-semibold text-indigo-900">분류 확정 상태</p>
@@ -12303,6 +12545,22 @@ export function Stage1ScorePanel({
               </p>
               <p className="text-[10px] text-indigo-700">담당자 확인 후 확정 버튼으로 반영</p>
             </article>
+          </div>
+        </section>
+      );
+    }
+
+    if (!stage3ModelAvailable) {
+      return (
+        <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-bold text-slate-900">AD 전환 위험(2년)</h3>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+              결과 대기
+            </span>
+          </div>
+          <div className="mt-3">
+            <ModelGateGuard stage={3} missing={stage3MissingEvidence} onOpenStep={onOpenStage3Input} />
           </div>
         </section>
       );

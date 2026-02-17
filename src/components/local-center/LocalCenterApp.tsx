@@ -12,6 +12,7 @@ import { CaseDetailStage2 } from './CaseDetailStage2';
 import { CaseDetailStage3 } from './CaseDetailStage3';
 import { ConsultationPage } from './ConsultationPage';
 import { SmsOperationsPage } from './SmsOperationsPage';
+import { applyDrilldownFilter, setGlobalFilters } from './v2/caseSSOT';
 
 interface LocalCenterAppProps {
   userRole?: 'counselor' | 'center_manager';
@@ -40,6 +41,7 @@ export function LocalCenterApp({
   };
 
   const handleNavigateToCases = (filter: string) => {
+    applyDrilldownFilter(filter);
     setCurrentFilter(filter);
     setSelectedCaseId(null);
     setCaseSubView('detail');
@@ -141,6 +143,9 @@ export function LocalCenterApp({
       <Sidebar
         activeTab={activeTab}
         setActiveTab={(tab) => {
+          if (tab !== 'cases') {
+            setGlobalFilters({ stage: 'ALL', status: 'ALL', keyword: '' });
+          }
           setActiveTab(tab);
           setSelectedCaseId(null);
           setCurrentFilter(null);

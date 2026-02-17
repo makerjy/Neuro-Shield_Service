@@ -79,6 +79,13 @@ function stage2DiagnosisStatusLabel(status?: string) {
   return status;
 }
 
+function summarizeMissingEvidence(missing?: string[]) {
+  if (!missing || missing.length === 0) return "검사 입력 필요";
+  const listed = missing.slice(0, 3).join(", ");
+  if (missing.length <= 3) return listed;
+  return `${listed} 외 ${missing.length - 3}건`;
+}
+
 export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMirrorDetailProps) {
   const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
   const [headerSummary, setHeaderSummary] = useState<Stage1HeaderSummary | null>(null);
@@ -160,7 +167,7 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                   <span className="rounded-md bg-white/15 px-2 py-1" title="Stage2 진단 진행 상태입니다.">
                     2차 진단 상태 {stage2DiagnosisStatusLabel(headerSummary.stage2Meta.diagnosisStatus)}
                   </span>
-                  <span className="rounded-md bg-white/15 px-2 py-1" title="필수 4항목 기준 검사 완료 비율입니다.">
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="필수 검사 항목 기준 검사 완료 비율입니다.">
                     검사 완료율 {headerSummary.stage2Meta.completionPct}%
                   </span>
                   <span className="rounded-md bg-white/15 px-2 py-1" title="분류 확정 필수 입력 충족도를 나타냅니다.">
@@ -172,6 +179,11 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                   <span className="rounded-md bg-white/15 px-2 py-1" title="데이터 품질 및 누락 건수 요약입니다.">
                     데이터 품질 {headerSummary.qualityScore}% · 누락 {headerSummary.missingCount}건
                   </span>
+                  {headerSummary.stage2Meta.modelAvailable === false ? (
+                    <span className="rounded-md bg-amber-100/90 px-2 py-1 text-amber-950" title="검사 결과 입력 후에만 모델 결과를 확인할 수 있습니다.">
+                      결과 대기 · {summarizeMissingEvidence(headerSummary.stage2Meta.missingEvidence)}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-1 text-[11px] text-slate-200">
                   운영 참고: 진단 진행/지연 신호는 운영 정렬용이며 예약/의뢰/분류 확정은 담당자·의료진 확인 후 진행합니다.
@@ -189,7 +201,10 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
               <>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
                   <span className="rounded-md bg-white/15 px-2 py-1" title="2년 내 AD 전환 위험의 운영 참고 지표입니다.">
-                    2년 전환위험 {headerSummary.stage3Meta.risk2yNowPct}% ({headerSummary.stage3Meta.risk2yLabel})
+                    2년 전환위험{" "}
+                    {headerSummary.stage3Meta.modelAvailable && headerSummary.stage3Meta.risk2yNowPct != null
+                      ? `${headerSummary.stage3Meta.risk2yNowPct}% (${headerSummary.stage3Meta.risk2yLabel ?? "-"})`
+                      : "결과대기"}
                   </span>
                   <span className="rounded-md bg-white/15 px-2 py-1" title="재평가 일정 기준일입니다.">
                     다음 재평가 {formatDateTime(headerSummary.stage3Meta.nextReevalAt)}
@@ -206,20 +221,29 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                   <span className="rounded-md bg-white/15 px-2 py-1" title="데이터 품질/누락 요약입니다.">
                     품질 {headerSummary.qualityScore}% · 누락 {headerSummary.missingCount}건
                   </span>
+                  {headerSummary.stage3Meta.modelAvailable === false ? (
+                    <span className="rounded-md bg-amber-100/90 px-2 py-1 text-amber-950" title="검사 결과 입력 후에만 모델 결과를 확인할 수 있습니다.">
+                      결과 대기 · {summarizeMissingEvidence(headerSummary.stage3Meta.missingEvidence)}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-1 text-[11px] text-slate-200">
                   운영 참고: 전환 위험 신호는 정렬용이며 재평가/플랜/연계 실행은 담당자 검토 후 진행합니다.
                 </p>
                 <details className="mt-1 text-[10px] text-slate-300">
                   <summary className="cursor-pointer">더보기</summary>
-                  <p className="mt-1">
-                    최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)} · 예측 업데이트 {formatDateTime(headerSummary.stage3Meta.riskUpdatedAt)} ·
-                    추세 {headerSummary.stage3Meta.trend} · 모델 {headerSummary.stage3Meta.modelVersion} ·
-                    추적 주기
-                    {headerSummary.stage3Meta.trackingCycleDays}일 ·
-                    다음 추적 접촉
-                    {formatDateTime(headerSummary.stage3Meta.nextTrackingContactAt)}
-                  </p>
+                  {headerSummary.stage3Meta.modelAvailable ? (
+                    <p className="mt-1">
+                      최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)} · 예측 업데이트 {formatDateTime(headerSummary.stage3Meta.riskUpdatedAt)} ·
+                      추세 {headerSummary.stage3Meta.trend} · 모델 {headerSummary.stage3Meta.modelVersion} · 추적 주기
+                      {headerSummary.stage3Meta.trackingCycleDays}일 · 다음 추적 접촉
+                      {formatDateTime(headerSummary.stage3Meta.nextTrackingContactAt)}
+                    </p>
+                  ) : (
+                    <p className="mt-1">
+                      최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)} · 모델 결과는 검사결과 입력 후 확인 가능합니다.
+                    </p>
+                  )}
                 </details>
               </>
             ) : isStage2 && headerSummary.stage2Meta ? (
@@ -229,7 +253,7 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                     Stage2 진단 상태 {stage2DiagnosisStatusLabel(headerSummary.stage2Meta.diagnosisStatus)}
                   </span>
                   <span className="rounded-md bg-white/15 px-2 py-1">
-                    검사 완료율 {headerSummary.stage2Meta.completedCount}/4 ({headerSummary.stage2Meta.completionPct}%)
+                    검사 완료율 {headerSummary.stage2Meta.completionPct}% (완료 {headerSummary.stage2Meta.completedCount}건)
                   </span>
                   <span className="rounded-md bg-white/15 px-2 py-1">
                     분류 결과 {headerSummary.stage2Meta.classificationLabel}
@@ -246,6 +270,11 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                   <span className="rounded-md bg-white/15 px-2 py-1">데이터 품질 {headerSummary.qualityScore}%</span>
                   <span className="rounded-md bg-white/15 px-2 py-1">누락 {headerSummary.missingCount}건</span>
                   <span className="rounded-md bg-white/15 px-2 py-1">최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)}</span>
+                  {headerSummary.stage2Meta.modelAvailable === false ? (
+                    <span className="rounded-md bg-amber-100/90 px-2 py-1 text-amber-950" title="검사 결과 입력 후에만 모델 결과를 확인할 수 있습니다.">
+                      결과 대기 · {summarizeMissingEvidence(headerSummary.stage2Meta.missingEvidence)}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-1 text-[11px] text-slate-200">
                   Stage2 진입일 {formatDateTime(headerSummary.stage2Meta.enteredAt)} · 목표 완료일 {formatDateTime(headerSummary.stage2Meta.targetAt)} · 지연 {headerSummary.stage2Meta.delayDays}일 · 다음 액션 {headerSummary.stage2Meta.nextActionLabel}

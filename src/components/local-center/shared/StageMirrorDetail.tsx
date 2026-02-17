@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { ArrowRightCircle, ChevronLeft, Activity } from "lucide-react";
+import { ChevronLeft, Activity } from "lucide-react";
 import { Stage1OpsDetail, type Stage1HeaderSummary } from "../v2/stage1/Stage1OpsDetail";
 import { getCaseRecordById, maskPhone, toAgeBand, type CaseRecord } from "../v2/caseRecords";
 import type { StageType } from "../v2/shared";
@@ -8,6 +8,7 @@ interface StageMirrorDetailProps {
   caseId: string;
   stage: Extract<StageType, "Stage 2" | "Stage 3">;
   onBack: () => void;
+  forceMode?: "stage2" | "stage3";
 }
 
 function formatDateTime(isoLike?: string) {
@@ -49,22 +50,52 @@ function stage3StatusLabel(status?: string) {
   return "종결";
 }
 
-export function StageMirrorDetail({ caseId, stage, onBack }: StageMirrorDetailProps) {
+function stage3DiffPathLabel(status?: string) {
+  if (!status) return "-";
+  if (status === "NONE") return "없음";
+  if (status === "RECOMMENDED") return "권고";
+  if (status === "REFERRED") return "의뢰";
+  if (status === "SCHEDULED") return "예약";
+  if (status === "COMPLETED") return "완료";
+  return status;
+}
+
+function stage2OpsStatusLabelFromStage3(status?: string) {
+  if (!status) return "-";
+  if (status === "TRACKING") return "진행중";
+  if (status === "REEVAL_DUE") return "결과수신대기";
+  if (status === "REEVAL_PENDING") return "대기";
+  if (status === "LINKAGE_PENDING") return "진행중";
+  if (status === "PLAN_NEEDS_UPDATE") return "보류";
+  if (status === "CHURN_RISK") return "중단(거부)";
+  return "판단완료";
+}
+
+function stage2DiagnosisStatusLabel(status?: string) {
+  if (!status) return "-";
+  if (status === "NOT_STARTED") return "대기";
+  if (status === "IN_PROGRESS") return "진행중";
+  if (status === "COMPLETED") return "완료";
+  return status;
+}
+
+export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMirrorDetailProps) {
   const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
   const [headerSummary, setHeaderSummary] = useState<Stage1HeaderSummary | null>(null);
-  const [primaryActionHandler, setPrimaryActionHandler] = useState<(() => void) | null>(null);
   const isStage2 = stage === "Stage 2";
-  const isStage3 = stage === "Stage 3";
+  const effectiveMode = forceMode ?? (isStage2 ? "stage2" : "stage3");
+  const isStage3View = effectiveMode === "stage3";
+  const isStage2OpsView = isStage2 && isStage3View;
   const phoneLabel = profile?.profile.phone ?? "-";
   const subjectName = profile?.profile.name ?? "이름 미확인";
   const subjectAge = profile?.profile.age;
-  const subjectTitle = isStage3 ? subjectName : caseId;
+  const subjectTitle = isStage3View ? subjectName : caseId;
   const identityLine =
     profile
-      ? isStage3
+      ? isStage3View
         ? `이름 ${subjectName} · 연령 ${subjectAge ?? "-"}세 · 연락처 ${phoneLabel}`
         : `연령대 ${toAgeBand(profile.profile.age)} · 연락처 ${isStage2 ? phoneLabel : maskPhone(profile.profile.phone)} · 케이스키 ${profile.id}`
-      : isStage3
+      : isStage3View
         ? "이름/연령 정보 없음"
         : `케이스키 ${caseId}`;
 
@@ -90,7 +121,18 @@ export function StageMirrorDetail({ caseId, stage, onBack }: StageMirrorDetailPr
                 <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
                 <span className="h-2 w-px bg-gray-200" />
                 <span>
-                  현재 상태: <span className="font-bold text-blue-700">{isStage3 ? (headerSummary?.stage3Meta ? stage3StatusLabel(headerSummary.stage3Meta.opsStatus) : resolveStatus(profile)) : resolveStatus(profile)}</span>
+                  현재 상태:{" "}
+                  <span className="font-bold text-blue-700">
+                    {isStage2OpsView
+                      ? stage2OpsStatusLabelFromStage3(headerSummary?.stage3Meta?.opsStatus)
+                      : isStage3View
+                      ? headerSummary?.stage3Meta
+                        ? stage3StatusLabel(headerSummary.stage3Meta.opsStatus)
+                        : resolveStatus(profile)
+                      : isStage2
+                        ? stage2DiagnosisStatusLabel(headerSummary?.stage2Meta?.diagnosisStatus)
+                        : resolveStatus(profile)}
+                  </span>
                 </span>
                 <span className="h-2 w-px bg-gray-200" />
                 <span className="text-gray-600">{identityLine}</span>
@@ -101,35 +143,112 @@ export function StageMirrorDetail({ caseId, stage, onBack }: StageMirrorDetailPr
             <button className="flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
               <Activity size={14} /> 운영 지원 요청
             </button>
-            <button
-              onClick={() => primaryActionHandler?.()}
-              className="flex items-center gap-2 rounded-lg bg-[#15386a] px-4 py-2 text-xs font-bold text-white shadow-sm transition-all hover:shadow-md"
-            >
-              {isStage3 && headerSummary?.nextActionLabel ? headerSummary.nextActionLabel : "다음 액션 1순위 실행"} <ArrowRightCircle size={14} />
-            </button>
           </div>
         </div>
 
         {headerSummary ? (
           <div className="mt-3 rounded-xl border border-slate-700 bg-gradient-to-r from-slate-900 to-slate-800 px-3 py-2 text-white">
-            {isStage3 && headerSummary.stage3Meta ? (
+            {isStage2OpsView && headerSummary.stage2Meta ? (
               <>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
-                  <span className="rounded-md bg-white/15 px-2 py-1">운영 상태 {stage3StatusLabel(headerSummary.stage3Meta.opsStatus)}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">2년 전환위험 {headerSummary.stage3Meta.risk2yNowPct}%</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">신뢰수준 {headerSummary.stage3Meta.risk2yLabel}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">추세 {headerSummary.stage3Meta.trend}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">모델 {headerSummary.stage3Meta.modelVersion}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">다음 재평가 {formatDateTime(headerSummary.stage3Meta.nextReevalAt)}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">다음 추적 접촉 {formatDateTime(headerSummary.stage3Meta.nextTrackingContactAt)}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">플랜 {headerSummary.stage3Meta.planStatus}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">추적 주기 {headerSummary.stage3Meta.trackingCycleDays}일</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">이탈 위험 {headerSummary.stage3Meta.churnRisk}</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">데이터 품질 {headerSummary.qualityScore}%</span>
-                  <span className="rounded-md bg-white/15 px-2 py-1">누락 {headerSummary.missingCount}건</span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="정상/MCI/치매 분류 결과 라벨입니다.">
+                    분류 결과 {headerSummary.stage2Meta.classificationLabel}
+                    {headerSummary.stage2Meta.classificationLabel === "MCI" && headerSummary.stage2Meta.mciStage
+                      ? `(${headerSummary.stage2Meta.mciStage === "적정" ? "중등" : headerSummary.stage2Meta.mciStage})`
+                      : ""}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="Stage2 진단 진행 상태입니다.">
+                    2차 진단 상태 {stage2DiagnosisStatusLabel(headerSummary.stage2Meta.diagnosisStatus)}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="필수 4항목 기준 검사 완료 비율입니다.">
+                    검사 완료율 {headerSummary.stage2Meta.completionPct}%
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="분류 확정 필수 입력 충족도를 나타냅니다.">
+                    필수자료 충족도 {headerSummary.stage2Meta.requiredDataPct}%
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="다음 진단 일정 또는 결과 수신 목표일입니다.">
+                    다음 진단 일정 {formatDateTime(headerSummary.stage2Meta.targetAt)}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="데이터 품질 및 누락 건수 요약입니다.">
+                    데이터 품질 {headerSummary.qualityScore}% · 누락 {headerSummary.missingCount}건
+                  </span>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-200">
-                  최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)} · 예측 업데이트 {formatDateTime(headerSummary.stage3Meta.riskUpdatedAt)} · 운영 참고: 전환 위험 신호는 정렬용이며 재평가/플랜/연계 실행은 담당자 검토 후 진행합니다.
+                  운영 참고: 진단 진행/지연 신호는 운영 정렬용이며 예약/의뢰/분류 확정은 담당자·의료진 확인 후 진행합니다.
+                </p>
+                <details className="mt-1 text-[10px] text-slate-300">
+                  <summary className="cursor-pointer">더보기</summary>
+                  <p className="mt-1">
+                    Stage2 진입일 {formatDateTime(headerSummary.stage2Meta.enteredAt)} · 목표 완료일 {formatDateTime(headerSummary.stage2Meta.targetAt)} ·
+                    지연 {headerSummary.stage2Meta.delayDays}일 · 다음 작업 {headerSummary.stage2Meta.nextActionLabel} ·
+                    최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)}
+                  </p>
+                </details>
+              </>
+            ) : isStage3View && headerSummary.stage3Meta ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="2년 내 AD 전환 위험의 운영 참고 지표입니다.">
+                    2년 전환위험 {headerSummary.stage3Meta.risk2yNowPct}% ({headerSummary.stage3Meta.risk2yLabel})
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="재평가 일정 기준일입니다.">
+                    다음 재평가 {formatDateTime(headerSummary.stage3Meta.nextReevalAt)}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="감별검사/뇌영상 진행 상태입니다.">
+                    감별경로 {stage3DiffPathLabel(headerSummary.stage3Meta.diffPathStatus)}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="정밀관리 플랜 상태입니다.">
+                    플랜 {headerSummary.stage3Meta.planStatus}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="이탈 위험 신호 수준입니다.">
+                    이탈 위험 {headerSummary.stage3Meta.churnRisk}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="데이터 품질/누락 요약입니다.">
+                    품질 {headerSummary.qualityScore}% · 누락 {headerSummary.missingCount}건
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-200">
+                  운영 참고: 전환 위험 신호는 정렬용이며 재평가/플랜/연계 실행은 담당자 검토 후 진행합니다.
+                </p>
+                <details className="mt-1 text-[10px] text-slate-300">
+                  <summary className="cursor-pointer">더보기</summary>
+                  <p className="mt-1">
+                    최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)} · 예측 업데이트 {formatDateTime(headerSummary.stage3Meta.riskUpdatedAt)} ·
+                    추세 {headerSummary.stage3Meta.trend} · 모델 {headerSummary.stage3Meta.modelVersion} ·
+                    추적 주기
+                    {headerSummary.stage3Meta.trackingCycleDays}일 ·
+                    다음 추적 접촉
+                    {formatDateTime(headerSummary.stage3Meta.nextTrackingContactAt)}
+                  </p>
+                </details>
+              </>
+            ) : isStage2 && headerSummary.stage2Meta ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+                  <span className="rounded-md bg-white/15 px-2 py-1">
+                    Stage2 진단 상태 {stage2DiagnosisStatusLabel(headerSummary.stage2Meta.diagnosisStatus)}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1">
+                    검사 완료율 {headerSummary.stage2Meta.completedCount}/4 ({headerSummary.stage2Meta.completionPct}%)
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1">
+                    분류 결과 {headerSummary.stage2Meta.classificationLabel}
+                    {headerSummary.stage2Meta.classificationLabel === "MCI" && headerSummary.stage2Meta.mciStage
+                      ? `(${headerSummary.stage2Meta.mciStage})`
+                      : ""}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1">
+                    MCI 세분화 {headerSummary.stage2Meta.mciStage ?? "-"}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1">
+                    Stage3 진입 필요 {headerSummary.stage2Meta.stage3EntryNeeded ? "TRUE" : "FALSE"}
+                  </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1">데이터 품질 {headerSummary.qualityScore}%</span>
+                  <span className="rounded-md bg-white/15 px-2 py-1">누락 {headerSummary.missingCount}건</span>
+                  <span className="rounded-md bg-white/15 px-2 py-1">최근 업데이트 {formatDateTime(headerSummary.lastUpdatedAt)}</span>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-200">
+                  Stage2 진입일 {formatDateTime(headerSummary.stage2Meta.enteredAt)} · 목표 완료일 {formatDateTime(headerSummary.stage2Meta.targetAt)} · 지연 {headerSummary.stage2Meta.delayDays}일 · 다음 액션 {headerSummary.stage2Meta.nextActionLabel}
                 </p>
               </>
             ) : (
@@ -156,10 +275,8 @@ export function StageMirrorDetail({ caseId, stage, onBack }: StageMirrorDetailPr
         <Stage1OpsDetail
           caseRecord={profile}
           onHeaderSummaryChange={setHeaderSummary}
-          onPrimaryActionChange={(handler) => {
-            setPrimaryActionHandler(() => handler);
-          }}
-          mode={isStage2 ? "stage2" : "stage3"}
+          mode={effectiveMode}
+          surfaceStage={stage}
         />
       </div>
     </div>

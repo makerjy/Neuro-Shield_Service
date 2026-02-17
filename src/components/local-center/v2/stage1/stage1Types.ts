@@ -106,6 +106,8 @@ export type OutcomeType =
   | "HARD_TO_UNDERSTAND"
   | "EMOTIONAL";
 
+export type ResponseReasonTag = "CONFUSION" | "EMOTIONAL";
+
 export type RejectReasonCode =
   | "R1_SELF_REJECT"
   | "R2_GUARDIAN_REJECT"
@@ -139,6 +141,7 @@ export interface CalendarEventDraft {
 export type OutcomeSavePayload = {
   outcomeType: OutcomeType;
   memo?: string;
+  reasonTags?: ResponseReasonTag[];
   reject?: {
     code: RejectReasonCode;
     level: RejectLevel;
@@ -152,6 +155,8 @@ export type OutcomeSavePayload = {
     strategy: RecontactStrategy;
     nextContactAt: string;
     escalateLevel?: InterventionLevel;
+    channel?: "CALL" | "SMS";
+    assigneeId?: string;
   };
 };
 
@@ -347,6 +352,12 @@ export type ContactEvent =
       by: string;
     }
   | {
+      type: "MESSAGE_SENT";
+      at: string;
+      summary: string;
+      by: string;
+    }
+  | {
       type: "STATUS_CHANGE";
       at: string;
       from: string;
@@ -381,6 +392,7 @@ export type ContactEvent =
       type: "OUTCOME_RECORDED";
       at: string;
       outcomeCode: OutcomeCode;
+      reasonTags?: ResponseReasonTag[];
       note?: string;
       rejectCode?: RejectReasonCode;
       rejectLevel?: RejectLevel;
@@ -398,6 +410,13 @@ export type ContactEvent =
       scheduledAt: string;
       idempotencyKey: string;
       error?: string;
+      by: string;
+    }
+  | {
+      type: "CAL_EVENT_CREATED";
+      at: string;
+      scheduledAt: string;
+      summary: string;
       by: string;
     }
   | {
@@ -575,6 +594,16 @@ export type ContactEvent =
       by: string;
       nextAt: string;
       summary?: string;
+    }
+  | {
+      type:
+        | "STAGE2_PLAN_CONFIRMED"
+        | "STAGE2_RESULTS_RECORDED"
+        | "STAGE2_CLASS_CONFIRMED"
+        | "STAGE2_NEXT_STEP_SET";
+      at: string;
+      by: string;
+      summary: string;
     };
 
 export type Stage1Detail = {

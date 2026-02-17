@@ -22,10 +22,51 @@ const hashSeed = (input: string) => {
   return hash;
 };
 
-const valueFromHash = (hash: number, indicator: GeoIndicator) => {
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const seededRatio = (seed: string) => (hashSeed(seed) % 10000) / 10000;
+const seededBetween = (seed: string, min: number, max: number) => min + seededRatio(seed) * (max - min);
+
+const buildDeterministicSeries = (
+  code: string,
+  indicator: GeoIndicator,
+  years: number[]
+): RegionSeriesPoint[] => {
+  if (!years.length) return [];
+
   const [min, max] = indicator.scale;
-  const ratio = (hash % 1000) / 1000;
-  return min + (max - min) * ratio;
+  const range = max - min;
+  const len = years.length;
+  const denominator = Math.max(1, len - 1);
+  const seedBase = `${code}-${indicator.id}`;
+
+  const base = seededBetween(`${seedBase}-base`, min + range * 0.2, max - range * 0.2);
+  const slope = seededBetween(`${seedBase}-slope`, -range * 0.045, range * 0.045);
+  const seasonalAmp = seededBetween(`${seedBase}-amp`, range * 0.04, range * 0.14);
+  const phase = seededBetween(`${seedBase}-phase`, 0, Math.PI * 2);
+  const noiseAmp = range * 0.03;
+  const shockIndex = Math.round(seededBetween(`${seedBase}-shock-index`, 1, Math.max(1, len - 2)));
+  const shockSign = seededBetween(`${seedBase}-shock-sign`, -1, 1) >= 0 ? 1 : -1;
+  const shockAmp = seededBetween(`${seedBase}-shock-amp`, range * 0.06, range * 0.18) * shockSign;
+  const shockRecovery = seededBetween(`${seedBase}-shock-rec`, 0.38, 0.72);
+
+  return years.map((year, index) => {
+    const drift = (index - denominator / 2) * slope;
+    const wave = Math.sin((index / denominator) * Math.PI * 2 + phase) * seasonalAmp;
+    const secondaryWave = Math.sin((index / denominator) * Math.PI + phase * 0.35) * seasonalAmp * 0.35;
+    const noise = seededBetween(`${seedBase}-noise-${year}`, -noiseAmp, noiseAmp);
+
+    let shock = 0;
+    if (index === shockIndex) shock += shockAmp;
+    if (index === shockIndex - 1) shock += shockAmp * 0.22;
+    if (index === shockIndex + 1) shock -= shockAmp * shockRecovery;
+    if (index === shockIndex + 2) shock -= shockAmp * shockRecovery * 0.35;
+
+    const value = clamp(base + drift + wave + secondaryWave + noise + shock, min, max);
+    return {
+      year,
+      value: Number(value.toFixed(1)),
+    };
+  });
 };
 
 const getFeatureCode = (feature: any) =>
@@ -62,10 +103,9 @@ export const buildMetrics = (
   const points = features.map((feature) => {
     const code = getFeatureCode(feature);
     const name = getFeatureName(feature);
-    const hash = hashSeed(`${code}-${indicator.id}-${year}`);
-    const prevHash = hashSeed(`${code}-${indicator.id}-${year - 1}`);
-    const value = valueFromHash(hash, indicator);
-    const prevValue = valueFromHash(prevHash, indicator);
+    const series = buildDeterministicSeries(code, indicator, [year - 1, year]);
+    const prevValue = series[0]?.value ?? indicator.scale[0];
+    const value = series[1]?.value ?? prevValue;
     const yoy = value - prevValue;
     return { code, name, value, yoy, rank: 0 };
   });
@@ -82,13 +122,7 @@ export const buildRegionSeries = (
   indicator: GeoIndicator,
   years: number[]
 ): RegionSeriesPoint[] => {
-  return years.map((year) => {
-    const hash = hashSeed(`${code}-${indicator.id}-${year}`);
-    return {
-      year,
-      value: valueFromHash(hash, indicator)
-    };
-  });
+  return buildDeterministicSeries(code, indicator, years);
 };
 
 export const buildComposition = (code: string) => {

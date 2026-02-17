@@ -112,6 +112,8 @@ export interface OperationalTopItem {
 
 export type InterventionStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'BLOCKED';
 export type InterventionType = 'STAFFING' | 'RECONTACT_PUSH' | 'DATA_FIX' | 'PATHWAY_TUNE' | 'GOVERNANCE_FIX';
+export type InterventionStageKey = 'Stage1' | 'Stage2' | 'Stage3';
+export type InterventionLogType = 'instruction' | 'adjustment' | 'confirmation' | 'completion';
 
 export type InterventionMetricSnapshot = {
   regionalSla: number;
@@ -131,14 +133,62 @@ export type InterventionTimelineEvent = {
   message: string;
 };
 
+export type InterventionCreatedFrom = {
+  causeKey: string;
+  kpiKey: KpiKey;
+  snapshot: {
+    kpiValue: number;
+    backlogCount: number;
+    avgDwell: number;
+    deltaVsRegional?: number;
+    unit?: '%' | '건' | '일' | '점';
+  };
+};
+
+export type InterventionLog = {
+  id: string;
+  type: InterventionLogType;
+  actor: string;
+  timestamp: string;
+  referenceLink?: string;
+  requiresFollowup: boolean;
+  followedUpAt?: string;
+  note: string;
+};
+
+export type InterventionKpiComparison = {
+  before: {
+    value: number;
+    backlog: number;
+  };
+  after?: {
+    value: number;
+    backlog: number;
+  };
+  delta?: {
+    value: number;
+    backlog: number;
+  };
+};
+
 export interface Intervention {
   id: string;
+  title: string;
+  stageKey: InterventionStageKey;
+  areaKey: string;
+  areaLabel: string;
   region: string;
   kpiKey: KpiKey;
   type: InterventionType;
   status: InterventionStatus;
   owner: string;
   createdAt: string;
+  dueAt?: string;
+  ruleId?: string;
+  createdFrom: InterventionCreatedFrom;
+  expectedEffectTags: string[];
+  logs: InterventionLog[];
+  kpiComparison: InterventionKpiComparison;
   notes: string;
   evidenceLinks: string[];
   beforeMetrics: InterventionMetricSnapshot;
@@ -153,6 +203,9 @@ export type InterventionDraft = {
   type?: InterventionType;
   source?: 'overview' | 'top5' | 'map' | 'cause';
   primaryDriverStage?: string;
+  selectedStage?: 'contact' | 'recontact' | 'L2' | '3rd' | null;
+  selectedCauseKey?: string | null;
+  selectedArea?: string | null;
 };
 
 export type WorkStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'REJECTED';

@@ -3,9 +3,9 @@ import type { InternalRangeKey, KpiKey, RangeKey } from './opsContracts';
 export type RegionalPageId = 'overview' | 'cause' | 'interventions' | 'reports' | 'settings';
 
 export const REGIONAL_PATHS: Record<RegionalPageId, string> = {
-  overview: '/',
-  cause: '/regional/cause',
-  interventions: '/regional/interventions',
+  overview: '/regional/ops',
+  cause: '/regional/bottleneck',
+  interventions: '/regional/actions',
   reports: '/regional/reports',
   settings: '/regional/settings',
 };
@@ -66,11 +66,19 @@ export function fromUrlRange(range: string | null | undefined): InternalRangeKey
 
 export function parseRegionalPage(pathname: string): RegionalPageId {
   const scopedPath = stripBasePath(pathname);
+  if (scopedPath === '/' || scopedPath === '/regional/overview' || scopedPath === '/regional/ops') {
+    return 'overview';
+  }
   const match = scopedPath.match(/^\/regional\/([^/?#]+)/);
-  const slug = match?.[1] as RegionalPageId | undefined;
+  const slug = match?.[1];
   if (!slug) return 'overview';
-  if (slug === 'overview' || slug === 'cause' || slug === 'interventions' || slug === 'reports' || slug === 'settings') {
-    return slug;
+  if (slug === 'bottleneck' || slug === 'cause') return 'cause';
+  if (slug === 'actions' || slug === 'interventions') return 'interventions';
+  if (slug === 'reports') return 'reports';
+  if (slug === 'settings') return 'settings';
+  if (slug === 'overview' || slug === 'ops') return 'overview';
+  if (slug === 'regional') {
+    return 'overview';
   }
   return 'overview';
 }

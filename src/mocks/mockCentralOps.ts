@@ -699,6 +699,66 @@ function _sv(seed: string, min: number, max: number): number {
   return min + (((_hash(seed) % 10000) / 10000) * (max - min));
 }
 
+function _clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+interface DynamicSeriesOptions {
+  base: number;
+  spread: number;
+  min: number;
+  max: number;
+  volatility?: number;
+  trendBias?: number;
+  shockDirection?: 'up' | 'down' | 'both';
+}
+
+function _buildDynamicSeries(seed: string, length: number, options: DynamicSeriesOptions): number[] {
+  const spread = Math.max(0.1, options.spread);
+  const volatility = _clamp(options.volatility ?? 0.28, 0.12, 0.6);
+  const trendBias = _clamp(options.trendBias ?? 0, -1, 1);
+  const slope = _sv(`${seed}-slope`, -spread * 0.24, spread * 0.24) + trendBias * spread * 0.14;
+  const cycleAmp = _sv(`${seed}-cycle`, spread * 0.12, spread * 0.42);
+  const phase = _sv(`${seed}-phase`, 0, Math.PI * 2);
+  const noiseAmp = spread * volatility;
+  const shockDay = Math.round(_sv(`${seed}-shock-day`, 1, Math.max(1, length - 2)));
+  const rawShockAmp = _sv(`${seed}-shock-amp`, spread * 0.25, spread * 0.85);
+  const recovery = _sv(`${seed}-shock-recovery`, 0.35, 0.72);
+  const preShock = _sv(`${seed}-pre-shock`, 0.15, 0.35);
+
+  let shockSign = _sv(`${seed}-shock-sign`, -1, 1) >= 0 ? 1 : -1;
+  if (options.shockDirection === 'up') shockSign = 1;
+  if (options.shockDirection === 'down') shockSign = -1;
+  const shockAmp = rawShockAmp * shockSign;
+
+  const values: number[] = [];
+  const denominator = Math.max(1, length - 1);
+  for (let i = 0; i < length; i += 1) {
+    const drift = (i - denominator / 2) * slope;
+    const wave = Math.sin((i / denominator) * Math.PI * 2 + phase) * cycleAmp;
+    const secondaryWave = Math.sin((i / denominator) * Math.PI + phase * 0.5) * (cycleAmp * 0.35);
+    const noise = _sv(`${seed}-noise-${i}`, -noiseAmp, noiseAmp);
+
+    let shock = 0;
+    if (i === shockDay) shock += shockAmp;
+    if (i === shockDay - 1) shock += shockAmp * preShock;
+    if (i === shockDay + 1) shock -= shockAmp * recovery;
+    if (i === shockDay + 2) shock -= shockAmp * recovery * 0.35;
+
+    const rawValue = options.base + drift + wave + secondaryWave + noise + shock;
+    values.push(Number(_clamp(rawValue, options.min, options.max).toFixed(1)));
+  }
+
+  return values;
+}
+
+function _seriesDelta(values: number[], maxAbs = 9): number {
+  if (!values.length) return 0;
+  const anchorIndex = Math.max(0, values.length - 3);
+  const rawDelta = values[values.length - 1] - values[anchorIndex];
+  return Number(_clamp(rawDelta, -maxAbs, maxAbs).toFixed(1));
+}
+
 const REGION_LIST = [
   { code: '11', name: '서울특별시' },    { code: '26', name: '부산광역시' },
   { code: '27', name: '대구광역시' },    { code: '28', name: '인천광역시' },
@@ -722,64 +782,118 @@ export async function fetchCentralKpis(
 ): Promise<CentralDashboardKpisResponse> {
   await delay(200);
   const seed = `central-kpis-${window}-${periodVariant}`;
-  const sparkline = (base: number, spread: number) =>
-    Array.from({ length: 7 }, (_, i) => Number((base + _sv(`${seed}-sp-${i}`, -spread, spread)).toFixed(1)));
+
+  const sqSparkline = _buildDynamicSeries(`${seed}-sq-sp`, 7, {
+    base: 92.2,
+    spread: 3.4,
+    min: 84,
+    max: 99,
+    volatility: 0.24,
+    trendBias: 0.12,
+    shockDirection: 'down',
+  });
+  const piSparkline = _buildDynamicSeries(`${seed}-pi-sp`, 7, {
+    base: 27.5,
+    spread: 9.2,
+    min: 8,
+    max: 48,
+    volatility: 0.34,
+    trendBias: 0.08,
+    shockDirection: 'both',
+  });
+  const brSparkline = _buildDynamicSeries(`${seed}-br-sp`, 7, {
+    base: 38.5,
+    spread: 8.5,
+    min: 15,
+    max: 58,
+    volatility: 0.33,
+    trendBias: 0.16,
+    shockDirection: 'up',
+  });
+  const drSparkline = _buildDynamicSeries(`${seed}-dr-sp`, 7, {
+    base: 90.8,
+    spread: 4.8,
+    min: 78,
+    max: 99,
+    volatility: 0.26,
+    trendBias: 0.1,
+    shockDirection: 'down',
+  });
+  const gsSparkline = _buildDynamicSeries(`${seed}-gs-sp`, 7, {
+    base: 95.1,
+    spread: 2.8,
+    min: 88,
+    max: 99,
+    volatility: 0.2,
+    trendBias: 0.06,
+    shockDirection: 'down',
+  });
+
+  const sqValue = Number(_clamp(sqSparkline[sqSparkline.length - 1] + _sv(`${seed}-sq-adjust`, -0.6, 0.6), 85, 97).toFixed(1));
+  const piValue = Number(_clamp(piSparkline[piSparkline.length - 1] + _sv(`${seed}-pi-adjust`, -1.2, 1.2), 12, 42).toFixed(1));
+  const brValue = Number(_clamp(brSparkline[brSparkline.length - 1] + _sv(`${seed}-br-adjust`, -1.5, 1.5), 18, 55).toFixed(1));
+  const drValue = Number(_clamp(drSparkline[drSparkline.length - 1] + _sv(`${seed}-dr-adjust`, -0.8, 0.8), 80, 98).toFixed(1));
+  const gsValue = Number(_clamp(gsSparkline[gsSparkline.length - 1] + _sv(`${seed}-gs-adjust`, -0.5, 0.5), 88, 99).toFixed(1));
+
+  const sqDenominator = Math.round(_sv(`${seed}-sq-d`, 10000, 18000));
+  const drDenominator = Math.round(_sv(`${seed}-dr-d`, 8000, 17000));
+  const gsDenominator = Math.round(_sv(`${seed}-gs-d`, 900, 2000));
 
   const kpis: CentralKpiValue[] = [
     {
       kpiId: 'SIGNAL_QUALITY',
       window,
-      numerator: Math.round(_sv(`${seed}-sq-n`, 8500, 17000)),
-      denominator: Math.round(_sv(`${seed}-sq-d`, 10000, 18000)),
-      value: Number(_sv(`${seed}-sq-v`, 85, 97).toFixed(1)),
-      delta7d: Number(_sv(`${seed}-sq-delta`, -2, 3).toFixed(1)),
-      sparkline: sparkline(92, 3),
+      numerator: Math.round(_clamp((sqDenominator * sqValue) / 100 + _sv(`${seed}-sq-n-jitter`, -120, 120), 0, sqDenominator)),
+      denominator: sqDenominator,
+      value: sqValue,
+      delta7d: _seriesDelta(sqSparkline, 3.5),
+      sparkline: sqSparkline,
     },
     {
       kpiId: 'POLICY_IMPACT',
       window,
-      numerator: Math.round(_sv(`${seed}-pi-n`, 15, 40)),
+      numerator: Math.round(_clamp(piValue + _sv(`${seed}-pi-n-jitter`, -2.5, 2.5), 0, 100)),
       denominator: 100,
-      value: Number(_sv(`${seed}-pi-v`, 12, 42).toFixed(1)),
-      delta7d: Number(_sv(`${seed}-pi-delta`, -5, 8).toFixed(1)),
+      value: piValue,
+      delta7d: _seriesDelta(piSparkline, 8),
       auxiliary: { rollbackCount: Math.round(_sv(`${seed}-pi-rb`, 0, 3)), warningRegions: Math.round(_sv(`${seed}-pi-wr`, 1, 5)) },
-      sparkline: sparkline(28, 8),
+      sparkline: piSparkline,
     },
     {
       kpiId: 'BOTTLENECK_RISK',
       window,
-      numerator: Math.round(_sv(`${seed}-br-n`, 20, 55)),
+      numerator: Math.round(_clamp(brValue + _sv(`${seed}-br-n-jitter`, -3, 3), 0, 100)),
       denominator: 100,
-      value: Number(_sv(`${seed}-br-v`, 18, 55).toFixed(1)),
-      delta7d: Number(_sv(`${seed}-br-delta`, -4, 6).toFixed(1)),
+      value: brValue,
+      delta7d: _seriesDelta(brSparkline, 7),
       auxiliary: {
         slaViolationRate: Number(_sv(`${seed}-br-sla`, 5, 25).toFixed(1)),
         l2BacklogCount: Math.round(_sv(`${seed}-br-bc`, 30, 200)),
       },
-      sparkline: sparkline(38, 8),
+      sparkline: brSparkline,
     },
     {
       kpiId: 'DATA_READINESS',
       window,
-      numerator: Math.round(_sv(`${seed}-dr-n`, 7000, 16000)),
-      denominator: Math.round(_sv(`${seed}-dr-d`, 8000, 17000)),
-      value: Number(_sv(`${seed}-dr-v`, 80, 98).toFixed(1)),
-      delta7d: Number(_sv(`${seed}-dr-delta`, -3, 4).toFixed(1)),
+      numerator: Math.round(_clamp((drDenominator * drValue) / 100 + _sv(`${seed}-dr-n-jitter`, -140, 140), 0, drDenominator)),
+      denominator: drDenominator,
+      value: drValue,
+      delta7d: _seriesDelta(drSparkline, 4.5),
       auxiliary: {
         missingFieldRate: Number(_sv(`${seed}-dr-mf`, 1, 12).toFixed(1)),
         linkagePendingRate: Number(_sv(`${seed}-dr-lp`, 2, 15).toFixed(1)),
       },
-      sparkline: sparkline(90, 5),
+      sparkline: drSparkline,
     },
     {
       kpiId: 'GOVERNANCE_SAFETY',
       window,
-      numerator: Math.round(_sv(`${seed}-gs-n`, 850, 1900)),
-      denominator: Math.round(_sv(`${seed}-gs-d`, 900, 2000)),
-      value: Number(_sv(`${seed}-gs-v`, 88, 99).toFixed(1)),
-      delta7d: Number(_sv(`${seed}-gs-delta`, -2, 3).toFixed(1)),
+      numerator: Math.round(_clamp((gsDenominator * gsValue) / 100 + _sv(`${seed}-gs-n-jitter`, -20, 20), 0, gsDenominator)),
+      denominator: gsDenominator,
+      value: gsValue,
+      delta7d: _seriesDelta(gsSparkline, 3),
       auxiliary: { missingResponsible: Math.round(_sv(`${seed}-gs-mr`, 0, 8)), missingExplanation: Math.round(_sv(`${seed}-gs-me`, 0, 6)) },
-      sparkline: sparkline(95, 3),
+      sparkline: gsSparkline,
     },
   ];
 
@@ -979,11 +1093,28 @@ export async function fetchCentralDashboardBundle(
       value: Number(_sv(`${seed}-${kpiKey}-${r.code}`, min, max).toFixed(1)),
     }));
 
-  const makeTrend = (kpiKey: string, base: number, spread: number) =>
-    Array.from({ length: 7 }, (_, i) => ({
-      period: `D${i + 1}`,
-      value: Number((base + _sv(`${seed}-${kpiKey}-tr-${i}`, -spread, spread)).toFixed(1)),
-    }));
+  const makeTrend = (
+    kpiKey: string,
+    options: DynamicSeriesOptions & { length?: number }
+  ) => {
+    const length = options.length ?? 7;
+    const values = _buildDynamicSeries(`${seed}-${kpiKey}-tr`, length, {
+      base: options.base,
+      spread: options.spread,
+      min: options.min,
+      max: options.max,
+      volatility: options.volatility,
+      trendBias: options.trendBias,
+      shockDirection: options.shockDirection,
+    });
+    return {
+      values,
+      points: values.map((value, index) => ({
+        period: `D${index + 1}`,
+        value,
+      })),
+    };
+  };
 
   const sorted = (regions: CentralRegionMetric[], higherBetter: boolean) => {
     const s = [...regions].sort((a, b) => higherBetter ? a.value - b.value : b.value - a.value);
@@ -993,8 +1124,20 @@ export async function fetchCentralDashboardBundle(
   /* ── signalQuality ── */
   const sqRegions = makeRegions('sq', 80, 98);
   const sqSorted = sorted(sqRegions, true);
+  const sqTrend = makeTrend('sq', {
+    base: 92,
+    spread: 3.2,
+    min: 84,
+    max: 99,
+    volatility: 0.24,
+    trendBias: 0.1,
+    shockDirection: 'down',
+  });
+  const sqNationalValue = Number(
+    _clamp(sqTrend.values[sqTrend.values.length - 1] + _sv(`${seed}-sq-nat-j`, -0.6, 0.6), 85, 97).toFixed(1)
+  );
   const signalQuality: KpiBundle = {
-    national: { value: Number(_sv(`${seed}-sq-nat`, 88, 96).toFixed(1)), deltaPP: Number(_sv(`${seed}-sq-d`, -2, 3).toFixed(1)), target: 95 },
+    national: { value: sqNationalValue, deltaPP: _seriesDelta(sqTrend.values, 3.5), target: 95 },
     regions: sqRegions,
     breakdown: [
       { name: '유효 신호', value: Math.round(_sv(`${seed}-sq-b1`, 8500, 16000)), color: '#2563eb' },
@@ -1011,7 +1154,7 @@ export async function fetchCentralDashboardBundle(
       { name: '기타', value: Math.round(_sv(`${seed}-sq-c5`, 10, 60)) },
     ],
     causeType: 'bar',
-    trend: makeTrend('sq', 92, 3),
+    trend: sqTrend.points,
     worstRegions: sqSorted.worst,
     bestRegions: sqSorted.best,
   };
@@ -1019,8 +1162,20 @@ export async function fetchCentralDashboardBundle(
   /* ── policyImpact ── */
   const piRegions = makeRegions('pi', 10, 50);
   const piSorted = sorted(piRegions, false);
+  const piTrend = makeTrend('pi', {
+    base: 27.8,
+    spread: 9.4,
+    min: 8,
+    max: 48,
+    volatility: 0.34,
+    trendBias: 0.08,
+    shockDirection: 'both',
+  });
+  const piNationalValue = Number(
+    _clamp(piTrend.values[piTrend.values.length - 1] + _sv(`${seed}-pi-nat-j`, -1.4, 1.4), 12, 42).toFixed(1)
+  );
   const policyImpact: KpiBundle = {
-    national: { value: Number(_sv(`${seed}-pi-nat`, 15, 40).toFixed(1)), deltaPP: Number(_sv(`${seed}-pi-d`, -5, 8).toFixed(1)), target: 20 },
+    national: { value: piNationalValue, deltaPP: _seriesDelta(piTrend.values, 8), target: 20 },
     regions: piRegions,
     breakdown: [
       { name: '기준점 변경', value: Math.round(_sv(`${seed}-pi-b1`, 3, 12)), color: '#7c3aed' },
@@ -1036,7 +1191,7 @@ export async function fetchCentralDashboardBundle(
       { name: '데이터 충족 변동', value: Number(_sv(`${seed}-pi-c4`, 0.1, 2).toFixed(1)) },
     ],
     causeType: 'bar',
-    trend: makeTrend('pi', 28, 8),
+    trend: piTrend.points,
     worstRegions: piSorted.worst,
     bestRegions: piSorted.best,
   };
@@ -1044,8 +1199,20 @@ export async function fetchCentralDashboardBundle(
   /* ── bottleneckRisk ── */
   const brRegions = makeRegions('br', 15, 60);
   const brSorted = sorted(brRegions, false);
+  const brTrend = makeTrend('br', {
+    base: 38.6,
+    spread: 8.9,
+    min: 15,
+    max: 60,
+    volatility: 0.35,
+    trendBias: 0.16,
+    shockDirection: 'up',
+  });
+  const brNationalValue = Number(
+    _clamp(brTrend.values[brTrend.values.length - 1] + _sv(`${seed}-br-nat-j`, -1.8, 1.8), 18, 55).toFixed(1)
+  );
   const bottleneckRisk: KpiBundle = {
-    national: { value: Number(_sv(`${seed}-br-nat`, 25, 50).toFixed(1)), deltaPP: Number(_sv(`${seed}-br-d`, -4, 6).toFixed(1)), target: 30 },
+    national: { value: brNationalValue, deltaPP: _seriesDelta(brTrend.values, 7), target: 30 },
     regions: brRegions,
     breakdown: [
       { name: 'SLA 위반', value: Number(_sv(`${seed}-br-b1`, 5, 25).toFixed(1)), color: '#dc2626' },
@@ -1061,7 +1228,7 @@ export async function fetchCentralDashboardBundle(
       { name: '기타', value: Math.round(_sv(`${seed}-br-c5`, 3, 15)) },
     ],
     causeType: 'bar',
-    trend: makeTrend('br', 38, 8),
+    trend: brTrend.points,
     worstRegions: brSorted.worst,
     bestRegions: brSorted.best,
   };
@@ -1069,8 +1236,20 @@ export async function fetchCentralDashboardBundle(
   /* ── dataReadiness ── */
   const drRegions = makeRegions('dr', 78, 99);
   const drSorted = sorted(drRegions, true);
+  const drTrend = makeTrend('dr', {
+    base: 90.8,
+    spread: 4.6,
+    min: 78,
+    max: 99,
+    volatility: 0.26,
+    trendBias: 0.1,
+    shockDirection: 'down',
+  });
+  const drNationalValue = Number(
+    _clamp(drTrend.values[drTrend.values.length - 1] + _sv(`${seed}-dr-nat-j`, -0.9, 0.9), 80, 98).toFixed(1)
+  );
   const dataReadiness: KpiBundle = {
-    national: { value: Number(_sv(`${seed}-dr-nat`, 85, 96).toFixed(1)), deltaPP: Number(_sv(`${seed}-dr-d`, -3, 4).toFixed(1)), target: 95 },
+    national: { value: drNationalValue, deltaPP: _seriesDelta(drTrend.values, 4.5), target: 95 },
     regions: drRegions,
     breakdown: [
       { name: '기준 충족', value: Math.round(_sv(`${seed}-dr-b1`, 7000, 15000)), color: '#059669' },
@@ -1085,7 +1264,7 @@ export async function fetchCentralDashboardBundle(
       { name: '과거력 결측', value: Math.round(_sv(`${seed}-dr-c4`, 20, 120)) },
     ],
     causeType: 'donut',
-    trend: makeTrend('dr', 90, 4),
+    trend: drTrend.points,
     worstRegions: drSorted.worst,
     bestRegions: drSorted.best,
   };
@@ -1093,8 +1272,20 @@ export async function fetchCentralDashboardBundle(
   /* ── governanceSafety ── */
   const gsRegions = makeRegions('gs', 85, 99);
   const gsSorted = sorted(gsRegions, true);
+  const gsTrend = makeTrend('gs', {
+    base: 95.1,
+    spread: 2.6,
+    min: 88,
+    max: 99,
+    volatility: 0.2,
+    trendBias: 0.06,
+    shockDirection: 'down',
+  });
+  const gsNationalValue = Number(
+    _clamp(gsTrend.values[gsTrend.values.length - 1] + _sv(`${seed}-gs-nat-j`, -0.5, 0.5), 88, 99).toFixed(1)
+  );
   const governanceSafety: KpiBundle = {
-    national: { value: Number(_sv(`${seed}-gs-nat`, 90, 98).toFixed(1)), deltaPP: Number(_sv(`${seed}-gs-d`, -2, 3).toFixed(1)), target: 98 },
+    national: { value: gsNationalValue, deltaPP: _seriesDelta(gsTrend.values, 3), target: 98 },
     regions: gsRegions,
     breakdown: [
       { name: '근거 미첨부', value: Math.round(_sv(`${seed}-gs-b1`, 30, 150)), color: '#d97706' },
@@ -1111,7 +1302,7 @@ export async function fetchCentralDashboardBundle(
       { name: '충남', value: Math.round(_sv(`${seed}-gs-c5`, 2, 12)) },
     ],
     causeType: 'lineRank',
-    trend: makeTrend('gs', 95, 2),
+    trend: gsTrend.points,
     worstRegions: gsSorted.worst,
     bestRegions: gsSorted.best,
   };

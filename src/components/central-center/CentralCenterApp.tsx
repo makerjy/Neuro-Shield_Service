@@ -6,6 +6,7 @@ import ModelApplyDashboard from './ModelApplyDashboard';
 import { ModelGovernance } from './ModelGovernance';
 import { QualityMonitoring } from './QualityMonitoring';
 import { ComplianceAudit } from './ComplianceAudit';
+import { CentralSettings } from './CentralSettings';
 import { DEFAULT_TAB_CONTEXT, mergeContext, type TabContext } from '../../lib/useTabContext';
 
 interface CentralCenterAppProps {
@@ -46,14 +47,7 @@ export function CentralCenterApp({
       case 'compliance-audit':
         return <ComplianceAudit context={tabContext} onNavigate={handleNavigate} />;
       case 'settings':
-        return (
-          <div className="space-y-6">
-            <h1 className="text-2xl font-bold text-gray-900">설정</h1>
-            <div className="bg-white rounded-lg border border-gray-200 p-6">
-              <p className="text-gray-600">설정 화면 준비 중입니다.</p>
-            </div>
-          </div>
-        );
+        return <CentralSettings userRole={userRole} />;
       default:
         return <NationalDashboard onNavigate={handleNavigate} />;
     }

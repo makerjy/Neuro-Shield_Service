@@ -277,5 +277,22 @@ export type Stage2CaseDetailData = Stage2CaseDetail & {
   linkageStatuses: LinkageStatus[];
   followUpPlan: FollowUpPlan;
   auditEvents: Stage2AuditEvent[];
+  stage2Diagnosis?: Stage2Diagnosis;
   readOnly?: boolean;
+};
+
+export type Stage2Diagnosis = {
+  status: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
+  tests: {
+    specialist?: boolean;
+    mmse?: number;
+    cdr?: number;
+    neuroCognitiveType?: "CERAD-K" | "SNSB-II" | "SNSB-C" | "LICA";
+  };
+  classification?: {
+    label: "정상" | "MCI" | "치매";
+    probs?: { NORMAL: number; MCI: number; AD: number };
+    mciStage?: "양호" | "적정" | "위험";
+  };
+  nextStep?: "FOLLOWUP_2Y" | "STAGE3" | "DIFF_PATH";
 };

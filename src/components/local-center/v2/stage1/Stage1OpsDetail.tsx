@@ -30,7 +30,6 @@ import {
   CartesianGrid,
   Line,
   LineChart,
-  ReferenceArea,
   ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
@@ -47,6 +46,7 @@ import {
 } from "../../../ui/dialog";
 import { SmsPanel } from "../../sms/SmsPanel";
 import { CaseDetailPrograms } from "../../programs/CaseDetailPrograms";
+import { Stage2ClassificationViz } from "../../stage2/Stage2ClassificationViz";
 import type { SmsTemplate as StdSmsTemplate, SmsTemplateVars, CallScriptStep as StdCallScriptStep } from "../../sms/SmsPanel";
 import type { SmsHistoryItem } from "../../sms/smsService";
 import {
@@ -81,6 +81,7 @@ import type {
   OutcomeSavePayload,
   OutcomeType,
   OutcomeCode,
+  ResponseReasonTag,
   PolicyGate,
   PolicyGateKey,
   PreTriageInput,
@@ -98,6 +99,7 @@ import type {
   Stage3RecommendedAction,
   Stage3ReevalStatus,
   Stage3RiskSummary,
+  Stage3RiskTrendPoint,
   Stage3DiffPathStatus,
   Stage3ProgramItem,
   Stage3ProgramExecutionField,
@@ -108,6 +110,7 @@ import {
   derivePreTriageResultByRule,
   hasVulnerableTrigger,
 } from "./stage1ContactEngine";
+import type { Stage2Diagnosis } from "../../../stage2/stage2Types";
 
 type TimelineFilter = "ALL" | "CALL" | "SMS" | "STATUS";
 type CallTarget = "citizen" | "guardian";
@@ -122,6 +125,7 @@ type ChannelType = "CALL" | "SMS" | "GUARDIAN";
 type ChannelState = "OK" | "NEEDS_CHECK" | "RESTRICTED";
 type AgentJobTrigger = "AUTO_ON_ENTER" | "AUTO_ON_STRATEGY" | "AUTO_ON_RETRY_DUE" | "MANUAL_RETRY_NOW" | "MANUAL_RETRY_SCHEDULE";
 type StageOpsMode = "stage1" | "stage2" | "stage3";
+type SurfaceStage = "Stage 1" | "Stage 2" | "Stage 3";
 
 type AgentJobState = {
   status: AgentJobStatus;
@@ -162,6 +166,19 @@ export type Stage1HeaderSummary = {
   warningCount: number;
   lastUpdatedAt?: string;
   nextActionLabel?: string;
+  stage2Meta?: {
+    diagnosisStatus: Stage2Diagnosis["status"];
+    completionPct: number;
+    requiredDataPct: number;
+    completedCount: number;
+    classificationLabel: "정상" | "MCI" | "치매";
+    mciStage?: "양호" | "적정" | "위험";
+    stage3EntryNeeded: boolean;
+    enteredAt?: string;
+    targetAt?: string;
+    delayDays: number;
+    nextActionLabel: string;
+  };
   stage3Meta?: {
     opsStatus: Stage3OpsStatus;
     risk2yNowPct: number;
@@ -172,6 +189,7 @@ export type Stage1HeaderSummary = {
     nextReevalAt?: string;
     nextTrackingContactAt?: string;
     nextProgramAt?: string;
+    diffPathStatus?: Stage3DiffPathStatus;
     planStatus: Stage3PlanStatus;
     trackingCycleDays: number;
     churnRisk: Stage3ChurnRisk;
@@ -227,6 +245,8 @@ type RejectReasonDraft = {
 
 type NoResponsePlanDraft = {
   strategy: RecontactStrategy | null;
+  channel: "CALL" | "SMS";
+  assigneeId: string;
   nextContactAt: string;
   applyL3: boolean;
 };
@@ -249,22 +269,54 @@ type FollowUpDecisionDraft = {
 
 type Stage3ReviewDraft = {
   diffNeeded: boolean;
+  diffDecisionSet: boolean;
   priority: "HIGH" | "MID" | "LOW";
   caregiverNeeded: boolean;
   sensitiveHistory: boolean;
   resultLinkedChecked: boolean;
+  consentConfirmed: boolean;
   strategyMemo: string;
 };
 
 type Stage3DiffDraft = {
   orgName: string;
   orgPhone: string;
+  preferredHospital: string;
+  preferredTimeWindow: string;
+  caregiverCompanion: boolean;
+  mobilityIssue: boolean;
+  testBiomarker: boolean;
+  testBrainImaging: boolean;
+  testOther: boolean;
+  bookingAt: string;
+  bookingAltAt: string;
+  bookingConfirmed: boolean;
+  prepGuide: string;
   note: string;
   resultSummary: string;
   resultLabel: "양성 신호" | "음성 신호" | "불확실";
   riskReady: boolean;
   abeta?: string;
   tau?: string;
+};
+
+type Stage3Step2FlowState = {
+  consultStarted: boolean;
+  infoCollected: boolean;
+  ragGenerated: boolean;
+  bookingConfirmed: boolean;
+  messageSent: boolean;
+  calendarSynced: boolean;
+};
+
+type Stage3RagAutoFill = {
+  generatedAt: string;
+  confidenceLabel: "높음" | "보통" | "낮음";
+  reasonSnippets: string[];
+  patch: Partial<Stage3DiffDraft>;
+  changedFields: string[];
+  applied: boolean;
+  ignored: boolean;
 };
 
 type Stage3RiskReviewDraft = {
@@ -287,6 +339,48 @@ type Stage3RiskReviewSnapshot = {
   nextAction: Stage3RiskReviewDraft["nextAction"];
 };
 
+type Stage1Stats = {
+  priorityScore?: number;
+  priorityBand?: "관찰" | "일반" | "우선" | "긴급";
+  interventionLevel?: "L0" | "L1" | "L2" | "L3";
+  percentileTop?: number;
+  updatedAt?: string;
+};
+
+type Stage2Stats = {
+  resultLabel?: "정상" | "MCI" | "치매";
+  mciSeverity?: "양호" | "적정" | "위험";
+  probs?: { AD?: number; MCI?: number; NORMAL?: number };
+  tests?: { neuropsych?: "DONE" | "MISSING"; clinical?: "DONE" | "MISSING"; specialist?: "DONE" | "MISSING" };
+  testAt?: string;
+  org?: string;
+};
+
+type Stage3Stats = {
+  risk2yNow?: number;
+  risk2yLabel?: "LOW" | "MID" | "HIGH";
+  confidence?: "LOW" | "MID" | "HIGH";
+  status?: "RESULT_PENDING" | "RESULT_APPLIED";
+  nextReevalAt?: string;
+  nextContactAt?: string;
+  riskAt2y?: number;
+};
+
+type CaseOpsStats = {
+  stage1: Stage1Stats;
+  stage2: Stage2Stats;
+  stage3: Stage3Stats;
+  opsCounts?: {
+    contactAttempts30d?: number;
+    contactSuccess30d?: number;
+    contactFail30d?: number;
+    bookings?: number;
+    programsPlanned?: number;
+    programsDone?: number;
+  };
+  dataQuality?: { score: number; missingCount: number };
+};
+
 type SmsTemplate = {
   id: string;
   messageType: "CONTACT" | "BOOKING" | "REMINDER";
@@ -307,11 +401,13 @@ const DEFAULT_CENTER_PHONE = "02-555-0199";
 /** 시민화면 링크 (배포 환경 자동 감지) */
 function getCitizenUrl(): string {
   if (typeof window !== "undefined") {
-    const base = window.location.origin;
+    const configuredBase = (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined)?.trim();
+    const base = configuredBase && configuredBase.length > 0 ? configuredBase.replace(/\/$/, "") : window.location.origin;
     const basePath = import.meta.env.VITE_BASE_PATH || "/neuro-shield/";
-    return `${base}${basePath.replace(/\/$/, "")}/#citizen`;
+    const rootedBase = configuredBase && configuredBase.length > 0 ? base : `${base}${basePath.replace(/\/$/, "")}`;
+    return `${rootedBase}/p/sms?t=preview`;
   }
-  return "http://146.56.162.226/neuro-shield/#citizen";
+  return "http://146.56.162.226/neuro-shield/p/sms?t=preview";
 }
 const DEFAULT_GUIDE_LINK = getCitizenUrl();
 const DEFAULT_BOOKING_URL = "(센터 예약 안내)";
@@ -370,42 +466,42 @@ const STAGE2_SMS_TEMPLATES: SmsTemplate[] = [
   {
     id: "S2_CONTACT_BASE",
     messageType: "CONTACT",
-    label: "2차 접촉(정밀평가 안내)",
+    label: "2차 진단검사 예약 안내",
     body: ({ centerName, guideLink, centerPhone }) =>
-      `[치매안심센터:${centerName}] 1차 확인 결과에 따라 2차 정밀평가(인지검사/임상평가) 안내드립니다. 이는 최종 확인 전 추가 확인 절차입니다. 예약/안내 확인: ${guideLink} / 문의: ${centerPhone}`,
+      `[치매안심센터:${centerName}] 2차 진단검사(인지검사/임상평가) 예약 안내입니다. 아래 링크에서 일정 확인 후 예약을 진행해 주세요. ${guideLink} / 문의: ${centerPhone}`,
   },
   {
     id: "S2_CONTACT_RELIEF",
     messageType: "CONTACT",
-    label: "2차 접촉(불안 완화형)",
-    body: ({ centerName, guideLink }) =>
-      `[치매안심센터:${centerName}] 추가 확인을 위한 2차 평가 안내입니다. 결과는 의료진 평가를 통해 최종 확인됩니다. 예약/상담 요청: ${guideLink}`,
+    label: "2차 검사 진행 안내",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 2차 확인 절차 안내입니다. 결과는 담당자 및 의료진 확인 후 안내됩니다. 일정 확인: ${guideLink} / 문의: ${centerPhone}`,
   },
   {
     id: "S2_BOOKING_NEURO",
     messageType: "BOOKING",
-    label: "2차 예약안내(신경심리검사)",
+    label: "2차 검사 준비사항 안내",
     body: ({ centerName, reservationLink }) =>
-      `[치매안심센터:${centerName}] 2차 1단계 인지검사(신경심리검사) 예약 안내드립니다. 가능한 일정 선택: ${reservationLink}`,
+      `[치매안심센터:${centerName}] 2차 검사를 원활히 진행할 수 있도록 준비사항을 안내드립니다. 준비/일정 확인: ${reservationLink}`,
   },
   {
     id: "S2_BOOKING_CLINICAL",
     messageType: "BOOKING",
-    label: "2차 예약안내(임상평가/의료연계)",
-    body: ({ centerName, reservationLink }) =>
-      `[치매안심센터:${centerName}] 2차 2단계 임상평가(전문의 상담/의료 연계) 안내드립니다. 일정 선택 또는 상담 요청: ${reservationLink}`,
+    label: "2차 임상평가 일정 안내",
+    body: ({ centerName, reservationLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 2차 임상평가(전문의 상담 포함) 일정 안내입니다. 예약/변경: ${reservationLink} / 문의: ${centerPhone}`,
   },
   {
     id: "S2_REMINDER_BOOKING",
     messageType: "REMINDER",
-    label: "2차 리마인더(미예약)",
-    body: ({ centerName, reservationLink }) =>
-      `[치매안심센터:${centerName}] 2차 평가 예약이 아직 완료되지 않았습니다. 추가 확인 절차 진행을 위해 일정 선택 부탁드립니다. ${reservationLink}`,
+    label: "2차 결과 확인/추적 안내",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 검사 결과 확인 및 추적 안내입니다. 운영 참고용 안내이며 최종 조치는 담당자 확인 후 진행됩니다. ${guideLink} / 문의: ${centerPhone}`,
   },
   {
     id: "S2_REMINDER_NOSHOW",
     messageType: "REMINDER",
-    label: "2차 리마인더(노쇼 재예약)",
+    label: "2차 노쇼 재예약 안내",
     body: ({ centerName, reservationLink }) =>
       `[치매안심센터:${centerName}] 예약 일정에 참석이 어려우셨다면 재예약이 가능합니다. 편한 시간으로 다시 선택해주세요. ${reservationLink}`,
   },
@@ -415,16 +511,30 @@ const STAGE3_SMS_TEMPLATES: SmsTemplate[] = [
   {
     id: "S3_CONTACT_BASE",
     messageType: "CONTACT",
-    label: "3차 확인 연락(재평가 안내)",
+    label: "3차 추적관리 기본 안내",
     body: ({ centerName, centerPhone }) =>
       `[치매안심센터:${centerName}] 추적 관리 일정 확인 안내입니다. 재평가/연계 일정 조율을 위해 연락드립니다. 문의: ${centerPhone}`,
   },
   {
     id: "S3_BOOKING_REEVAL",
     messageType: "BOOKING",
-    label: "3차 재평가 예약안내",
+    label: "3차 감별검사/뇌영상 예약 안내",
     body: ({ centerName, reservationLink, centerPhone }) =>
-      `[치매안심센터:${centerName}] 운영 기준에 따라 재평가 일정 안내드립니다. 일정 확인: ${reservationLink} / 문의: ${centerPhone}`,
+      `[치매안심센터:${centerName}] 감별검사/뇌영상 일정 안내입니다. 예약 일정 확인: ${reservationLink} / 문의: ${centerPhone}`,
+  },
+  {
+    id: "S3_BOOKING_CONFIRM",
+    messageType: "BOOKING",
+    label: "3차 예약 확인/변경 안내",
+    body: ({ centerName, reservationLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 예약 일정 확인 및 변경 안내입니다. 예약 확인/변경: ${reservationLink} / 문의: ${centerPhone}`,
+  },
+  {
+    id: "S3_PROGRAM_GUIDE",
+    messageType: "CONTACT",
+    label: "3차 정밀관리(프로그램/연계) 안내",
+    body: ({ centerName, guideLink, centerPhone }) =>
+      `[치매안심센터:${centerName}] 정밀관리 프로그램/연계 안내입니다. 운영 참고 기준에 따라 담당자가 후속 일정을 안내드립니다. ${guideLink} / 문의: ${centerPhone}`,
   },
   {
     id: "S3_REMINDER_TRACK",
@@ -741,7 +851,11 @@ function buildStage3HeaderMeta(caseRecord?: CaseRecord): Stage3HeaderMeta {
   };
 }
 
-function buildStage3RecommendedActions(caseRecord: CaseRecord | undefined, meta: Stage3HeaderMeta): Stage3RecommendedAction[] {
+function buildStage3RecommendedActions(
+  caseRecord: CaseRecord | undefined,
+  meta: Stage3HeaderMeta,
+  stage2OpsView = false,
+): Stage3RecommendedAction[] {
   const actions: Stage3RecommendedAction[] = [];
   const hasReevalSignal = caseRecord?.alertTags.includes("재평가 필요") ?? true;
   const hasChurnSignal = caseRecord?.alertTags.includes("이탈 위험") ?? false;
@@ -752,8 +866,10 @@ function buildStage3RecommendedActions(caseRecord: CaseRecord | undefined, meta:
     actions.push({
       id: "s3-action-reeval",
       type: "SCHEDULE_REEVAL",
-      title: "재평가 예약 생성",
-      reason: "재평가 필요 신호가 충족되어 일정 확정이 필요합니다.",
+      title: stage2OpsView ? "신경심리/임상평가 예약 생성" : "재평가 예약 생성",
+      reason: stage2OpsView
+        ? "진단검사 경로에서 일정 확정이 필요합니다."
+        : "재평가 필요 신호가 충족되어 일정 확정이 필요합니다.",
       severity: meta.opsStatus === "REEVAL_DUE" ? "HIGH" : "MID",
       requiresApproval: true,
       decision: "PENDING",
@@ -764,8 +880,10 @@ function buildStage3RecommendedActions(caseRecord: CaseRecord | undefined, meta:
     actions.push({
       id: "s3-action-reminder",
       type: "SEND_REMINDER",
-      title: "확인 연락/리마인더 발송",
-      reason: "미응답/이탈 위험 신호가 있어 확인 연락이 필요합니다.",
+      title: stage2OpsView ? "예약 안내/결과 요청 연락" : "확인 연락/리마인더 발송",
+      reason: stage2OpsView
+        ? "미응답/지연 신호가 있어 예약 안내 또는 결과 요청 연락이 필요합니다."
+        : "미응답/이탈 위험 신호가 있어 확인 연락이 필요합니다.",
       severity: "HIGH",
       requiresApproval: false,
       decision: "PENDING",
@@ -776,8 +894,10 @@ function buildStage3RecommendedActions(caseRecord: CaseRecord | undefined, meta:
     actions.push({
       id: "s3-action-plan",
       type: "UPDATE_PLAN",
-      title: "케어 플랜 업데이트",
-      reason: "최근 추적 결과 반영을 위해 플랜 업데이트가 필요합니다.",
+      title: stage2OpsView ? "진단 플랜 업데이트" : "케어 플랜 업데이트",
+      reason: stage2OpsView
+        ? "최근 예약/결과 반영을 위해 진단 플랜 업데이트가 필요합니다."
+        : "최근 추적 결과 반영을 위해 플랜 업데이트가 필요합니다.",
       severity: "MID",
       requiresApproval: true,
       decision: "PENDING",
@@ -788,8 +908,8 @@ function buildStage3RecommendedActions(caseRecord: CaseRecord | undefined, meta:
     actions.push({
       id: "s3-action-escalate",
       type: "ESCALATE_LEVEL",
-      title: "연계 실행/강도 상향 검토",
-      reason: "연계 대기 상태로 담당자 승인 후 실행이 필요합니다.",
+      title: stage2OpsView ? "의뢰 경로 실행/기관 재요청" : "연계 실행/강도 상향 검토",
+      reason: stage2OpsView ? "진단검사 연계 대기 상태로 기관 재요청이 필요합니다." : "연계 대기 상태로 담당자 승인 후 실행이 필요합니다.",
       severity: hasLinkageWait ? "MID" : "LOW",
       requiresApproval: true,
       decision: "PENDING",
@@ -801,7 +921,7 @@ function buildStage3RecommendedActions(caseRecord: CaseRecord | undefined, meta:
       id: "s3-action-quality",
       type: "SEND_REMINDER",
       title: "누락 보완 요청",
-      reason: "데이터 품질 저하로 추적 판단이 확실하지 않습니다.",
+      reason: stage2OpsView ? "데이터 품질 저하로 진단 진행 판단이 확실하지 않습니다." : "데이터 품질 저하로 추적 판단이 확실하지 않습니다.",
       severity: "HIGH",
       requiresApproval: false,
       decision: "PENDING",
@@ -817,6 +937,243 @@ function clamp01(v: number) {
 
 function toPercentValue(probability01: number) {
   return Math.round(clamp01(probability01) * 100);
+}
+
+function deriveStage3RiskLabel(probability01: number): Stage3RiskSummary["risk2y_label"] {
+  const risk = clamp01(probability01);
+  if (risk >= 0.7) return "HIGH";
+  if (risk >= 0.45) return "MID";
+  return "LOW";
+}
+
+function priorityBandFromScore(score: number): Stage1Stats["priorityBand"] {
+  if (score >= 85) return "긴급";
+  if (score >= 65) return "우선";
+  if (score >= 45) return "일반";
+  return "관찰";
+}
+
+function toPercentUnknown(value?: number): number | undefined {
+  if (value == null || Number.isNaN(value)) return undefined;
+  const raw = value <= 1 ? value * 100 : value;
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
+function deriveStage3Confidence(detail: Stage1Detail): Stage3Stats["confidence"] {
+  const quality = detail.header.dataQuality.score;
+  if (quality >= 90) return "HIGH";
+  if (quality >= 70) return "MID";
+  return "LOW";
+}
+
+function projectStage3RiskAt2y(risk?: Stage3RiskSummary): number | undefined {
+  if (!risk) return undefined;
+  const now = clamp01(risk.risk2y_now);
+  const delta =
+    risk.trend === "UP" ? 0.14 : risk.trend === "DOWN" ? -0.1 : risk.trend === "VOLATILE" ? 0.08 : 0.02;
+  return clamp01(now + delta);
+}
+
+function buildStage2MockProbs(
+  resultLabel?: Stage2Stats["resultLabel"],
+  severity?: Stage2Stats["mciSeverity"],
+): Stage2Stats["probs"] | undefined {
+  if (!resultLabel) return undefined;
+  if (resultLabel === "MCI") {
+    if (severity === "위험") return { MCI: 0.68, AD: 0.25, NORMAL: 0.07 };
+    return { MCI: 0.72, AD: 0.18, NORMAL: 0.1 };
+  }
+  if (resultLabel === "치매") return { AD: 0.74, MCI: 0.22, NORMAL: 0.04 };
+  return { NORMAL: 0.78, MCI: 0.16, AD: 0.06 };
+}
+
+type Stage2ClassLabel = NonNullable<Stage2Diagnosis["classification"]>["label"];
+type Stage2MciStageLabel = NonNullable<Stage2Diagnosis["classification"]>["mciStage"];
+
+function inferStage2MciStage(caseRecord?: CaseRecord): Stage2MciStageLabel {
+  if (caseRecord?.risk === "고") return "위험";
+  if (caseRecord?.risk === "중") return "적정";
+  return "양호";
+}
+
+function stage2MciStageDisplayLabel(stage?: Stage2MciStageLabel): "양호" | "중등" | "위험" | "-" {
+  if (!stage) return "-";
+  if (stage === "적정") return "중등";
+  return stage;
+}
+
+function stage2DiagnosisStatusLabel(status?: Stage2Diagnosis["status"]): string {
+  if (!status) return "-";
+  if (status === "NOT_STARTED") return "대기";
+  if (status === "IN_PROGRESS") return "진행중";
+  return "완료";
+}
+
+function inferStage2Label(caseRecord?: CaseRecord): Stage2ClassLabel {
+  if (caseRecord?.risk === "고") return "치매";
+  if (caseRecord?.risk === "중") return "MCI";
+  return "정상";
+}
+
+function stage2NeedsStage3(label: Stage2ClassLabel): boolean {
+  return label === "MCI" || label === "치매";
+}
+
+function inferStage2NextStep(label: Stage2ClassLabel): Stage2Diagnosis["nextStep"] {
+  if (label === "정상") return "FOLLOWUP_2Y";
+  if (label === "MCI") return "STAGE3";
+  return "DIFF_PATH";
+}
+
+function inferStage2Probs(label: Stage2ClassLabel, mciStage?: Stage2MciStageLabel): NonNullable<Stage2Diagnosis["classification"]>["probs"] {
+  if (label === "치매") return { NORMAL: 0.08, MCI: 0.2, AD: 0.72 };
+  if (label === "MCI") {
+    if (mciStage === "위험") return { NORMAL: 0.08, MCI: 0.66, AD: 0.26 };
+    if (mciStage === "양호") return { NORMAL: 0.32, MCI: 0.56, AD: 0.12 };
+    return { NORMAL: 0.1, MCI: 0.72, AD: 0.18 };
+  }
+  return { NORMAL: 0.78, MCI: 0.17, AD: 0.05 };
+}
+
+function countStage2CompletedTests(tests: Stage2Diagnosis["tests"]): number {
+  return (
+    Number(Boolean(tests.specialist)) +
+    Number(typeof tests.mmse === "number") +
+    Number(typeof tests.cdr === "number") +
+    Number(Boolean(tests.neuroCognitiveType))
+  );
+}
+
+function stage2StatusFromTests(tests: Stage2Diagnosis["tests"], hasClassification: boolean): Stage2Diagnosis["status"] {
+  const completed = countStage2CompletedTests(tests);
+  if (hasClassification || completed >= 4) return "COMPLETED";
+  if (completed > 0) return "IN_PROGRESS";
+  return "NOT_STARTED";
+}
+
+function buildInitialStage2Diagnosis(caseRecord?: CaseRecord): Stage2Diagnosis {
+  const label = inferStage2Label(caseRecord);
+  const mciStage = label === "MCI" ? inferStage2MciStage(caseRecord) : undefined;
+  const hasStarted = caseRecord?.status === "진행중" || caseRecord?.status === "임박" || caseRecord?.status === "지연";
+  const tests: Stage2Diagnosis["tests"] = {
+    specialist: hasStarted ? caseRecord?.risk !== "저" : false,
+    mmse: undefined,
+    cdr: undefined,
+    neuroCognitiveType: undefined,
+  };
+
+  return {
+    status: stage2StatusFromTests(tests, false),
+    tests,
+    classification: hasStarted
+      ? {
+          label,
+          probs: inferStage2Probs(label, mciStage),
+          mciStage,
+        }
+      : undefined,
+    nextStep: undefined,
+  };
+}
+
+function buildCaseOpsStats({
+  detail,
+  modelPriorityValue,
+  stage2ResultLabel,
+  stage2MciSeverity,
+  stage2TestAt,
+  stage2Org,
+}: {
+  detail: Stage1Detail;
+  modelPriorityValue: number;
+  stage2ResultLabel?: Stage2Stats["resultLabel"];
+  stage2MciSeverity?: Stage2Stats["mciSeverity"];
+  stage2TestAt?: string;
+  stage2Org?: string;
+}): CaseOpsStats {
+  const priorityScore = Math.max(0, Math.min(100, modelPriorityValue));
+  const percentileTop = Math.max(1, 100 - priorityScore);
+  const latestRisk = detail.stage3?.transitionRisk;
+  const risk2yNow = latestRisk?.risk2y_now;
+  const riskAt2y = projectStage3RiskAt2y(latestRisk);
+  const stage2MockProbs = buildStage2MockProbs(stage2ResultLabel, stage2MciSeverity);
+
+  const nowMs = Date.now();
+  const range30dMs = 30 * 24 * 60 * 60 * 1000;
+  const in30Days = (at: string) => {
+    const ms = new Date(at).getTime();
+    if (Number.isNaN(ms)) return false;
+    return nowMs - ms <= range30dMs;
+  };
+
+  const recentTimeline = detail.timeline.filter((event) => in30Days(event.at));
+  const contactAttempts30d = recentTimeline.filter((event) => event.type === "CALL_ATTEMPT").length;
+  const contactSuccess30d = recentTimeline.filter(
+    (event) => event.type === "CALL_ATTEMPT" && event.result === "SUCCESS",
+  ).length;
+  const contactFail30d = recentTimeline.filter(
+    (event) =>
+      (event.type === "CALL_ATTEMPT" && event.result !== "SUCCESS") ||
+      (event.type === "SMS_SENT" && event.status === "FAILED"),
+  ).length;
+  const bookings = recentTimeline.filter(
+    (event) =>
+      event.type === "REEVAL_SCHEDULED" ||
+      event.type === "REEVAL_RESCHEDULED" ||
+      event.type === "DIFF_SCHEDULED",
+  ).length;
+  const programsPlanned =
+    detail.stage3?.programs.filter(
+      (program) => program.selected && (program.execution?.status === "PLANNED" || program.execution?.status === "IN_PROGRESS"),
+    ).length ?? 0;
+  const programsDone =
+    detail.stage3?.programs.filter((program) => program.selected && program.execution?.status === "DONE").length ?? 0;
+
+  return {
+    stage1: {
+      priorityScore,
+      priorityBand: priorityBandFromScore(priorityScore),
+      interventionLevel: detail.interventionLevel,
+      percentileTop,
+      updatedAt: detail.scoreSummary[0]?.updatedAt ?? detail.timeline[0]?.at,
+    },
+    stage2: {
+      resultLabel: stage2ResultLabel,
+      mciSeverity: stage2MciSeverity,
+      probs: stage2MockProbs,
+      tests: {
+        neuropsych: detail.stage3 ? "DONE" : "MISSING",
+        clinical: detail.stage3 ? "DONE" : "MISSING",
+        specialist: detail.stage3 ? "DONE" : "MISSING",
+      },
+      testAt: stage2TestAt,
+      org: stage2Org,
+    },
+    stage3: {
+      risk2yNow,
+      risk2yLabel: risk2yNow == null ? undefined : deriveStage3RiskLabel(risk2yNow),
+      confidence: deriveStage3Confidence(detail),
+      status:
+        detail.stage3?.diffPathStatus === "COMPLETED" || Boolean(detail.stage3?.riskReviewedAt)
+          ? "RESULT_APPLIED"
+          : "RESULT_PENDING",
+      nextReevalAt: detail.stage3?.headerMeta.nextReevalAt,
+      nextContactAt: detail.stage3?.headerMeta.nextTrackingContactAt,
+      riskAt2y,
+    },
+    opsCounts: {
+      contactAttempts30d,
+      contactSuccess30d,
+      contactFail30d,
+      bookings,
+      programsPlanned,
+      programsDone,
+    },
+    dataQuality: {
+      score: detail.header.dataQuality.score,
+      missingCount: detail.header.dataQuality.notes?.length ?? 0,
+    },
+  };
 }
 
 function buildStage3TransitionRisk(caseRecord?: CaseRecord): Stage3RiskSummary {
@@ -999,8 +1356,8 @@ function buildPolicyGates(caseRecord?: CaseRecord): PolicyGate[] {
   ];
 }
 
-function buildRiskEvidence(caseRecord?: CaseRecord, mode: StageOpsMode = "stage1") {
-  if (mode === "stage3") {
+function buildRiskEvidence(caseRecord?: CaseRecord, mode: StageOpsMode = "stage1", stage2OpsView = false) {
+  if (mode === "stage3" && !stage2OpsView) {
     return {
       topFactors: [
         {
@@ -1022,6 +1379,31 @@ function buildRiskEvidence(caseRecord?: CaseRecord, mode: StageOpsMode = "stage1
       ],
       computedAt: nowIso(),
       version: "stage3-risk-v1.2",
+    };
+  }
+
+  if (mode === "stage3" && stage2OpsView) {
+    return {
+      topFactors: [
+        {
+          title: "예약 필요 신호",
+          description: "SLA 임박 또는 미예약 항목이 감지되어 일정 확정이 필요합니다.",
+          recency: withHoursFromNow(-14),
+        },
+        {
+          title: "미응답 누적",
+          description: "연락 실패 누적으로 재접촉/리마인더 실행이 필요합니다.",
+          recency: withHoursFromNow(-20),
+          isMissing: caseRecord?.quality !== "양호",
+        },
+        {
+          title: "결과 수신 지연",
+          description: "기관 회신 지연으로 결과 수신 재요청이 필요합니다.",
+          recency: withHoursFromNow(-32),
+        },
+      ],
+      computedAt: nowIso(),
+      version: "stage2-ops-v3.1",
     };
   }
 
@@ -1100,7 +1482,9 @@ function buildScoreSummary(
     recommendedActions: Stage3RecommendedAction[];
     planProgressPct: number;
     reevalStatus: Stage3ReevalStatus;
-  }
+    diffPathStatus: Stage3DiffPathStatus;
+  },
+  stage2OpsView = false,
 ) {
   if (mode === "stage3" && stage3Meta) {
     const quality = mapDataQuality(caseRecord?.quality);
@@ -1122,13 +1506,62 @@ function buildScoreSummary(
             ? "NOSHOW"
             : "PENDING";
 
+    if (stage2OpsView) {
+      const completedSteps =
+        (stage3Meta.diffPathStatus === "SCHEDULED" || stage3Meta.diffPathStatus === "COMPLETED" ? 2 : 1) +
+        (stage3Meta.reevalStatus === "SCHEDULED" || stage3Meta.reevalStatus === "COMPLETED" ? 1 : 0) +
+        (stage3Meta.planProgressPct >= 80 ? 1 : 0);
+      const progressPct = Math.max(0, Math.min(100, Math.round((completedSteps / 4) * 100)));
+      const delayedDays = caseRecord?.status === "지연" ? 7 : caseRecord?.status === "임박" ? 3 : 0;
+      const referralWaiting = stage3Meta.diffPathStatus === "SCHEDULED" || stage3Meta.diffPathStatus === "COMPLETED" ? 0 : 1;
+      const classificationConfirmed = stage3Meta.planProgressPct >= 80;
+
+      return [
+        {
+          label: "진단 진행률",
+          value: progressPct,
+          unit: "%",
+          updatedAt: stage3Meta.transitionRisk.updatedAt,
+          flags: [progressPct >= 100 ? "DONE" : progressPct >= 40 ? "IN_PROGRESS" : "BLOCKED"],
+        },
+        {
+          label: "예약/의뢰 대기",
+          value: referralWaiting,
+          unit: "건",
+          updatedAt: stage3Meta.headerMeta.nextReevalAt ?? nowIso(),
+          flags: [referralWaiting === 0 ? "CONFIRMED" : "WAITING"],
+        },
+        {
+          label: "결과 수신 지연",
+          value: delayedDays,
+          unit: "일",
+          updatedAt: stage3Meta.headerMeta.nextTrackingContactAt ?? nowIso(),
+          flags: delayedDays > 0 ? ["DELAYED"] : ["NORMAL"],
+        },
+        {
+          label: "분류 확정 상태",
+          value: classificationConfirmed ? 1 : 0,
+          unit: "단계",
+          updatedAt: nowIso(),
+          flags: [classificationConfirmed ? "CONFIRMED" : "UNCONFIRMED"],
+        },
+        {
+          label: "필수자료 충족도",
+          value: quality.score,
+          unit: "%",
+          updatedAt: nowIso(),
+          flags: quality.level === "GOOD" ? ["OK"] : ["MISSING_IMPACT"],
+        },
+      ];
+    }
+
     return [
       {
         label: "2년 전환 위험도(운영 참고)",
         value: riskPct,
         unit: "%",
         updatedAt: stage3Meta.transitionRisk.updatedAt,
-        flags: [stage3Meta.transitionRisk.risk2y_label, stage3Meta.transitionRisk.trend],
+        flags: [deriveStage3RiskLabel(stage3Meta.transitionRisk.risk2y_now), stage3Meta.transitionRisk.trend],
       },
       {
         label: "재평가 필요도",
@@ -1336,7 +1769,11 @@ function buildInitialTimeline(caseRecord: CaseRecord | undefined, level: Interve
   return events;
 }
 
-function buildInitialStage1Detail(caseRecord?: CaseRecord, mode: StageOpsMode = "stage1"): Stage1Detail {
+function buildInitialStage1Detail(
+  caseRecord?: CaseRecord,
+  mode: StageOpsMode = "stage1",
+  stage2OpsView = false,
+): Stage1Detail {
   const intervention = getStage1InterventionPlan(caseRecord);
   const quality = mapDataQuality(caseRecord?.quality);
   const preTriageInput = buildPreTriageInput(caseRecord);
@@ -1346,7 +1783,8 @@ function buildInitialStage1Detail(caseRecord?: CaseRecord, mode: StageOpsMode = 
   const linkageStatus: LinkageStatus = "NOT_CREATED";
   const stage3HeaderMeta = mode === "stage3" ? buildStage3HeaderMeta(caseRecord) : undefined;
   const stage3TransitionRisk = mode === "stage3" ? buildStage3TransitionRisk(caseRecord) : undefined;
-  const stage3RecommendedActions = mode === "stage3" && stage3HeaderMeta ? buildStage3RecommendedActions(caseRecord, stage3HeaderMeta) : [];
+  const stage3RecommendedActions =
+    mode === "stage3" && stage3HeaderMeta ? buildStage3RecommendedActions(caseRecord, stage3HeaderMeta, stage2OpsView) : [];
   const stage3ProgramCatalog = mode === "stage3" ? buildStage3ProgramCatalog(caseRecord) : [];
   const stage3InitialPrograms = mode === "stage3" ? buildInitialProgramSelections(stage3ProgramCatalog) : [];
   const stage3DiffPathStatus: Stage3DiffPathStatus = stage3RecommendedActions.length > 0 ? "RECOMMENDED" : "NONE";
@@ -1375,7 +1813,11 @@ function buildInitialStage1Detail(caseRecord?: CaseRecord, mode: StageOpsMode = 
     riskGuardrails.push("거부 이력 재확인 필요");
   }
   if (mode === "stage3") {
-    riskGuardrails.push("운영 참고: 전환 위험 신호는 담당자 검토 후 실행");
+    riskGuardrails.push(
+      stage2OpsView
+        ? "운영 참고: 진단 진행/지연 신호는 담당자 검토 후 예약/의뢰/확정에 반영"
+        : "운영 참고: 전환 위험 신호는 담당자 검토 후 실행",
+    );
   }
 
   return {
@@ -1385,7 +1827,9 @@ function buildInitialStage1Detail(caseRecord?: CaseRecord, mode: StageOpsMode = 
       assigneeName: caseRecord?.manager ?? STAGE1_PANEL_OPERATOR,
       statusLabel:
         mode === "stage3" && stage3HeaderMeta
-          ? stage3OpsStatusLabel(stage3HeaderMeta.opsStatus)
+          ? stage2OpsView
+            ? "진행중"
+            : stage3OpsStatusLabel(stage3HeaderMeta.opsStatus)
           : caseRecord?.status === "완료"
             ? "완료"
             : caseRecord?.status === "지연"
@@ -1400,7 +1844,7 @@ function buildInitialStage1Detail(caseRecord?: CaseRecord, mode: StageOpsMode = 
     },
     policyGates: buildPolicyGates(caseRecord),
     interventionLevel: intervention.level,
-    riskEvidence: buildRiskEvidence(caseRecord, mode),
+    riskEvidence: buildRiskEvidence(caseRecord, mode, stage2OpsView),
     scoreSummary: buildScoreSummary(
       caseRecord,
       mode,
@@ -1411,8 +1855,10 @@ function buildInitialStage1Detail(caseRecord?: CaseRecord, mode: StageOpsMode = 
             recommendedActions: stage3RecommendedActions,
             planProgressPct: stage3PlanProgressPct,
             reevalStatus: stage3InitialReevalStatus,
+            diffPathStatus: stage3DiffPathStatus,
           }
-        : undefined
+        : undefined,
+      stage2OpsView,
     ),
     todos: buildTodos(intervention.level, quality.level),
     timeline: buildInitialTimeline(caseRecord, intervention.level, mode),
@@ -1442,7 +1888,12 @@ function buildInitialStage1Detail(caseRecord?: CaseRecord, mode: StageOpsMode = 
   };
 }
 
-function buildInitialAuditLogs(caseRecord: CaseRecord | undefined, detail: Stage1Detail, mode: StageOpsMode = "stage1"): AuditLogEntry[] {
+function buildInitialAuditLogs(
+  caseRecord: CaseRecord | undefined,
+  detail: Stage1Detail,
+  mode: StageOpsMode = "stage1",
+  stage2OpsView = false,
+): AuditLogEntry[] {
   const actor = caseRecord?.manager ?? STAGE1_PANEL_OPERATOR;
   const stagePrefix = mode === "stage2" ? "Stage2" : mode === "stage3" ? "Stage3" : "Stage1";
 
@@ -1459,9 +1910,13 @@ function buildInitialAuditLogs(caseRecord: CaseRecord | undefined, detail: Stage
       actor,
       message:
         mode === "stage3"
-          ? `추적 기준 확정: ${detail.stage3?.headerMeta.trackingCycleDays ?? 21}일 주기 / 플랜 ${stage3PlanStatusLabel(
-              detail.stage3?.headerMeta.planStatus ?? "ACTIVE",
-            )}`
+          ? stage2OpsView
+            ? `진단 기준 확정: 목표 ${detail.stage3?.headerMeta.trackingCycleDays ?? 21}일 / 플랜 ${stage3PlanStatusLabel(
+                detail.stage3?.headerMeta.planStatus ?? "ACTIVE",
+              )}`
+            : `추적 기준 확정: ${detail.stage3?.headerMeta.trackingCycleDays ?? 21}일 주기 / 플랜 ${stage3PlanStatusLabel(
+                detail.stage3?.headerMeta.planStatus ?? "ACTIVE",
+              )}`
           : `${mode === "stage2" ? "분기 기준" : "접촉 방식"} 확정: ${detail.preTriageResult?.strategy === "HUMAN_FIRST" ? "상담사 우선" : "자동안내 우선"}`,
     },
     {
@@ -1634,6 +2089,12 @@ function remainingTimeText(targetIso: string | undefined, nowMs: number) {
 
 function eventToCategory(event: ContactEvent): TimelineFilter {
   if (event.type === "CALL_ATTEMPT") return "CALL";
+  if (event.type === "MESSAGE_SENT") {
+    if (event.summary.includes("STAGE1_RESPONSE_RECORDED") || event.summary.includes("STAGE2_RESPONSE_RECORDED")) {
+      return "STATUS";
+    }
+    return "SMS";
+  }
   if (event.type === "SMS_SENT" || event.type === "AGENT_SMS_SENT") return "SMS";
   return "STATUS";
 }
@@ -1648,6 +2109,12 @@ function eventTitle(event: ContactEvent) {
   if (event.type === "SMS_SENT") {
     return `문자 발송 (${resolveSmsTemplateLabel(event.templateId)})`;
   }
+  if (event.type === "MESSAGE_SENT") {
+    if (event.summary.includes("STAGE1_RESPONSE_RECORDED") || event.summary.includes("STAGE2_RESPONSE_RECORDED")) {
+      return "반응 처리 기록";
+    }
+    return "예약 확인 문자 발송";
+  }
   if (event.type === "LEVEL_CHANGE") {
     return `개입 레벨 변경 ${event.from} → ${event.to}`;
   }
@@ -1660,6 +2127,7 @@ function eventTitle(event: ContactEvent) {
   if (event.type === "CALENDAR_SYNC") {
     return event.status === "SUCCESS" ? "캘린더 일정 등록" : "캘린더 일정 등록 실패";
   }
+  if (event.type === "CAL_EVENT_CREATED") return "캘린더 이벤트 생성";
   if (event.type === "STRATEGY_CHANGE") {
     return `접촉 전략 변경 ${STRATEGY_LABELS[event.from]} → ${STRATEGY_LABELS[event.to]}`;
   }
@@ -1671,10 +2139,10 @@ function eventTitle(event: ContactEvent) {
   if (event.type === "AGENT_JOB_CANCELED") return "Agent 자동 수행 취소";
   if (event.type === "CONTACT_STRATEGY_CHANGED") return "접촉 전략 변경";
   if (event.type === "OPERATOR_OVERRIDE_TO_HUMAN") return "운영자 수동 전환";
-  if (event.type === "REEVAL_SCHEDULED") return "재평가 예약 생성";
-  if (event.type === "REEVAL_RESCHEDULED") return "재평가 일정 변경";
-  if (event.type === "REEVAL_COMPLETED") return "재평가 완료";
-  if (event.type === "REEVAL_NOSHOW") return "재평가 노쇼";
+  if (event.type === "REEVAL_SCHEDULED") return "진단/재평가 일정 생성";
+  if (event.type === "REEVAL_RESCHEDULED") return "진단/재평가 일정 변경";
+  if (event.type === "REEVAL_COMPLETED") return "진단/재평가 완료";
+  if (event.type === "REEVAL_NOSHOW") return "진단/재평가 노쇼";
   if (event.type === "PLAN_CREATED") return "플랜 생성";
   if (event.type === "PLAN_UPDATED") return "플랜 업데이트";
   if (event.type === "PROGRAM_STARTED") return "프로그램 시작";
@@ -1683,18 +2151,22 @@ function eventTitle(event: ContactEvent) {
   if (event.type === "LINKAGE_CREATED") return "연계 생성";
   if (event.type === "LINKAGE_APPROVED") return "연계 승인";
   if (event.type === "LINKAGE_COMPLETED") return "연계 완료";
-  if (event.type === "STAGE3_ACTION_DECISION") return "Stage3 권고 처리";
-  if (event.type === "RISK_SERIES_UPDATED") return "전환 위험 시계열 업데이트";
-  if (event.type === "RISK_REVIEWED") return "전환 위험 리뷰";
-  if (event.type === "DIFF_RECO_CREATED") return "감별경로 권고 생성";
-  if (event.type === "DIFF_REFER_CREATED") return "감별경로 의뢰 생성";
-  if (event.type === "DIFF_SCHEDULED") return "감별경로 예약 생성";
-  if (event.type === "DIFF_COMPLETED") return "감별경로 완료";
-  if (event.type === "DIFF_RESULT_APPLIED") return "감별 결과 입력";
+  if (event.type === "STAGE3_ACTION_DECISION") return "운영 권고 처리";
+  if (event.type === "RISK_SERIES_UPDATED") return "운영 지표 시계열 업데이트";
+  if (event.type === "RISK_REVIEWED") return "운영 지표 검토";
+  if (event.type === "DIFF_RECO_CREATED") return "진단검사 경로 제안 생성";
+  if (event.type === "DIFF_REFER_CREATED") return "진단검사 의뢰 생성";
+  if (event.type === "DIFF_SCHEDULED") return "진단검사 예약 생성";
+  if (event.type === "DIFF_COMPLETED") return "진단검사 경로 완료";
+  if (event.type === "DIFF_RESULT_APPLIED") return "진단검사 결과 입력";
   if (event.type === "PROGRAM_SELECTED") return "프로그램 선택";
   if (event.type === "PROGRAM_EXEC_UPDATED") return "프로그램 실행 업데이트";
   if (event.type === "PROGRAM_EXEC_COMPLETED") return "프로그램 실행 완료";
   if (event.type === "NEXT_TRACKING_SET") return "다음 추적 일정 설정";
+  if (event.type === "STAGE2_PLAN_CONFIRMED") return "Stage2 검사 계획 확정";
+  if (event.type === "STAGE2_RESULTS_RECORDED") return "Stage2 검사 결과 입력 완료";
+  if (event.type === "STAGE2_CLASS_CONFIRMED") return "Stage2 분류 확정";
+  if (event.type === "STAGE2_NEXT_STEP_SET") return "Stage2 다음 단계 결정";
   return `상태 변경 ${event.from} → ${event.to}`;
 }
 
@@ -1705,6 +2177,9 @@ function eventDetail(event: ContactEvent) {
   if (event.type === "SMS_SENT") {
     return `발송 상태: ${event.status}`;
   }
+  if (event.type === "MESSAGE_SENT") {
+    return event.summary;
+  }
   if (event.type === "LEVEL_CHANGE") {
     return event.reason;
   }
@@ -1713,6 +2188,9 @@ function eventDetail(event: ContactEvent) {
   }
   if (event.type === "OUTCOME_RECORDED") {
     const detail: string[] = [];
+    if (event.reasonTags && event.reasonTags.length > 0) {
+      detail.push(`보조사유 ${event.reasonTags.map((tag) => RESPONSE_REASON_TAG_META[tag].label).join(", ")}`);
+    }
     if (event.rejectCode) detail.push(`거부코드 ${event.rejectCode}`);
     if (event.rejectLevel) detail.push(`레벨 ${event.rejectLevel}`);
     if (event.recontactStrategy) detail.push(`재접촉 전략 ${event.recontactStrategy}`);
@@ -1723,6 +2201,9 @@ function eventDetail(event: ContactEvent) {
   if (event.type === "CALENDAR_SYNC") {
     const base = `${event.title} · ${formatDateTime(event.scheduledAt)}`;
     return event.status === "FAILED" ? `${base} · ${event.error ?? "재시도 필요"}` : base;
+  }
+  if (event.type === "CAL_EVENT_CREATED") {
+    return `${formatDateTime(event.scheduledAt)} · ${event.summary}`;
   }
   if (event.type === "AGENT_SMS_SENT") {
     return `${event.summary} · 결과 ${AGENT_CHANNEL_RESULT_LABELS[event.channelResult]}${event.detail ? ` · ${event.detail}` : ""}`;
@@ -1769,7 +2250,11 @@ function eventDetail(event: ContactEvent) {
     event.type === "DIFF_RESULT_APPLIED" ||
     event.type === "PROGRAM_SELECTED" ||
     event.type === "PROGRAM_EXEC_UPDATED" ||
-    event.type === "PROGRAM_EXEC_COMPLETED"
+    event.type === "PROGRAM_EXEC_COMPLETED" ||
+    event.type === "STAGE2_PLAN_CONFIRMED" ||
+    event.type === "STAGE2_RESULTS_RECORDED" ||
+    event.type === "STAGE2_CLASS_CONFIRMED" ||
+    event.type === "STAGE2_NEXT_STEP_SET"
   ) {
     return event.summary;
   }
@@ -1981,6 +2466,38 @@ const OUTCOME_LABELS: Record<OutcomeCode, { label: string; tone: string }> = {
   EMOTIONAL: { label: "감정적 반응", tone: "border-yellow-200 bg-yellow-50 text-yellow-700" },
 };
 
+const RESPONSE_PRIMARY_OUTCOMES: OutcomeCode[] = [
+  "CONTINUE_SELF",
+  "SCHEDULE_LATER",
+  "REQUEST_GUARDIAN",
+  "REQUEST_HUMAN",
+  "NO_RESPONSE",
+  "REFUSE",
+];
+
+const RESPONSE_REASON_TAG_META: Record<ResponseReasonTag, { label: string; hint: string; tone: string }> = {
+  CONFUSION: {
+    label: "이해 어려움",
+    hint: "설명이 반복되거나 맥락 이해가 어려운 반응",
+    tone: "border-amber-200 bg-amber-50 text-amber-700",
+  },
+  EMOTIONAL: {
+    label: "감정적 반응",
+    hint: "불안/항의 등 감정 자극 반응",
+    tone: "border-yellow-200 bg-yellow-50 text-yellow-700",
+  },
+};
+
+const NO_RESPONSE_CHANNEL_STRATEGY: Record<"CALL" | "SMS", RecontactStrategy> = {
+  CALL: "CALL_RETRY",
+  SMS: "SMS_RETRY",
+};
+
+const NO_RESPONSE_CHANNEL_LABEL: Record<"CALL" | "SMS", string> = {
+  CALL: "전화",
+  SMS: "문자",
+};
+
 const OUTCOME_TO_API_TYPE: Record<OutcomeCode, OutcomeType> = {
   CONTINUE_SELF: "PROCEED",
   SCHEDULE_LATER: "LATER",
@@ -2030,76 +2547,6 @@ const STAGE3_RISK_NEXT_ACTION_LABELS: Record<Stage3RiskReviewDraft["nextAction"]
   HOLD: "추세 관찰 유지",
   UPDATE_PLAN: "플랜 업데이트 우선",
 };
-
-const STAGE3_DIFF_STATUS_STEPS: Array<{
-  status: Stage3DiffPathStatus;
-  label: string;
-  artifact: string;
-}> = [
-  { status: "NONE", label: "NONE", artifact: "경로 준비 전" },
-  { status: "RECOMMENDED", label: "RECOMMENDED", artifact: "권고 사유/대상 설명" },
-  { status: "REFERRED", label: "REFERRED", artifact: "기관/연락처/메모" },
-  { status: "SCHEDULED", label: "SCHEDULED", artifact: "예약 일시/담당/기관" },
-  { status: "COMPLETED", label: "COMPLETED", artifact: "결과 요약/위험 재산출 준비" },
-];
-
-const STAGE3_DIFF_ACTION_CARDS: Array<{
-  id: Stage3DiffPathAction | "RESCHEDULE_REEVAL";
-  title: string;
-  description: string;
-  completionHint: string;
-  eventHint: string;
-  tone: string;
-}> = [
-  {
-    id: "CREATE_RECO",
-    title: "권고 생성",
-    description: "운영 권고 템플릿/사유를 입력합니다.",
-    completionHint: "완료 조건: 권고 사유 저장",
-    eventHint: "이벤트: DIFF_RECO_CREATED",
-    tone: "border-blue-200 bg-blue-50 text-blue-800",
-  },
-  {
-    id: "CREATE_REFER",
-    title: "의뢰서 생성",
-    description: "기관/연락처를 확인해 의뢰 경로를 만듭니다.",
-    completionHint: "완료 조건: 기관 정보 저장",
-    eventHint: "이벤트: DIFF_REFER_CREATED",
-    tone: "border-slate-200 bg-slate-50 text-slate-800",
-  },
-  {
-    id: "SCHEDULE",
-    title: "예약 생성/변경",
-    description: "감별검사/뇌영상 일정을 확정 또는 조정합니다.",
-    completionHint: "완료 조건: 상태 SCHEDULED",
-    eventHint: "이벤트: DIFF_SCHEDULED, REEVAL_SCHEDULED",
-    tone: "border-indigo-200 bg-indigo-50 text-indigo-800",
-  },
-  {
-    id: "APPLY_RESULT",
-    title: "결과 입력/반영",
-    description: "결과 요약과 라벨을 입력하고 추적에 연결합니다.",
-    completionHint: "완료 조건: 결과 요약 입력",
-    eventHint: "이벤트: DIFF_RESULT_APPLIED",
-    tone: "border-amber-200 bg-amber-50 text-amber-800",
-  },
-  {
-    id: "COMPLETE",
-    title: "완료 기록",
-    description: "감별검사 경로 완료를 기록합니다.",
-    completionHint: "완료 조건: 상태 COMPLETED",
-    eventHint: "이벤트: DIFF_COMPLETED",
-    tone: "border-emerald-200 bg-emerald-50 text-emerald-800",
-  },
-  {
-    id: "RESCHEDULE_REEVAL",
-    title: "재평가 일정 변경",
-    description: "재평가 일정/알림 정책을 조정합니다.",
-    completionHint: "완료 조건: 일정 변경 저장",
-    eventHint: "이벤트: REEVAL_RESCHEDULED",
-    tone: "border-violet-200 bg-violet-50 text-violet-800",
-  },
-];
 
 const FOLLOW_UP_ROUTE_META: Record<
   FollowUpRoute,
@@ -2156,14 +2603,6 @@ const REJECT_LEVEL_OPTIONS: Array<{ value: RejectLevel; label: string }> = [
   { value: "FINAL", label: "최종 거부" },
 ];
 
-const RECONTACT_STRATEGY_OPTIONS: Array<{ value: RecontactStrategy; label: string; hint: string }> = [
-  { value: "CALL_RETRY", label: "전화 재시도", hint: "같은 채널로 재확인" },
-  { value: "SMS_RETRY", label: "문자 재시도", hint: "안내 메시지 재발송" },
-  { value: "TIME_CHANGE", label: "시간대 변경", hint: "다른 시간대에 재접촉" },
-  { value: "PROTECTOR_CONTACT", label: "보호자 우선 연락", hint: "보호자를 통해 일정 조율" },
-  { value: "AGENT_SMS", label: "안내 문자 재발송", hint: "간단 안내/선택지 재제공" },
-];
-
 const CONTACT_FLOW_STEPS_META: Array<{ step: ContactFlowStep; label: string; description: string }> = [
   { step: "PRE_TRIAGE", label: "A. 사전 확인", description: "기초 정보와 이력 확인" },
   { step: "STRATEGY", label: "B. 접촉 주체", description: "상담사 우선/자동안내 우선 적용" },
@@ -2189,6 +2628,15 @@ const STAGE3_CONTACT_FLOW_STEPS_META: Array<{ step: ContactFlowStep; label: stri
   { step: "SEND", label: "B-2. 의뢰/예약", description: "의뢰서/예약 생성 및 변경" },
   { step: "RESPONSE", label: "C. 정밀관리 제공", description: "프로그램 제공 실행 및 기록" },
   { step: "OUTCOME", label: "D. 관리 제공(프로그램·연계)", description: "프로그램 실행·연계 기록/추적 계획 확정" },
+];
+
+const STAGE2_OPS_CONTACT_FLOW_STEPS_META: Array<{ step: ContactFlowStep; label: string; description: string }> = [
+  { step: "PRE_TRIAGE", label: "A. 검사 수행 관리", description: "신경심리/임상/전문의 수행 상태 확인" },
+  { step: "STRATEGY", label: "A-2. 수행 체크", description: "누락 항목 점검/담당자 확인" },
+  { step: "COMPOSE", label: "B. 검사 결과 입력", description: "점수/검사유형/결과 문서 입력" },
+  { step: "SEND", label: "B-2. 입력 반영", description: "수행일/기관/근거 연결" },
+  { step: "RESPONSE", label: "C. 분류 확정", description: "정상/MCI/치매 분류 및 근거 확정" },
+  { step: "OUTCOME", label: "D. 다음 단계 결정", description: "정상 추적/MCI Stage3/치매 감별경로 결정" },
 ];
 
 const STAGE1_FLOW_CONFIG: Stage1FlowCardConfig[] = [
@@ -2225,29 +2673,29 @@ const STAGE1_FLOW_CONFIG: Stage1FlowCardConfig[] = [
 const STAGE2_FLOW_CONFIG: Stage1FlowCardConfig[] = [
   {
     id: "PRECHECK",
-    title: "2차 평가 결과 확인",
-    description: "필수 근거/입력값 확인",
+    title: "검사 수행 관리",
+    description: "검사 예약/수행 상태 및 누락 항목 점검",
     relatedSteps: ["PRE_TRIAGE", "STRATEGY"],
     action: "OPEN_PRECHECK",
   },
   {
     id: "CONTACT_EXECUTION",
-    title: "분기/운영강도 설정",
-    description: "정상/MCI/AD 의심 분기 설정",
+    title: "검사 결과 입력",
+    description: "MMSE/CDR/신경인지/전문의 소견 입력",
     relatedSteps: ["COMPOSE", "SEND"],
     action: "OPEN_CONTACT_EXECUTION",
   },
   {
     id: "RESPONSE_HANDLING",
-    title: "연계/예약 실행",
-    description: "센터/병원/상담소 연계 처리",
+    title: "분류 확정",
+    description: "정상/MCI/치매 분류 확정",
     relatedSteps: ["RESPONSE"],
     action: "OPEN_RESPONSE_HANDLING",
   },
   {
     id: "FOLLOW_UP",
-    title: "확정/후속조치",
-    description: "확정 기록 및 추적 계획 생성",
+    title: "다음 단계 결정",
+    description: "2년후 선별/Stage3/감별경로 결정",
     relatedSteps: ["OUTCOME"],
     action: "OPEN_FOLLOW_UP",
   },
@@ -2279,6 +2727,37 @@ const STAGE3_FLOW_CONFIG: Stage1FlowCardConfig[] = [
     id: "FOLLOW_UP",
     title: "관리 제공(프로그램·연계)",
     description: "프로그램 실행·연계 기록/추적 계획 확정",
+    relatedSteps: ["OUTCOME"],
+    action: "OPEN_FOLLOW_UP",
+  },
+];
+
+const STAGE2_OPS_FLOW_CONFIG: Stage1FlowCardConfig[] = [
+  {
+    id: "PRECHECK",
+    title: "검사 수행 관리",
+    description: "신경심리검사/임상평가/전문의 진찰 수행 상태 점검",
+    relatedSteps: ["PRE_TRIAGE", "STRATEGY"],
+    action: "OPEN_PRECHECK",
+  },
+  {
+    id: "CONTACT_EXECUTION",
+    title: "검사 결과 입력",
+    description: "점수 입력/검사 종류 선택/수행 근거 기록",
+    relatedSteps: ["COMPOSE", "SEND"],
+    action: "OPEN_CONTACT_EXECUTION",
+  },
+  {
+    id: "RESPONSE_HANDLING",
+    title: "분류 확정",
+    description: "정상/MCI/치매 분류 확정",
+    relatedSteps: ["RESPONSE"],
+    action: "OPEN_RESPONSE_HANDLING",
+  },
+  {
+    id: "FOLLOW_UP",
+    title: "다음 단계 결정",
+    description: "정상 추적/MCI Stage3/치매 감별경로 결정",
     relatedSteps: ["OUTCOME"],
     action: "OPEN_FOLLOW_UP",
   },
@@ -2385,13 +2864,21 @@ const STAGE1_LINKAGE_ACTION_META: Record<
   },
 };
 
-function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode): Stage1FlowCard[] {
+function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode, stage2OpsView = false): Stage1FlowCard[] {
   return useMemo(() => {
     const isStage2Mode = mode === "stage2";
     const isStage3Mode = mode === "stage3";
-    const flowConfig = isStage3Mode ? STAGE3_FLOW_CONFIG : isStage2Mode ? STAGE2_FLOW_CONFIG : STAGE1_FLOW_CONFIG;
+    const flowConfig = isStage3Mode
+      ? stage2OpsView
+        ? STAGE2_OPS_FLOW_CONFIG
+        : STAGE3_FLOW_CONFIG
+      : isStage2Mode
+        ? STAGE2_FLOW_CONFIG
+        : STAGE1_FLOW_CONFIG;
     const flowStepsMeta = isStage3Mode
-      ? STAGE3_CONTACT_FLOW_STEPS_META
+      ? stage2OpsView
+        ? STAGE2_OPS_CONTACT_FLOW_STEPS_META
+        : STAGE3_CONTACT_FLOW_STEPS_META
       : isStage2Mode
         ? STAGE2_CONTACT_FLOW_STEPS_META
         : CONTACT_FLOW_STEPS_META;
@@ -2431,6 +2918,36 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode): Stage1FlowCard
         const relatedSummary = relatedStepSummary(config.relatedSteps);
 
         if (config.id === "PRECHECK") {
+          if (stage2OpsView) {
+            if (!baselineReady) {
+              return {
+                ...config,
+                status: "PENDING" as const,
+                reason: "검사 수행 관리 시작 전 기본 정보 확인이 필요합니다.",
+                nextActionHint: "STEP1에서 검사 수행 항목 점검과 담당자 메모를 먼저 저장하세요.",
+                metricLabel: `검사 수행 준비 대기 · ${relatedSummary}`,
+                isCurrent: false,
+              };
+            }
+            if (!riskReviewed) {
+              return {
+                ...config,
+                status: "PENDING" as const,
+                reason: "STEP1 검사 수행 관리 완료 기록이 없습니다.",
+                nextActionHint: "검토 완료 버튼을 눌러 STEP2(검사 결과 입력) 잠금을 해제하세요.",
+                metricLabel: `검사 수행 관리 완료 대기 · ${relatedSummary}`,
+                isCurrent: false,
+              };
+            }
+            return {
+              ...config,
+              status: "COMPLETED" as const,
+              reason: "검사 수행 관리 단계가 완료되었습니다.",
+              nextActionHint: "STEP2에서 검사 결과 입력을 진행하세요.",
+              metricLabel: `검사 수행 관리 완료 · ${relatedSummary}`,
+              isCurrent: false,
+            };
+          }
           if (!baselineReady) {
             return {
               ...config,
@@ -2462,6 +2979,36 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode): Stage1FlowCard
         }
 
         if (config.id === "CONTACT_EXECUTION") {
+          if (stage2OpsView) {
+            if (!baselineReady || !riskReviewed) {
+              return {
+                ...config,
+                status: "BLOCKED" as const,
+                reason: "STEP1 완료 전에는 검사 결과 입력을 진행할 수 없습니다.",
+                nextActionHint: "STEP1(검사 수행 관리)을 먼저 완료하세요.",
+                metricLabel: `검사 결과 입력 잠금 · ${relatedSummary}`,
+                isCurrent: false,
+              };
+            }
+            if (!diffPathReady) {
+              return {
+                ...config,
+                status: "PENDING" as const,
+                reason: "검사 결과 입력(점수/문서 연결)이 아직 완료되지 않았습니다.",
+                nextActionHint: "STEP2에서 MMSE/CDR/신경심리 결과를 입력하세요.",
+                metricLabel: `검사 결과 입력 대기 · ${relatedSummary}`,
+                isCurrent: false,
+              };
+            }
+            return {
+              ...config,
+              status: "COMPLETED" as const,
+              reason: "검사 결과 입력이 반영되었습니다.",
+              nextActionHint: "STEP3에서 정상/MCI/치매 분류를 확정하세요.",
+              metricLabel: `검사 결과 입력 완료 · ${relatedSummary}`,
+              isCurrent: false,
+            };
+          }
           if (!baselineReady || !riskReviewed) {
             return {
               ...config,
@@ -2503,6 +3050,36 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode): Stage1FlowCard
         }
 
         if (config.id === "RESPONSE_HANDLING") {
+          if (stage2OpsView) {
+            if (!diffPathReady) {
+              return {
+                ...config,
+                status: "BLOCKED" as const,
+                reason: "STEP2 완료 전에는 분류 확정을 진행할 수 없습니다.",
+                nextActionHint: "검사 결과 입력을 먼저 완료하세요.",
+                metricLabel: `분류 확정 잠금 · ${relatedSummary}`,
+                isCurrent: false,
+              };
+            }
+            if (stage3Data?.reevalStatus === "SCHEDULED" || stage3Data?.reevalStatus === "COMPLETED") {
+              return {
+                ...config,
+                status: "COMPLETED" as const,
+                reason: "분류 확정이 기록되었습니다.",
+                nextActionHint: "STEP4에서 다음 단계를 결정하세요.",
+                metricLabel: `분류 확정 완료 · ${relatedSummary}`,
+                isCurrent: false,
+              };
+            }
+            return {
+              ...config,
+              status: "PENDING" as const,
+              reason: "정상/MCI/치매 분류 확정이 아직 완료되지 않았습니다.",
+              nextActionHint: "STEP3에서 분류 선택과 근거를 저장하세요.",
+              metricLabel: `분류 확정 대기 · ${relatedSummary}`,
+              isCurrent: false,
+            };
+          }
           if (!diffPathReady || pendingApprovals > 0) {
             return {
               ...config,
@@ -2529,6 +3106,27 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode): Stage1FlowCard
             reason: "선택 프로그램의 실행 필드(연계/예약/안내/교육/방문) 기록이 아직 없습니다.",
             nextActionHint: "프로그램 섹션에서 항목 선택 후 실행 필드를 입력하세요.",
             metricLabel: `프로그램 실행 대기 · ${relatedSummary}`,
+            isCurrent: false,
+          };
+        }
+
+        if (stage2OpsView) {
+          if (stage3Data?.planUpdatedAt) {
+            return {
+              ...config,
+              status: "COMPLETED" as const,
+              reason: "다음 단계 결정이 완료되었습니다.",
+              nextActionHint: "타임라인/감사 로그에서 변경 근거를 확인하세요.",
+              metricLabel: `다음 단계 결정 완료 · ${relatedSummary}`,
+              isCurrent: false,
+            };
+          }
+          return {
+            ...config,
+            status: "PENDING" as const,
+            reason: "다음 단계 결정(정상 추적/MCI Stage3/치매 감별경로)이 남아 있습니다.",
+            nextActionHint: "STEP4에서 후속 경로를 저장하세요.",
+            metricLabel: `다음 단계 결정 대기 · ${relatedSummary}`,
             isCurrent: false,
           };
         }
@@ -2565,9 +3163,33 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode): Stage1FlowCard
         };
       });
 
-      const currentIndex = cards.findIndex((card) => card.status !== "COMPLETED");
-      const resolvedCurrentIndex = currentIndex === -1 ? cards.length - 1 : currentIndex;
-      return cards.map((card, index) => ({ ...card, isCurrent: index === resolvedCurrentIndex }));
+      // Stage3 루프는 순차 게이트를 강제한다.
+      // 선행 단계가 완료되지 않았으면 후행 단계는 완료/대기 상태가 아니라 BLOCKED로 표기한다.
+      const gatedCards = cards.reduce<Stage1FlowCard[]>((acc, card, index) => {
+        if (index === 0) {
+          acc.push(card);
+          return acc;
+        }
+        const prevCard = acc[index - 1];
+        if (prevCard.status === "COMPLETED") {
+          acc.push(card);
+          return acc;
+        }
+        const blockedStepNo = index;
+        acc.push({
+          ...card,
+          status: "BLOCKED",
+          reason: `STEP ${blockedStepNo} 완료 전에는 ${card.title} 단계를 진행할 수 없습니다.`,
+          nextActionHint: `STEP ${blockedStepNo}를 먼저 완료해 주세요.`,
+          metricLabel: `선행 단계 미완료 · ${relatedStepSummary(card.relatedSteps)}`,
+          isCurrent: false,
+        });
+        return acc;
+      }, []);
+
+      const currentIndex = gatedCards.findIndex((card) => card.status !== "COMPLETED");
+      const resolvedCurrentIndex = currentIndex === -1 ? gatedCards.length - 1 : currentIndex;
+      return gatedCards.map((card, index) => ({ ...card, isCurrent: index === resolvedCurrentIndex }));
     }
 
     const cards = flowConfig.map((config) => {
@@ -2776,7 +3398,7 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode): Stage1FlowCard
       ...card,
       isCurrent: index === resolvedCurrentIndex,
     }));
-  }, [detail, mode]);
+  }, [detail, mode, stage2OpsView]);
 }
 
 function buildPreTriageInput(caseRecord?: CaseRecord): PreTriageInput {
@@ -2876,75 +3498,56 @@ function buildContactFlowSteps(
   });
 }
 
+function mapSmsTemplatesToPanelTemplates(templates: SmsTemplate[]): StdSmsTemplate[] {
+  return templates.map((template) => ({
+    id: template.id,
+    type: template.messageType,
+    label: template.label,
+    body: (vars: SmsTemplateVars) =>
+      template.body({
+        caseId: vars.caseAlias ?? "CASE",
+        centerName: vars.centerName,
+        centerPhone: vars.centerPhone,
+        guideLink: vars.guideLink,
+        reservationLink: vars.bookingLink,
+        unsubscribe: vars.optOut ?? DEFAULT_UNSUBSCRIBE,
+      }),
+  }));
+}
+
 /** STAGE1_STD_TEMPLATES: SmsPanel에 전달할 StdSmsTemplate[] */
-const STAGE1_STD_TEMPLATES: StdSmsTemplate[] = SMS_TEMPLATES.map((template) => ({
-  id: template.id,
-  type: template.messageType,
-  label: template.label,
-  body: (vars) =>
-    template.body({
-      caseId: "",
-      centerName: vars.centerName,
-      centerPhone: vars.centerPhone,
-      guideLink: vars.guideLink,
-      reservationLink: vars.bookingLink,
-      unsubscribe: DEFAULT_UNSUBSCRIBE,
-    }),
-}));
+const STAGE1_STD_TEMPLATES: StdSmsTemplate[] = mapSmsTemplatesToPanelTemplates(SMS_TEMPLATES);
 
 /** STAGE2_STD_TEMPLATES: SmsPanel에 전달할 StdSmsTemplate[] */
-const STAGE2_STD_TEMPLATES: StdSmsTemplate[] = STAGE2_SMS_TEMPLATES.map((template) => ({
-  id: template.id,
-  type: template.messageType,
-  label: template.label,
-  body: (vars) =>
-    template.body({
-      caseId: "",
-      centerName: vars.centerName,
-      centerPhone: vars.centerPhone,
-      guideLink: vars.guideLink,
-      reservationLink: vars.bookingLink,
-      unsubscribe: DEFAULT_UNSUBSCRIBE,
-    }),
-}));
+const STAGE2_STD_TEMPLATES: StdSmsTemplate[] = mapSmsTemplatesToPanelTemplates(STAGE2_SMS_TEMPLATES);
 
 /** STAGE3_STD_TEMPLATES: SmsPanel에 전달할 StdSmsTemplate[] */
-const STAGE3_STD_TEMPLATES: StdSmsTemplate[] = STAGE3_SMS_TEMPLATES.map((template) => ({
-  id: template.id,
-  type: template.messageType,
-  label: template.label,
-  body: (vars) =>
-    template.body({
-      caseId: "",
-      centerName: vars.centerName,
-      centerPhone: vars.centerPhone,
-      guideLink: vars.guideLink,
-      reservationLink: vars.bookingLink,
-      unsubscribe: DEFAULT_UNSUBSCRIBE,
-    }),
-}));
+const STAGE3_STD_TEMPLATES: StdSmsTemplate[] = mapSmsTemplatesToPanelTemplates(STAGE3_SMS_TEMPLATES);
 
 export function Stage1OpsDetail({
   caseRecord,
   onHeaderSummaryChange,
   onPrimaryActionChange,
   mode = "stage1",
+  surfaceStage,
 }: {
   caseRecord?: CaseRecord;
   onHeaderSummaryChange?: (summary: Stage1HeaderSummary) => void;
   onPrimaryActionChange?: (handler: (() => void) | null) => void;
   mode?: StageOpsMode;
+  surfaceStage?: SurfaceStage;
 }) {
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
-  const stageLabel = isStage2Mode ? "2차" : isStage3Mode ? "3차" : "1차";
+  const isStage2OpsView = isStage3Mode && surfaceStage === "Stage 2";
+  const stageLabel = isStage2Mode || isStage2OpsView ? "2차" : isStage3Mode ? "3차" : "1차";
   const smsTemplateCatalog = isStage2Mode ? STAGE2_SMS_TEMPLATES : isStage3Mode ? STAGE3_SMS_TEMPLATES : SMS_TEMPLATES;
   const panelSmsTemplates = isStage2Mode ? STAGE2_STD_TEMPLATES : isStage3Mode ? STAGE3_STD_TEMPLATES : STAGE1_STD_TEMPLATES;
   const defaultSmsTemplateId = smsTemplateCatalog[0]?.id ?? "";
 
-  const [detail, setDetail] = useState<Stage1Detail>(() => buildInitialStage1Detail(caseRecord, mode));
+  const [detail, setDetail] = useState<Stage1Detail>(() => buildInitialStage1Detail(caseRecord, mode, isStage2OpsView));
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() =>
-    buildInitialAuditLogs(caseRecord, buildInitialStage1Detail(caseRecord, mode), mode)
+    buildInitialAuditLogs(caseRecord, buildInitialStage1Detail(caseRecord, mode, isStage2OpsView), mode, isStage2OpsView)
   );
   const [timelineFilter, setTimelineFilter] = useState<TimelineFilter>("ALL");
   const [activeStage1Modal, setActiveStage1Modal] = useState<Stage1FlowCardId | null>(null);
@@ -2994,15 +3597,28 @@ export function Stage1OpsDetail({
   });
   const [stage3ReviewDraft, setStage3ReviewDraft] = useState<Stage3ReviewDraft>({
     diffNeeded: true,
+    diffDecisionSet: false,
     priority: "HIGH",
     caregiverNeeded: false,
     sensitiveHistory: false,
     resultLinkedChecked: false,
+    consentConfirmed: false,
     strategyMemo: "",
   });
   const [stage3DiffDraft, setStage3DiffDraft] = useState<Stage3DiffDraft>({
     orgName: "협력 병원",
     orgPhone: "02-555-0199",
+    preferredHospital: "협력 병원",
+    preferredTimeWindow: "평일 오후 14:00~16:00",
+    caregiverCompanion: false,
+    mobilityIssue: false,
+    testBiomarker: true,
+    testBrainImaging: true,
+    testOther: false,
+    bookingAt: withHoursFromNow(72),
+    bookingAltAt: withHoursFromNow(96),
+    bookingConfirmed: false,
+    prepGuide: "신분증/복용약 목록/최근 검사기록 지참 안내",
     note: "",
     resultSummary: "",
     resultLabel: "불확실",
@@ -3010,6 +3626,15 @@ export function Stage1OpsDetail({
     abeta: "",
     tau: "",
   });
+  const [stage3Step2Flow, setStage3Step2Flow] = useState<Stage3Step2FlowState>({
+    consultStarted: false,
+    infoCollected: false,
+    ragGenerated: false,
+    bookingConfirmed: false,
+    messageSent: false,
+    calendarSynced: false,
+  });
+  const [stage3RagAutoFill, setStage3RagAutoFill] = useState<Stage3RagAutoFill | null>(null);
   const [stage3RiskReviewDraft, setStage3RiskReviewDraft] = useState<Stage3RiskReviewDraft>({
     memo: "",
     nextAction: "RECOMMEND_DIFF",
@@ -3028,12 +3653,17 @@ export function Stage1OpsDetail({
     createFollowupEvent: false,
     followupAt: withHoursFromNow(168),
   });
-  const [noResponsePlanModalOpen, setNoResponsePlanModalOpen] = useState(false);
   const [noResponsePlanDraft, setNoResponsePlanDraft] = useState<NoResponsePlanDraft>({
     strategy: null,
+    channel: "CALL",
+    assigneeId: caseRecord?.manager ?? STAGE1_PANEL_OPERATOR,
     nextContactAt: withHoursFromNow(24),
     applyL3: false,
   });
+  const [responseReasonTags, setResponseReasonTags] = useState<ResponseReasonTag[]>([]);
+  const [responseValidationError, setResponseValidationError] = useState<string | null>(null);
+  const [responseDraftDirty, setResponseDraftDirty] = useState(false);
+  const [responseLastSavedAt, setResponseLastSavedAt] = useState<string | null>(null);
   const [ragRecommendations, setRagRecommendations] = useState<RagRecommendation[]>([]);
   const [ragLoading, setRagLoading] = useState(false);
   const [selectedRagId, setSelectedRagId] = useState<string | null>(null);
@@ -3045,6 +3675,28 @@ export function Stage1OpsDetail({
     contactGuide: DEFAULT_CENTER_PHONE,
     note: "",
   });
+  const [stage2Diagnosis, setStage2Diagnosis] = useState<Stage2Diagnosis>(() => buildInitialStage2Diagnosis(caseRecord));
+  const [stage2ClassificationDraft, setStage2ClassificationDraft] = useState<Stage2ClassLabel>(() => inferStage2Label(caseRecord));
+  const [stage2RationaleDraft, setStage2RationaleDraft] = useState("");
+  const [stage2HospitalDraft, setStage2HospitalDraft] = useState("강남구 협력병원");
+  const [stage2ScheduleDraft, setStage2ScheduleDraft] = useState(withHoursFromNow(72));
+  const [stage2PlanRouteDraft, setStage2PlanRouteDraft] = useState<"HOSPITAL_REFERRAL" | "CENTER_DIRECT">(
+    "HOSPITAL_REFERRAL",
+  );
+  const [stage2PlanRequiredDraft, setStage2PlanRequiredDraft] = useState({
+    specialist: true,
+    mmse: true,
+    cdrOrGds: true,
+    neuroCognitive: true,
+  });
+  const [stage2OptionalTestsDraft, setStage2OptionalTestsDraft] = useState({
+    gdsk: false,
+    adl: false,
+    bpsd: false,
+  });
+  const [stage2EnteredAt] = useState(() => caseRecord?.created ?? withHoursFromNow(-96));
+  const [stage2TargetAt] = useState(() => withHoursFromNow(24 * 10));
+  const [stage2ConfirmedAt, setStage2ConfirmedAt] = useState<string | undefined>(undefined);
 
   /* ── 인수인계 메모 ── */
   const [handoffMemoOpen, setHandoffMemoOpen] = useState(false);
@@ -3069,9 +3721,9 @@ export function Stage1OpsDetail({
   } = useOutcomeSubmit();
 
   useEffect(() => {
-    const initDetail = buildInitialStage1Detail(caseRecord, mode);
+    const initDetail = buildInitialStage1Detail(caseRecord, mode, isStage2OpsView);
     setDetail(initDetail);
-    setAuditLogs(buildInitialAuditLogs(caseRecord, initDetail, mode));
+    setAuditLogs(buildInitialAuditLogs(caseRecord, initDetail, mode, isStage2OpsView));
     setTimelineFilter("ALL");
     setActiveStage1Modal(null);
     setCallTarget("citizen");
@@ -3102,17 +3754,44 @@ export function Stage1OpsDetail({
     });
     setStage3ReviewDraft({
       diffNeeded: true,
+      diffDecisionSet: false,
       priority: caseRecord?.risk === "고" ? "HIGH" : caseRecord?.risk === "중" ? "MID" : "LOW",
       caregiverNeeded: Boolean(caseRecord?.profile.guardianPhone),
       sensitiveHistory: Boolean(caseRecord?.alertTags.includes("이탈 위험")),
+      resultLinkedChecked: false,
+      consentConfirmed: false,
       strategyMemo: "",
     });
     setStage3DiffDraft({
       orgName: "협력 병원",
       orgPhone: DEFAULT_CENTER_PHONE,
+      preferredHospital: "협력 병원",
+      preferredTimeWindow: "평일 오후 14:00~16:00",
+      caregiverCompanion: false,
+      mobilityIssue: false,
+      testBiomarker: true,
+      testBrainImaging: true,
+      testOther: false,
+      bookingAt: withHoursFromNow(72),
+      bookingAltAt: withHoursFromNow(96),
+      bookingConfirmed: false,
+      prepGuide: "신분증/복용약 목록/최근 검사기록 지참 안내",
       note: "",
       resultSummary: "",
+      resultLabel: "불확실",
+      riskReady: false,
+      abeta: "",
+      tau: "",
     });
+    setStage3Step2Flow({
+      consultStarted: false,
+      infoCollected: false,
+      ragGenerated: false,
+      bookingConfirmed: false,
+      messageSent: false,
+      calendarSynced: false,
+    });
+    setStage3RagAutoFill(null);
     setStage3RiskReviewDraft({
       memo: "",
       nextAction: "RECOMMEND_DIFF",
@@ -3124,6 +3803,8 @@ export function Stage1OpsDetail({
       retryCount: 2,
     });
     setStage3LatestRiskReview(null);
+    setSelectedOutcomeCode(null);
+    setOutcomeNote("");
     setRejectReasonDraft({
       code: null,
       level: "TEMP",
@@ -3131,12 +3812,17 @@ export function Stage1OpsDetail({
       createFollowupEvent: false,
       followupAt: withHoursFromNow(168),
     });
-    setNoResponsePlanModalOpen(false);
     setNoResponsePlanDraft({
       strategy: null,
+      channel: "CALL",
+      assigneeId: caseRecord?.manager ?? STAGE1_PANEL_OPERATOR,
       nextContactAt: withHoursFromNow(24),
       applyL3: false,
     });
+    setResponseReasonTags([]);
+    setResponseValidationError(null);
+    setResponseDraftDirty(false);
+    setResponseLastSavedAt(null);
     setRagRecommendations([]);
     setRagLoading(false);
     setSelectedRagId(null);
@@ -3148,6 +3834,25 @@ export function Stage1OpsDetail({
       contactGuide: DEFAULT_CENTER_PHONE,
       note: "",
     });
+    const initialStage2 = buildInitialStage2Diagnosis(caseRecord);
+    setStage2Diagnosis(initialStage2);
+    setStage2ClassificationDraft(initialStage2.classification?.label ?? inferStage2Label(caseRecord));
+    setStage2RationaleDraft("");
+    setStage2HospitalDraft("강남구 협력병원");
+    setStage2ScheduleDraft(withHoursFromNow(72));
+    setStage2PlanRouteDraft("HOSPITAL_REFERRAL");
+    setStage2PlanRequiredDraft({
+      specialist: true,
+      mmse: true,
+      cdrOrGds: true,
+      neuroCognitive: true,
+    });
+    setStage2OptionalTestsDraft({
+      gdsk: false,
+      adl: false,
+      bpsd: false,
+    });
+    setStage2ConfirmedAt(undefined);
     setAgentJob({
       status: "IDLE",
       attemptNo: 0,
@@ -3157,7 +3862,7 @@ export function Stage1OpsDetail({
     agentAutoEnterTriggeredRef.current = new Set();
     prevAgentAutoModeRef.current = false;
     clearSubmitError();
-  }, [caseRecord?.id, clearSubmitError, defaultSmsTemplateId, mode]);
+  }, [caseRecord?.id, clearSubmitError, defaultSmsTemplateId, isStage2OpsView, mode]);
 
   useEffect(() => {
     const ticker = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -3173,7 +3878,10 @@ export function Stage1OpsDetail({
   }, [callActive]);
 
   useEffect(() => {
-    if (activeStage1Modal !== "CONTACT_EXECUTION") return;
+    const shouldLoadRag =
+      activeStage1Modal === "CONTACT_EXECUTION" ||
+      (isStage3Mode && stage3TaskModalStep === "CONTACT_EXECUTION");
+    if (!shouldLoadRag) return;
     setRagLoading(true);
     const timer = window.setTimeout(() => {
       const recommendations = buildRagRecommendations(detail, mode);
@@ -3185,7 +3893,7 @@ export function Stage1OpsDetail({
     }, 180);
 
     return () => window.clearTimeout(timer);
-  }, [activeStage1Modal, detail, mode]);
+  }, [activeStage1Modal, detail, isStage3Mode, mode, stage3TaskModalStep]);
 
   const interventionGuides = useMemo(() => getStage1InterventionGuides(), []);
 
@@ -3276,6 +3984,102 @@ export function Stage1OpsDetail({
 
   const appendTimeline = (event: ContactEvent) => {
     setDetail((prev) => ({ ...prev, timeline: [event, ...prev.timeline] }));
+  };
+
+  const saveStage2TestInputs = () => {
+    const hasClassification = Boolean(stage2Diagnosis.classification?.label);
+    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, hasClassification);
+    setStage2Diagnosis((prev) => ({
+      ...prev,
+      status: nextStatus,
+    }));
+
+    appendTimeline({
+      type: "STATUS_CHANGE",
+      at: nowIso(),
+      from: "검사입력",
+      to: "검사입력",
+      reason: `Stage2 검사 입력 반영 (${countStage2CompletedTests(stage2Diagnosis.tests)}/4)`,
+      by: detail.header.assigneeName,
+    });
+    appendAuditLog(`Stage2 검사 결과 입력 반영: ${countStage2CompletedTests(stage2Diagnosis.tests)}/4`);
+    toast.success("검사 결과 입력이 반영되었습니다.");
+  };
+
+  const confirmStage2Classification = () => {
+    if (!stage2CanConfirm) {
+      toast.error("분류 확정 요건이 부족합니다.");
+      return;
+    }
+
+    const label = stage2ClassificationDraft;
+    const mciStage = label === "MCI" ? inferStage2MciStage(caseRecord) : undefined;
+    const probs = inferStage2Probs(label, mciStage);
+    const nextStep = inferStage2NextStep(label);
+    const now = nowIso();
+    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, true);
+
+    setStage2Diagnosis((prev) => ({
+      ...prev,
+      status: nextStatus,
+      classification: {
+        label,
+        probs,
+        mciStage,
+      },
+      nextStep,
+    }));
+    setStage2ConfirmedAt(now);
+
+    appendTimeline({
+      type: "STATUS_CHANGE",
+      at: now,
+      from: "분류확정대기",
+      to: `분류확정(${label}${mciStage ? `-${mciStage}` : ""})`,
+      reason: stage2RationaleDraft.trim() || "진단 결과 라벨 확정",
+      by: detail.header.assigneeName,
+    });
+    appendAuditLog(`Stage2 분류 확정: ${label}${mciStage ? `(${mciStage})` : ""}`);
+    toast.success("분류가 확정되었습니다.");
+  };
+
+  const setStage2NextStep = (nextStep: Stage2Diagnosis["nextStep"], summary: string) => {
+    setStage2Diagnosis((prev) => ({
+      ...prev,
+      nextStep,
+    }));
+    appendTimeline({
+      type: "PLAN_UPDATED",
+      at: nowIso(),
+      by: detail.header.assigneeName,
+      summary,
+    });
+    appendAuditLog(`Stage2 다음 단계 결정: ${summary}`);
+    toast.success("다음 단계가 반영되었습니다.");
+  };
+
+  const saveStage2Booking = () => {
+    setDetail((prev) => ({
+      ...prev,
+      linkageStatus: "BOOKING_DONE",
+      reservationInfo: {
+        route: "HOSPITAL_REFERRAL_BOOKING",
+        reservationType: "2차 진단검사 예약",
+        scheduledAt: stage2ScheduleDraft,
+        place: stage2HospitalDraft,
+        contactGuide: DEFAULT_CENTER_PHONE,
+        note: "Stage2 검사 예약 등록",
+      },
+    }));
+    appendTimeline({
+      type: "LINKAGE_CREATED",
+      at: nowIso(),
+      by: detail.header.assigneeName,
+      linkageType: "HOSPITAL",
+      summary: `검사 예약 등록 (${stage2HospitalDraft})`,
+    });
+    appendAuditLog(`검사 예약 관리 저장: ${stage2HospitalDraft} / ${formatDateTime(stage2ScheduleDraft)}`);
+    toast.success("검사 예약이 저장되었습니다.");
   };
 
   const appendAgentExecutionLog = (entry: Omit<AgentExecutionLog, "id">) => {
@@ -3620,7 +4424,7 @@ export function Stage1OpsDetail({
   }) => {
     if (!isStage3Mode) return;
     const now = nowIso();
-    const summary = options?.summary ?? "전환 위험 추세 검토 완료";
+    const summary = options?.summary ?? (isStage2OpsView ? "진단 진행 검토 완료" : "전환 위험 추세 검토 완료");
     setDetail((prev) => {
       if (!prev.stage3) return prev;
       const series = [...prev.stage3.transitionRisk.series];
@@ -3664,9 +4468,9 @@ export function Stage1OpsDetail({
       type: "RISK_SERIES_UPDATED",
       at: now,
       by: detail.header.assigneeName,
-      summary: "전환 위험 시계열 확인 시각 업데이트",
+      summary: isStage2OpsView ? "진단 진행 시계열 확인 시각 업데이트" : "전환 위험 시계열 확인 시각 업데이트",
     });
-    appendAuditLog(`Stage3 위험 추세 검토 완료: ${summary}`);
+    appendAuditLog(`${isStage2OpsView ? "Stage2 진단 진행 검토" : "Stage3 위험 추세 검토"} 완료: ${summary}`);
     if (options?.nextAction) {
       setStage3LatestRiskReview({
         at: now,
@@ -3675,7 +4479,7 @@ export function Stage1OpsDetail({
       });
     }
     if (!options?.silentToast) {
-      toast.success("위험 추세 검토가 기록되었습니다.");
+      toast.success(isStage2OpsView ? "진단 진행 검토가 기록되었습니다." : "위험 추세 검토가 기록되었습니다.");
     }
   };
 
@@ -3791,27 +4595,272 @@ export function Stage1OpsDetail({
     });
 
     if (action === "CREATE_RECO") {
-      appendTimeline({ type: "DIFF_RECO_CREATED", at: now, by: detail.header.assigneeName, summary: "감별검사/뇌영상 권고 생성" });
-      appendAuditLog("감별경로 권고 생성");
+      appendTimeline({
+        type: "DIFF_RECO_CREATED",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: isStage2OpsView ? "신경심리검사 진행 제안 생성" : "감별검사/뇌영상 권고 생성",
+      });
+      appendAuditLog(isStage2OpsView ? "진단검사 경로 제안 생성" : "감별경로 권고 생성");
     } else if (action === "CREATE_REFER") {
-      appendTimeline({ type: "DIFF_REFER_CREATED", at: now, by: detail.header.assigneeName, summary: "감별경로 의뢰서 생성" });
-      appendTimeline({ type: "LINKAGE_CREATED", at: now, by: detail.header.assigneeName, linkageType: "HOSPITAL", summary: "의뢰 연계 경로 생성" });
-      appendAuditLog("감별경로 의뢰 생성");
+      appendTimeline({
+        type: "DIFF_REFER_CREATED",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: isStage2OpsView ? "신경심리/임상평가 의뢰서 생성" : "감별경로 의뢰서 생성",
+      });
+      appendTimeline({
+        type: "LINKAGE_CREATED",
+        at: now,
+        by: detail.header.assigneeName,
+        linkageType: "HOSPITAL",
+        summary: isStage2OpsView ? "진단검사 의뢰 연계 경로 생성" : "의뢰 연계 경로 생성",
+      });
+      appendAuditLog(isStage2OpsView ? "진단검사 의뢰 생성" : "감별경로 의뢰 생성");
     } else if (action === "SCHEDULE") {
       const scheduledAt = withHoursFromNow(72);
-      appendTimeline({ type: "DIFF_SCHEDULED", at: now, by: detail.header.assigneeName, summary: "감별경로 예약 생성" });
-      appendTimeline({ type: "REEVAL_SCHEDULED", at: now, by: detail.header.assigneeName, scheduledAt, reason: "감별경로 예약 생성" });
-      appendAuditLog("감별경로 예약 생성");
+      appendTimeline({
+        type: "DIFF_SCHEDULED",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: isStage2OpsView ? "진단검사 예약 생성" : "감별경로 예약 생성",
+      });
+      appendTimeline({
+        type: "REEVAL_SCHEDULED",
+        at: now,
+        by: detail.header.assigneeName,
+        scheduledAt,
+        reason: isStage2OpsView ? "진단검사 예약 생성" : "감별경로 예약 생성",
+      });
+      appendAuditLog(isStage2OpsView ? "진단검사 예약 생성" : "감별경로 예약 생성");
     } else if (action === "COMPLETE") {
-      appendTimeline({ type: "DIFF_COMPLETED", at: now, by: detail.header.assigneeName, summary: "감별경로 완료 기록" });
-      appendTimeline({ type: "REEVAL_COMPLETED", at: now, by: detail.header.assigneeName, note: "감별경로 완료" });
-      appendAuditLog("감별경로 완료 기록");
+      appendTimeline({
+        type: "DIFF_COMPLETED",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: isStage2OpsView ? "진단검사 수행 완료 기록" : "감별경로 완료 기록",
+      });
+      appendTimeline({
+        type: "REEVAL_COMPLETED",
+        at: now,
+        by: detail.header.assigneeName,
+        note: isStage2OpsView ? "진단검사 완료" : "감별경로 완료",
+      });
+      appendAuditLog(isStage2OpsView ? "진단검사 완료 기록" : "감별경로 완료 기록");
     } else {
-      appendTimeline({ type: "DIFF_RESULT_APPLIED", at: now, by: detail.header.assigneeName, summary: "감별 결과 입력 및 플랜 업데이트 필요 표시" });
-      appendAuditLog("감별 결과 입력");
+      appendTimeline({
+        type: "DIFF_RESULT_APPLIED",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: isStage2OpsView ? "진단검사 결과 입력 및 분류 확정 대기" : "감별 결과 입력 및 플랜 업데이트 필요 표시",
+      });
+      appendAuditLog(isStage2OpsView ? "진단검사 결과 입력" : "감별 결과 입력");
     }
     toast.success("처리 완료(감사 로그 기록됨)");
   };
+
+  const handleStage3Step2Consultation = useCallback(
+    (note: string, type: "CONTACT" | "BOOKING" | "REMINDER", templateLabel: string) => {
+      if (!isStage3Mode) return;
+      const now = nowIso();
+      const trimmed = note.trim();
+      setStage3Step2Flow((prev) => ({ ...prev, consultStarted: true, infoCollected: true }));
+      if (trimmed.length > 0) {
+        setStage3DiffDraft((prev) => ({ ...prev, note: trimmed }));
+      }
+
+      appendTimeline({
+        type: "CALL_ATTEMPT",
+        at: now,
+        result: "SUCCESS",
+        note: trimmed || `${type} 상담 기록`,
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog(`Stage3 상담 기록: ${templateLabel}${trimmed ? ` (${trimmed.slice(0, 80)})` : ""}`);
+    },
+    [appendAuditLog, detail.header.assigneeName, isStage3Mode],
+  );
+
+  const handleStage3Step2SmsSent = useCallback(
+    (item: SmsHistoryItem) => {
+      if (!isStage3Mode) return;
+      const now = nowIso();
+      appendTimeline({
+        type: "SMS_SENT",
+        at: now,
+        templateId: item.templateLabel,
+        status: item.status === "SENT" ? "DELIVERED" : item.status === "SCHEDULED" ? "PENDING" : "FAILED",
+        by: detail.header.assigneeName,
+      });
+      appendTimeline({
+        type: "MESSAGE_SENT",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: `예약 안내 문자 ${item.mode === "NOW" ? "발송" : "예약"}: ${item.templateLabel}`,
+      });
+      setStage3Step2Flow((prev) => ({ ...prev, messageSent: item.status !== "FAILED" }));
+      appendAuditLog(`Stage3 문자 ${item.mode === "NOW" ? "발송" : "예약"}: ${item.templateLabel} (${item.status})`);
+    },
+    [appendAuditLog, detail.header.assigneeName, isStage3Mode],
+  );
+
+  const runStage3RagAutoFill = useCallback(() => {
+    if (!isStage3Mode) return;
+    const now = nowIso();
+    const sourceText = [stage3DiffDraft.note, callMemo, ragEditedScript, selectedRecommendation?.scriptBody]
+      .filter(Boolean)
+      .join(" ");
+    const confidenceLabel: Stage3RagAutoFill["confidenceLabel"] =
+      sourceText.length >= 180 ? "높음" : sourceText.length >= 80 ? "보통" : "낮음";
+
+    const patch: Partial<Stage3DiffDraft> = {
+      preferredHospital: stage3DiffDraft.preferredHospital || stage3DiffDraft.orgName || "협력 병원",
+      preferredTimeWindow:
+        sourceText.includes("오전") || sourceText.includes("아침")
+          ? "평일 오전 10:00~12:00"
+          : sourceText.includes("주말")
+            ? "주말 오전 09:00~11:00"
+            : "평일 오후 14:00~16:00",
+      caregiverCompanion: sourceText.includes("보호자") || stage3ReviewDraft.caregiverNeeded,
+      mobilityIssue: sourceText.includes("이동") || sourceText.includes("교통"),
+      testBiomarker: true,
+      testBrainImaging: true,
+      prepGuide:
+        "운영 참고: 신분증/복용약 목록/기존 검사결과 지참, 일정 변경 시 센터에 사전 연락",
+      orgName: stage3DiffDraft.orgName || "협력 병원",
+      orgPhone: stage3DiffDraft.orgPhone || DEFAULT_CENTER_PHONE,
+    };
+    const changedFields = Object.keys(patch).filter((key) => {
+      const nextValue = (patch as Record<string, unknown>)[key];
+      const currentValue = (stage3DiffDraft as Record<string, unknown>)[key];
+      return nextValue !== currentValue;
+    });
+    const reasonSnippets = [
+      selectedRecommendation?.title ? `추천 근거: ${selectedRecommendation.title}` : "운영 가이드 기준 자동 제안",
+      sourceText.length > 0
+        ? `상담 메모 기반 추출: ${sourceText.slice(0, 60)}${sourceText.length > 60 ? "..." : ""}`
+        : "상담 메모가 짧아 기본 템플릿 기반으로 채움",
+      `담당자 확인 필요 · 신뢰도 ${confidenceLabel}`,
+    ];
+
+    setStage3RagAutoFill({
+      generatedAt: now,
+      confidenceLabel,
+      reasonSnippets,
+      patch,
+      changedFields,
+      applied: false,
+      ignored: false,
+    });
+    setStage3Step2Flow((prev) => ({ ...prev, ragGenerated: true }));
+    appendAuditLog(`Stage3 RAG 자동기록 제안 생성 (${confidenceLabel})`);
+    toast.success("RAG 자동기록 제안이 생성되었습니다. 담당자 확인 후 적용하세요.");
+  }, [
+    appendAuditLog,
+    callMemo,
+    isStage3Mode,
+    ragEditedScript,
+    selectedRecommendation?.scriptBody,
+    selectedRecommendation?.title,
+    stage3DiffDraft,
+    stage3ReviewDraft.caregiverNeeded,
+  ]);
+
+  const applyStage3RagAutoFill = useCallback(() => {
+    if (!stage3RagAutoFill) return;
+    const now = nowIso();
+    setStage3DiffDraft((prev) => ({ ...prev, ...stage3RagAutoFill.patch }));
+    setStage3RagAutoFill((prev) => (prev ? { ...prev, applied: true, ignored: false } : prev));
+    setStage3Step2Flow((prev) => ({ ...prev, infoCollected: true, ragGenerated: true }));
+    appendTimeline({
+      type: "STAGE3_ACTION_DECISION",
+      at: now,
+      by: detail.header.assigneeName,
+      actionId: "RAG_AUTOFILL",
+      decision: "APPROVED",
+      note: `자동 채움 적용(${stage3RagAutoFill.changedFields.length}개 필드)`,
+    });
+    appendAuditLog(`Stage3 RAG 자동기록 적용: ${stage3RagAutoFill.changedFields.join(", ") || "변경 없음"}`);
+  }, [appendAuditLog, detail.header.assigneeName, stage3RagAutoFill]);
+
+  const ignoreStage3RagAutoFill = useCallback(() => {
+    if (!stage3RagAutoFill) return;
+    const now = nowIso();
+    setStage3RagAutoFill((prev) => (prev ? { ...prev, ignored: true, applied: false } : prev));
+    appendTimeline({
+      type: "STAGE3_ACTION_DECISION",
+      at: now,
+      by: detail.header.assigneeName,
+      actionId: "RAG_AUTOFILL",
+      decision: "HOLD",
+      note: "자동 채움 무시",
+    });
+    appendAuditLog("Stage3 RAG 자동기록 무시");
+  }, [appendAuditLog, detail.header.assigneeName, stage3RagAutoFill]);
+
+  const runStage3BookingBundle = useCallback(() => {
+    if (!isStage3Mode) return;
+    if (!stage3DiffDraft.bookingAt) {
+      toast.error("예약 일시를 먼저 입력해 주세요.");
+      return;
+    }
+
+    const now = nowIso();
+    handleStage3DiffPathAction("SCHEDULE");
+    setStage3DiffDraft((prev) => ({ ...prev, bookingConfirmed: true }));
+    setStage3Step2Flow((prev) => ({
+      ...prev,
+      bookingConfirmed: true,
+      messageSent: true,
+      calendarSynced: true,
+    }));
+
+    appendTimeline({
+      type: "SMS_SENT",
+      at: now,
+      templateId: "S3_BOOKING_CONFIRM",
+      status: "DELIVERED",
+      by: detail.header.assigneeName,
+    });
+    appendTimeline({
+      type: "MESSAGE_SENT",
+      at: now,
+      by: detail.header.assigneeName,
+      summary: `예약 확인 문자 발송 · ${formatDateTime(stage3DiffDraft.bookingAt)}`,
+    });
+    const calendarKey = `S3-CAL-${Date.now()}`;
+    appendTimeline({
+      type: "CALENDAR_SYNC",
+      at: now,
+      status: "SUCCESS",
+      eventType: "FOLLOWUP",
+      title: `Stage3 감별검사 예약 (${detail.header.caseId})`,
+      scheduledAt: stage3DiffDraft.bookingAt,
+      idempotencyKey: calendarKey,
+      by: detail.header.assigneeName,
+    });
+    appendTimeline({
+      type: "CAL_EVENT_CREATED",
+      at: now,
+      by: detail.header.assigneeName,
+      scheduledAt: stage3DiffDraft.bookingAt,
+      summary: `${stage3DiffDraft.preferredHospital || stage3DiffDraft.orgName} · ${formatDateTime(stage3DiffDraft.bookingAt)}`,
+    });
+
+    appendAuditLog(
+      `Stage3 예약 확정 패키지 실행: ${stage3DiffDraft.preferredHospital || stage3DiffDraft.orgName} · ${formatDateTime(stage3DiffDraft.bookingAt)} · 문자/캘린더 기록 완료`,
+    );
+    toast.success("예약/문자/캘린더 패키지가 기록되었습니다.");
+  }, [
+    appendAuditLog,
+    detail.header.assigneeName,
+    detail.header.caseId,
+    handleStage3DiffPathAction,
+    isStage3Mode,
+    stage3DiffDraft.bookingAt,
+    stage3DiffDraft.orgName,
+    stage3DiffDraft.preferredHospital,
+  ]);
 
   const toggleStage3ProgramSelection = (programId: string, forceSelected?: boolean) => {
     if (!isStage3Mode) return;
@@ -3973,6 +5022,22 @@ export function Stage1OpsDetail({
 
   const runStage3PrimaryAction = useCallback(() => {
     if (!isStage3Mode) return;
+    if (isStage2OpsView) {
+      if (!detail.stage3?.riskReviewedAt) {
+        handleStage3RiskReview({ summary: "STEP1 검토 완료" });
+        return;
+      }
+      if (detail.stage3.diffPathStatus === "NONE" || detail.stage3.diffPathStatus === "RECOMMENDED") {
+        handleStage3DiffPathAction("SCHEDULE");
+        return;
+      }
+      if (detail.stage3.reevalStatus !== "SCHEDULED" && detail.stage3.reevalStatus !== "COMPLETED") {
+        handleStage3ReevalAction("SCHEDULE");
+        return;
+      }
+      setStage3TaskModalStep("FOLLOW_UP");
+      return;
+    }
     const next = detail.stage3?.recommendedActions.find((action) => action.decision === "PENDING");
     if (next) {
       applyStage3ActionDecision(next.id, "APPROVED");
@@ -4011,8 +5076,11 @@ export function Stage1OpsDetail({
     detail.stage3,
     handleStage3DiffPathAction,
     handleStage3RiskReview,
+    handleStage3ReevalAction,
     isStage3Mode,
+    isStage2OpsView,
     setStage3NextTrackingAt,
+    setStage3TaskModalStep,
     toggleStage3ProgramSelection,
     updateStage3ProgramExecution,
   ]);
@@ -4071,7 +5139,7 @@ export function Stage1OpsDetail({
 
     if (followUpDecisionDraft.route !== "HOLD_TRACKING" && !followUpDecisionDraft.scheduledAt) {
       toast.error("연계/예약 일정은 필수입니다.");
-      return;
+      return false;
     }
 
     const reservation: ReservationInfo | undefined =
@@ -4110,6 +5178,7 @@ export function Stage1OpsDetail({
 
     appendAuditLog(`후속 결정 저장: ${routeMeta.label}`);
     toast.success("후속 결정이 저장되었습니다.");
+    return true;
   };
 
   const confirmReasonAction = () => {
@@ -4371,28 +5440,91 @@ export function Stage1OpsDetail({
     setStrategyOverrideReason("");
   };
 
-  const openNoResponsePlanModal = () => {
+  const markResponseDraftDirty = useCallback(() => {
+    setResponseDraftDirty(true);
+    if (responseValidationError) {
+      setResponseValidationError(null);
+    }
     clearSubmitError();
+  }, [clearSubmitError, responseValidationError]);
+
+  const handleSelectOutcomeCode = useCallback(
+    (code: OutcomeCode | null) => {
+      markResponseDraftDirty();
+      setSelectedOutcomeCode(code);
+    },
+    [markResponseDraftDirty],
+  );
+
+  const handleOutcomeNoteChange = useCallback(
+    (note: string) => {
+      markResponseDraftDirty();
+      setOutcomeNote(note);
+    },
+    [markResponseDraftDirty],
+  );
+
+  const handleRejectReasonDraftChange = useCallback(
+    (next: RejectReasonDraft) => {
+      markResponseDraftDirty();
+      setRejectReasonDraft(next);
+    },
+    [markResponseDraftDirty],
+  );
+
+  const handleNoResponsePlanDraftChange = useCallback(
+    (next: NoResponsePlanDraft) => {
+      markResponseDraftDirty();
+      setNoResponsePlanDraft(next);
+    },
+    [markResponseDraftDirty],
+  );
+
+  const handleToggleResponseReasonTag = useCallback(
+    (tag: ResponseReasonTag) => {
+      markResponseDraftDirty();
+      setResponseReasonTags((prev) => (prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag]));
+    },
+    [markResponseDraftDirty],
+  );
+
+  const resetResponseTriageDraft = useCallback(() => {
     const shouldRecommendL3 =
       detail.header.sla.level !== "OK" || detail.contactExecution.retryCount >= 2 || computePriorityValue(caseRecord) >= 85;
+    setSelectedOutcomeCode(null);
+    setOutcomeNote("");
+    setRejectReasonDraft({
+      code: null,
+      level: "TEMP",
+      detail: "",
+      createFollowupEvent: false,
+      followupAt: withHoursFromNow(168),
+    });
     setNoResponsePlanDraft({
       strategy: null,
+      channel: "CALL",
+      assigneeId: detail.header.assigneeName || STAGE1_PANEL_OPERATOR,
       nextContactAt: withHoursFromNow(24),
       applyL3: shouldRecommendL3,
     });
-    setNoResponsePlanModalOpen(true);
-  };
+    setResponseReasonTags([]);
+    setResponseValidationError(null);
+    clearSubmitError();
+    setResponseDraftDirty(false);
+  }, [caseRecord, clearSubmitError, detail.contactExecution.retryCount, detail.header.assigneeName, detail.header.sla.level]);
 
   const persistOutcomeTriage = async ({
     code,
     note,
     reject,
     noResponse,
+    reasonTags = [],
   }: {
     code: OutcomeCode;
     note: string;
     reject?: RejectReasonDraft;
     noResponse?: NoResponsePlanDraft;
+    reasonTags?: ResponseReasonTag[];
   }) => {
     const normalizedNote = note.trim();
     const nextContactAt = noResponse?.nextContactAt;
@@ -4400,6 +5532,7 @@ export function Stage1OpsDetail({
     const payload: OutcomeSavePayload = {
       outcomeType: OUTCOME_TO_API_TYPE[code],
       memo: normalizedNote || undefined,
+      reasonTags: reasonTags.length > 0 ? reasonTags : undefined,
     };
 
     if (code === "REFUSE" && reject?.code) {
@@ -4419,6 +5552,8 @@ export function Stage1OpsDetail({
         strategy: noResponse.strategy,
         nextContactAt,
         escalateLevel: noResponse.applyL3 ? "L3" : undefined,
+        channel: noResponse.channel,
+        assigneeId: noResponse.assigneeId || undefined,
       };
     }
 
@@ -4486,6 +5621,7 @@ export function Stage1OpsDetail({
       type: "OUTCOME_RECORDED",
       at: now,
       outcomeCode: code,
+      reasonTags: reasonTags.length > 0 ? reasonTags : undefined,
       note: normalizedNote || undefined,
       rejectCode: payload.reject?.code,
       rejectLevel: payload.reject?.level,
@@ -4494,7 +5630,17 @@ export function Stage1OpsDetail({
       outcomeId: submitResult.outcome.outcomeId,
       by: detail.header.assigneeName,
     });
-    appendAuditLog(`응답 결과 기록: ${OUTCOME_LABELS[code].label}${normalizedNote ? ` (${normalizedNote.slice(0, 60)})` : ""}`);
+    const reasonTagText =
+      reasonTags.length > 0
+        ? ` · 보조사유: ${reasonTags.map((tag) => RESPONSE_REASON_TAG_META[tag].label).join(", ")}`
+        : "";
+    appendAuditLog(`응답 결과 기록: ${OUTCOME_LABELS[code].label}${reasonTagText}${normalizedNote ? ` (${normalizedNote.slice(0, 60)})` : ""}`);
+    appendTimeline({
+      type: "MESSAGE_SENT",
+      at: now,
+      summary: `${isStage2Mode ? "STAGE2_RESPONSE_RECORDED" : "STAGE1_RESPONSE_RECORDED"} · ${OUTCOME_LABELS[code].label}`,
+      by: detail.header.assigneeName,
+    });
 
     const linkedEventAt =
       submitResult.outcome.nextAction?.events?.[0]?.startAt ??
@@ -4566,61 +5712,91 @@ export function Stage1OpsDetail({
       setHandoffMemoOpen(true);
     }
 
-    setActiveStage1Modal(null);
-    setSelectedOutcomeCode(null);
-    setOutcomeNote("");
-    setNoResponsePlanModalOpen(false);
+    if (!isStage3Mode && activeStage1Modal === "RESPONSE_HANDLING") {
+      setActiveStage1Modal("FOLLOW_UP");
+      setHandoffMemoOpen(true);
+    } else {
+      setActiveStage1Modal(null);
+    }
+    resetResponseTriageDraft();
+    setResponseLastSavedAt(now);
     return true;
   };
 
   /* ── Outcome Triage 기록 ── */
   const confirmOutcomeTriage = async () => {
-    if (!selectedOutcomeCode || isOutcomeSaving) return;
+    if (isOutcomeSaving) return;
+    if (!selectedOutcomeCode) {
+      const message = "결과 유형을 선택하세요.";
+      setResponseValidationError(message);
+      toast.error(message);
+      return;
+    }
     if (selectedOutcomeCode === "REFUSE") {
       if (!rejectReasonDraft.code) {
-        toast.error("거부 코드를 선택해야 저장할 수 있습니다.");
+        const message = "거부 코드를 선택해야 저장할 수 있습니다.";
+        setResponseValidationError(message);
+        toast.error(message);
         return;
       }
       if (rejectReasonDraft.code === "R7_OTHER" && !rejectReasonDraft.detail.trim()) {
-        toast.error("기타 사유를 입력해야 저장할 수 있습니다.");
+        const message = "기타 사유를 입력해야 저장할 수 있습니다.";
+        setResponseValidationError(message);
+        toast.error(message);
         return;
       }
       if (rejectReasonDraft.createFollowupEvent && !rejectReasonDraft.followupAt) {
-        toast.error("후속 일정을 지정해 주세요.");
+        const message = "후속 일정을 지정해 주세요.";
+        setResponseValidationError(message);
+        toast.error(message);
         return;
       }
+      setResponseValidationError(null);
       await persistOutcomeTriage({
         code: "REFUSE",
         note: outcomeNote,
         reject: rejectReasonDraft,
+        reasonTags: responseReasonTags,
       });
       return;
     }
     if (selectedOutcomeCode === "NO_RESPONSE") {
-      openNoResponsePlanModal();
+      const noResponseStrategy = noResponsePlanDraft.strategy ?? NO_RESPONSE_CHANNEL_STRATEGY[noResponsePlanDraft.channel];
+      if (!noResponseStrategy) {
+        const message = "무응답 처리 시 다음 접촉 채널을 선택해야 합니다.";
+        setResponseValidationError(message);
+        toast.error(message);
+        return;
+      }
+      if (!noResponsePlanDraft.nextContactAt) {
+        const message = "무응답 처리 시 다음 접촉 일시를 지정해야 합니다.";
+        setResponseValidationError(message);
+        toast.error(message);
+        return;
+      }
+      if (!noResponsePlanDraft.assigneeId.trim()) {
+        const message = "무응답 처리 담당자를 지정해야 저장할 수 있습니다.";
+        setResponseValidationError(message);
+        toast.error(message);
+        return;
+      }
+      setResponseValidationError(null);
+      await persistOutcomeTriage({
+        code: "NO_RESPONSE",
+        note: outcomeNote,
+        noResponse: {
+          ...noResponsePlanDraft,
+          strategy: noResponseStrategy,
+        },
+        reasonTags: responseReasonTags,
+      });
       return;
     }
+    setResponseValidationError(null);
     await persistOutcomeTriage({
       code: selectedOutcomeCode,
       note: outcomeNote,
-    });
-  };
-
-  const confirmNoResponseOutcome = async () => {
-    if (isOutcomeSaving) return;
-    if (!selectedOutcomeCode || selectedOutcomeCode !== "NO_RESPONSE") return;
-    if (!noResponsePlanDraft.strategy) {
-      toast.error("무응답 재접촉 전략을 선택해야 저장할 수 있습니다.");
-      return;
-    }
-    if (!noResponsePlanDraft.nextContactAt) {
-      toast.error("다음 접촉 일시를 입력해야 저장할 수 있습니다.");
-      return;
-    }
-    await persistOutcomeTriage({
-      code: "NO_RESPONSE",
-      note: outcomeNote,
-      noResponse: noResponsePlanDraft,
+      reasonTags: responseReasonTags,
     });
   };
 
@@ -4632,7 +5808,7 @@ export function Stage1OpsDetail({
   const missingCount = detail.contactFlowSteps.filter((step) => step.status === "MISSING").length;
   const warningCount = detail.contactFlowSteps.filter((step) => step.status === "WARNING").length;
   const preTriageReady = Boolean(detail.preTriageInput) && detail.header.dataQuality.level !== "EXCLUDE";
-  const stage1FlowCards = useStage1Flow(detail, mode);
+  const stage1FlowCards = useStage1Flow(detail, mode, isStage2OpsView);
   const stage3RiskSummary = detail.stage3?.transitionRisk;
   const stage3Programs = detail.stage3?.programs ?? [];
   const stage3FilteredPrograms = useMemo(() => {
@@ -4668,12 +5844,14 @@ export function Stage1OpsDetail({
     [stage3ProgramDrawerId, stage3Programs]
   );
   const stage3TaskOrder: Stage1FlowCardId[] = ["PRECHECK", "CONTACT_EXECUTION", "RESPONSE_HANDLING", "FOLLOW_UP"];
+  const stage1TaskOrder: Stage1FlowCardId[] = stage3TaskOrder;
+  const stage1TaskStepIndex = activeStage1Modal ? stage1TaskOrder.indexOf(activeStage1Modal) : -1;
+  const stage1TaskCurrentCard = activeStage1Modal ? stage1FlowCards.find((card) => card.id === activeStage1Modal) ?? null : null;
   const stage3TaskStepIndex = stage3TaskModalStep ? stage3TaskOrder.indexOf(stage3TaskModalStep) : -1;
   const stage3TaskCurrentCard = stage3TaskModalStep ? stage1FlowCards.find((card) => card.id === stage3TaskModalStep) ?? null : null;
-  const stage3CaseResultLabel: "정상" | "MCI" | "치매" =
-    caseRecord?.risk === "고" ? "치매" : caseRecord?.risk === "중" ? "MCI" : "정상";
-  const stage3MciSeverity: "양호" | "중등" | "중증" | undefined =
-    caseRecord?.risk === "고" ? "중증" : caseRecord?.risk === "중" ? "중등" : "양호";
+  const stage3CaseResultLabel: "정상" | "MCI" | "치매" = "MCI";
+  const stage3MciSeverity: "양호" | "적정" | "위험" | undefined =
+    caseRecord?.risk === "고" ? "위험" : caseRecord?.risk === "저" ? "양호" : "적정";
   const stage3FollowUpLocked = stage1FlowCards.find((card) => card.id === "FOLLOW_UP")?.status === "BLOCKED";
   const linkageLockedOnBoard = isStage3Mode ? stage3FollowUpLocked : !isStage2Mode;
   const agentGateStatus = useMemo(() => resolveAgentGateStatus(detail.policyGates), [detail.policyGates]);
@@ -4681,10 +5859,74 @@ export function Stage1OpsDetail({
   const agentRetryIntervalHours = detail.contactPlan?.maxRetryPolicy.intervalHours ?? 24;
   const agentMaxRetries = detail.contactPlan?.maxRetryPolicy.maxRetries ?? 2;
   const agentTemplateVersion = detail.contactPlan?.templateId ?? (isStage2Mode ? "S2_CONTACT_BASE" : isStage3Mode ? "S3_CONTACT_BASE" : "S1_CONTACT_BASE");
+  const stage2CompletedCount = countStage2CompletedTests(stage2Diagnosis.tests);
+  const stage2CompletionPct = Math.round((stage2CompletedCount / 4) * 100);
+  const stage2CurrentLabel: Stage2ClassLabel = stage2Diagnosis.classification?.label ?? stage2ClassificationDraft;
+  const stage2CurrentMciStage = stage2Diagnosis.classification?.mciStage;
+  const stage2Stage3EntryNeeded = stage2NeedsStage3(stage2CurrentLabel);
+  const stage2TargetDelayDays = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(stage2TargetAt).getTime()) / (1000 * 60 * 60 * 24)),
+  );
+  const stage2MissingRequirements = [
+    typeof stage2Diagnosis.tests.mmse === "number" ? null : "MMSE 점수 미입력",
+    typeof stage2Diagnosis.tests.cdr === "number" ? null : "CDR/GDS 점수 미입력",
+    stage2Diagnosis.tests.neuroCognitiveType ? null : "신경인지검사 유형 미선택",
+    stage2Diagnosis.tests.specialist ? null : "전문의 소견 미확인",
+    stage2RationaleDraft.trim().length > 0 ? null : "확정 근거 1줄 미입력",
+  ].filter(Boolean) as string[];
+  const stage2ResultMissingCount = [
+    typeof stage2Diagnosis.tests.mmse === "number",
+    typeof stage2Diagnosis.tests.cdr === "number",
+    Boolean(stage2Diagnosis.tests.neuroCognitiveType),
+    Boolean(stage2Diagnosis.tests.specialist),
+  ].filter((done) => !done).length;
+  const stage2BookingWaitingCount =
+    Number(detail.linkageStatus !== "BOOKING_DONE") + Number(stage2Diagnosis.status !== "COMPLETED");
+  const stage2ClassificationConfirmed = Boolean(stage2ConfirmedAt);
+  const stage2CanConfirm = stage2MissingRequirements.length === 0;
+  const stage2RequiredDataPct = Math.max(0, Math.round(((5 - stage2MissingRequirements.length) / 5) * 100));
+  const stage2NextActionLabel =
+    stage2Diagnosis.status === "NOT_STARTED"
+      ? "검사 결과 입력"
+      : stage2Diagnosis.status === "IN_PROGRESS"
+        ? "누락 검사 보완"
+        : stage2CanConfirm
+          ? "분류 확정"
+          : "다음 단계 결정";
+  const stage2DraftMciStage = stage2ClassificationDraft === "MCI" ? inferStage2MciStage(caseRecord) : undefined;
+  const stage2DraftProbs = inferStage2Probs(stage2ClassificationDraft, stage2DraftMciStage);
+  const stage2ResolvedLabel: Stage2ClassLabel = stage2Diagnosis.classification?.label ?? stage2ClassificationDraft;
+  const stage2ResolvedMciStage: Stage2MciStageLabel | undefined =
+    stage2ResolvedLabel === "MCI" ? stage2Diagnosis.classification?.mciStage ?? stage2DraftMciStage : undefined;
+  const stage2ResolvedProbs =
+    stage2Diagnosis.classification?.probs ?? inferStage2Probs(stage2ResolvedLabel, stage2ResolvedMciStage);
+
+  const confirmDiscardResponseDraft = useCallback(() => {
+    if (isOutcomeSaving) return false;
+    if (activeStage1Modal !== "RESPONSE_HANDLING" || !responseDraftDirty) return true;
+    return window.confirm("저장하지 않고 나가면 입력 내용이 사라집니다. 계속할까요?");
+  }, [activeStage1Modal, isOutcomeSaving, responseDraftDirty]);
+
+  const setStage1ModalStep = useCallback(
+    (target: Stage1FlowCardId) => {
+      if (isOutcomeSaving) return false;
+      if (activeStage1Modal === "RESPONSE_HANDLING" && target !== "RESPONSE_HANDLING" && !confirmDiscardResponseDraft()) {
+        return false;
+      }
+      setActiveStage1Modal(target);
+      if (target === "FOLLOW_UP") {
+        setHandoffMemoOpen(true);
+      }
+      return true;
+    },
+    [activeStage1Modal, confirmDiscardResponseDraft, isOutcomeSaving],
+  );
 
   const closeStage1Modal = useCallback(() => {
+    if (!confirmDiscardResponseDraft()) return;
     setActiveStage1Modal(null);
-  }, []);
+  }, [confirmDiscardResponseDraft]);
   const closeStage3TaskModal = useCallback(() => {
     setStage3TaskModalStep(null);
   }, []);
@@ -5092,12 +6334,9 @@ export function Stage1OpsDetail({
         return;
       }
 
-      setActiveStage1Modal(modal);
-      if (modal === "FOLLOW_UP") {
-        setHandoffMemoOpen(true);
-      }
+      setStage1ModalStep(modal);
     },
-    [isStage3Mode, stage1FlowCards]
+    [isStage3Mode, setStage1ModalStep, stage1FlowCards]
   );
 
   const moveStage3TaskStep = useCallback(
@@ -5116,13 +6355,85 @@ export function Stage1OpsDetail({
     [stage1FlowCards, stage3TaskModalStep, stage3TaskOrder],
   );
 
+  const moveStage1TaskStep = useCallback(
+    (offset: -1 | 1) => {
+      if (!activeStage1Modal) return;
+      const currentIndex = stage1TaskOrder.indexOf(activeStage1Modal);
+      const target = stage1TaskOrder[currentIndex + offset];
+      if (!target) return;
+      const lockReason = getFlowCardLockReason(stage1FlowCards, target);
+      if (lockReason) {
+        toast.error(lockReason);
+        return;
+      }
+      setStage1ModalStep(target);
+    },
+    [activeStage1Modal, setStage1ModalStep, stage1FlowCards, stage1TaskOrder],
+  );
+
   const handleStage3TaskComplete = useCallback(() => {
     if (!stage3TaskModalStep || !detail.stage3) return;
     const now = nowIso();
 
     if (stage3TaskModalStep === "PRECHECK") {
-      if (!stage3ReviewDraft.strategyMemo.trim()) {
-        toast.error("전략 메모를 입력해야 완료할 수 있습니다.");
+      if (isStage2OpsView) {
+        const requiredCount = Object.values(stage2PlanRequiredDraft).filter(Boolean).length;
+        if (!stage3ReviewDraft.consentConfirmed) {
+          toast.error("Stage1 결과/동의 정보 확인 체크가 필요합니다.");
+          return;
+        }
+        if (requiredCount < 4) {
+          toast.error("필수 검사 4항목을 모두 계획에 포함해야 합니다.");
+          return;
+        }
+        if (stage3ReviewDraft.strategyMemo.trim().length < 20) {
+          toast.error("전략 메모를 20자 이상 입력해야 완료할 수 있습니다.");
+          return;
+        }
+        setDetail((prev) => {
+          if (!prev.stage3) return prev;
+          const baselineStrategy = prev.header.effectiveStrategy ?? prev.preTriageResult?.strategy ?? "HUMAN_FIRST";
+          return {
+            ...prev,
+            preTriageResult: prev.preTriageResult ?? {
+              strategy: baselineStrategy,
+              triggers: ["STAGE2_PLAN_BASELINE_CONFIRMED"],
+              policyNote: "Stage2 진입 리뷰에서 검사 수행 기준선이 확인되었습니다.",
+              confidence: "RULE",
+            },
+            policyGates: prev.policyGates.map((gate) =>
+              gate.key === "CONSENT_OK" || gate.key === "PHONE_VERIFIED" || gate.key === "CONTACTABLE_TIME_OK"
+                ? { ...gate, status: "PASS", failReason: undefined }
+                : gate,
+            ),
+            stage3: {
+              ...prev.stage3,
+              riskReviewedAt: now,
+            },
+          };
+        });
+        const summary = `경로 ${stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "협약병원 의뢰" : "센터 직접 수행"} · 기관 ${stage2HospitalDraft} · 목표일 ${formatDateTime(stage2ScheduleDraft)}`;
+        appendTimeline({
+          type: "STAGE2_PLAN_CONFIRMED",
+          at: now,
+          by: detail.header.assigneeName,
+          summary,
+        });
+        appendAuditLog(`STAGE2_PLAN_CONFIRMED: ${summary}`);
+        toast.success("STEP1 검사 계획이 확정되었습니다.");
+        moveStage3TaskStep(1);
+        return;
+      }
+      if (!stage3ReviewDraft.diffDecisionSet) {
+        toast.error(isStage2OpsView ? "Stage2 진입 필요 여부를 선택해야 완료할 수 있습니다." : "감별검사 필요 여부를 선택해야 완료할 수 있습니다.");
+        return;
+      }
+      if (!stage3ReviewDraft.consentConfirmed) {
+        toast.error("상담 동의 확인 체크가 필요합니다.");
+        return;
+      }
+      if (stage3ReviewDraft.strategyMemo.trim().length < 20) {
+        toast.error("전략 메모를 20자 이상 입력해야 완료할 수 있습니다.");
         return;
       }
       setDetail((prev) => {
@@ -5164,10 +6475,11 @@ export function Stage1OpsDetail({
         };
       });
       const checklistSummary = [
-        stage3ReviewDraft.diffNeeded ? "감별경로 필요" : null,
+        stage3ReviewDraft.diffNeeded ? (isStage2OpsView ? "Stage2 진입 필요" : "감별경로 필요") : isStage2OpsView ? "Stage2 진입 보류" : "감별경로 보류",
         stage3ReviewDraft.caregiverNeeded ? "보호자 협력 필요" : null,
         stage3ReviewDraft.sensitiveHistory ? "민감 이력 주의" : null,
         stage3ReviewDraft.resultLinkedChecked ? "검사결과 연결 확인" : null,
+        stage3ReviewDraft.consentConfirmed ? "상담 동의 확인" : null,
       ]
         .filter(Boolean)
         .join(", ");
@@ -5178,49 +6490,146 @@ export function Stage1OpsDetail({
         by: detail.header.assigneeName,
         summary: reviewSummary,
       });
-      appendAuditLog(`Stage3 케이스 리뷰 완료: ${checklistSummary || "체크 없음"} · ${stage3ReviewDraft.strategyMemo}`);
+      appendAuditLog(`${isStage2OpsView ? "Stage2 진입 근거 검토" : "Stage3 케이스 리뷰"} 완료: ${checklistSummary || "체크 없음"} · ${stage3ReviewDraft.strategyMemo}`);
       setStage3LatestRiskReview({
         at: now,
         memo: stage3ReviewDraft.strategyMemo,
-        nextAction: "RECOMMEND_DIFF",
+        nextAction: isStage2OpsView ? "UPDATE_PLAN" : "RECOMMEND_DIFF",
       });
-      toast.success("STEP1 리뷰가 저장되었습니다.");
+      toast.success(isStage2OpsView ? "STEP1 근거 검토가 저장되었습니다." : "STEP1 리뷰가 저장되었습니다.");
       moveStage3TaskStep(1);
       return;
     }
 
     if (stage3TaskModalStep === "CONTACT_EXECUTION") {
+      if (isStage2OpsView) {
+        if (stage2ResultMissingCount > 0) {
+          toast.error("필수 검사 입력 누락을 먼저 해소해 주세요.");
+          return;
+        }
+        setDetail((prev) => {
+          if (!prev.stage3) return prev;
+          return {
+            ...prev,
+            stage3: {
+              ...prev.stage3,
+              diffPathStatus: "SCHEDULED",
+            },
+          };
+        });
+        saveStage2TestInputs();
+        const summary = `필수 검사 입력 완료 (${countStage2CompletedTests(stage2Diagnosis.tests)}/4)`;
+        appendTimeline({
+          type: "STAGE2_RESULTS_RECORDED",
+          at: now,
+          by: detail.header.assigneeName,
+          summary,
+        });
+        appendAuditLog(`STAGE2_RESULTS_RECORDED: ${summary}`);
+        toast.success("STEP2 검사 결과 입력이 완료되었습니다.");
+        moveStage3TaskStep(1);
+        return;
+      }
       if (stage3PendingApprovalCount > 0) {
         toast.error("승인 대기 권고를 먼저 처리해 주세요.");
         return;
       }
       if (!stage3DiffReadyForRisk) {
-        toast.error("감별경로를 예약 또는 완료 상태로 만들어야 STEP3로 이동할 수 있습니다.");
+        toast.error(isStage2OpsView ? "신경심리검사 경로를 예약 또는 결과수신 상태로 만들어야 STEP3로 이동할 수 있습니다." : "감별경로를 예약 또는 완료 상태로 만들어야 STEP3로 이동할 수 있습니다.");
         return;
       }
-      appendAuditLog(`감별경로 단계 완료 확인: ${detail.stage3.diffPathStatus}`);
-      toast.success("STEP2 완료 처리되었습니다.");
+      appendAuditLog(`${isStage2OpsView ? "신경심리검사" : "감별경로"} 단계 완료 확인: ${detail.stage3.diffPathStatus}`);
+      toast.success(isStage2OpsView ? "STEP2 신경심리검사 단계 완료 처리되었습니다." : "STEP2 완료 처리되었습니다.");
       moveStage3TaskStep(1);
       return;
     }
 
     if (stage3TaskModalStep === "RESPONSE_HANDLING") {
+      if (isStage2OpsView) {
+        if (!stage2CanConfirm) {
+          toast.error("분류 확정 요건이 부족합니다.");
+          return;
+        }
+        setDetail((prev) => {
+          if (!prev.stage3) return prev;
+          return {
+            ...prev,
+            stage3: {
+              ...prev.stage3,
+              reevalStatus: "SCHEDULED",
+            },
+          };
+        });
+        confirmStage2Classification();
+        const summary = `분류 확정 ${stage2ClassificationDraft}${stage2ClassificationDraft === "MCI" ? `(${stage2DraftMciStage ?? "-"})` : ""}`;
+        appendTimeline({
+          type: "STAGE2_CLASS_CONFIRMED",
+          at: now,
+          by: detail.header.assigneeName,
+          summary,
+        });
+        appendAuditLog(`STAGE2_CLASS_CONFIRMED: ${summary}`);
+        toast.success("STEP3 분류 확정이 완료되었습니다.");
+        moveStage3TaskStep(1);
+        return;
+      }
       if (!stage3DiffReadyForRisk) {
-        toast.error("감별경로 예약/완료 후 위험 추적 기록을 완료해 주세요.");
+        toast.error(isStage2OpsView ? "STEP2 완료 후 임상평가 기록을 완료해 주세요." : "감별경로 예약/완료 후 위험 추적 기록을 완료해 주세요.");
         return;
       }
       if (!stage3RiskReviewDraft.memo.trim()) {
-        toast.error("추세 검토 메모를 입력해야 완료할 수 있습니다.");
+        toast.error(isStage2OpsView ? "임상평가(MMSE/CDR) 결과 메모를 입력해야 완료할 수 있습니다." : "추세 검토 메모를 입력해야 완료할 수 있습니다.");
         return;
       }
-      const summary = `추세 검토 메모: ${stage3RiskReviewDraft.memo.slice(0, 120)} · 다음 액션: ${STAGE3_RISK_NEXT_ACTION_LABELS[stage3RiskReviewDraft.nextAction]}`;
+      const summary = isStage2OpsView
+        ? `임상평가 결과 메모: ${stage3RiskReviewDraft.memo.slice(0, 120)}`
+        : `추세 검토 메모: ${stage3RiskReviewDraft.memo.slice(0, 120)} · 다음 액션: ${STAGE3_RISK_NEXT_ACTION_LABELS[stage3RiskReviewDraft.nextAction]}`;
       handleStage3RiskReview({
         summary,
-        nextAction: stage3RiskReviewDraft.nextAction,
+        nextAction: isStage2OpsView ? "UPDATE_PLAN" : stage3RiskReviewDraft.nextAction,
         silentToast: true,
       });
-      toast.success("STEP3 위험 추적 검토가 저장되었습니다.");
+      toast.success(isStage2OpsView ? "STEP3 임상평가 기록이 저장되었습니다." : "STEP3 위험 추적 검토가 저장되었습니다.");
       moveStage3TaskStep(1);
+      return;
+    }
+
+    if (isStage2OpsView) {
+      if (!stage2Diagnosis.nextStep) {
+        toast.error("STEP4에서 다음 단계를 먼저 선택해 주세요.");
+        return;
+      }
+      setDetail((prev) => {
+        if (!prev.stage3) return prev;
+        return {
+          ...prev,
+          stage3: {
+            ...prev.stage3,
+            planUpdatedAt: now,
+            headerMeta: {
+              ...prev.stage3.headerMeta,
+              planStatus: "ACTIVE",
+              opsStatus: stage2Diagnosis.nextStep === "FOLLOWUP_2Y" ? "TRACKING" : "LINKAGE_PENDING",
+              nextTrackingContactAt: stage3TrackingPlanDraft.nextTrackingAt ?? prev.stage3.headerMeta.nextTrackingContactAt,
+            },
+          },
+        };
+      });
+      const nextStepSummary =
+        stage2Diagnosis.nextStep === "FOLLOWUP_2Y"
+          ? "정상 추적(2년 후 선별)"
+          : stage2Diagnosis.nextStep === "STAGE3"
+            ? "MCI 케이스 Stage3 진입"
+            : "치매 감별검사 경로";
+      appendTimeline({
+        type: "STAGE2_NEXT_STEP_SET",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: nextStepSummary,
+      });
+      appendAuditLog(`STAGE2_NEXT_STEP_SET: ${nextStepSummary}`);
+      toast.success("STEP4 다음 단계 결정이 완료되었습니다.");
+      closeStage3TaskModal();
       return;
     }
 
@@ -5277,6 +6686,8 @@ export function Stage1OpsDetail({
     stage3HasProgramExecution,
     stage3PendingApprovalCount,
     stage3ReviewDraft.caregiverNeeded,
+    stage3ReviewDraft.consentConfirmed,
+    stage3ReviewDraft.diffDecisionSet,
     stage3ReviewDraft.diffNeeded,
     stage3ReviewDraft.priority,
     stage3ReviewDraft.resultLinkedChecked,
@@ -5289,6 +6700,102 @@ export function Stage1OpsDetail({
     stage3TrackingPlanDraft.reminderDaysBefore,
     stage3TrackingPlanDraft.reminderTime,
     stage3TrackingPlanDraft.retryCount,
+    stage2CanConfirm,
+    stage2ClassificationDraft,
+    stage2Diagnosis,
+    stage2DraftMciStage,
+    stage2HospitalDraft,
+    stage2PlanRequiredDraft,
+    stage2PlanRouteDraft,
+    stage2ResultMissingCount,
+    stage2ScheduleDraft,
+    confirmStage2Classification,
+    isStage2OpsView,
+    saveStage2TestInputs,
+  ]);
+
+  const handleStage1TaskComplete = useCallback(async () => {
+    if (!activeStage1Modal) return;
+
+    const now = nowIso();
+    if (activeStage1Modal === "PRECHECK") {
+      const unresolvedRequiredGates = detail.policyGates.filter(
+        (gate) => gate.key !== "GUARDIAN_OPTIONAL" && gate.status !== "PASS",
+      );
+      if (unresolvedRequiredGates.length > 0) {
+        toast.error("필수 사전 조건이 남아 있어 완료 처리할 수 없습니다.");
+        return;
+      }
+
+      appendTimeline({
+        type: "MESSAGE_SENT",
+        at: now,
+        summary: "STAGE1_GATE_DONE · 사전 조건 확인 완료",
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog("STAGE1_GATE_DONE: 사전 조건 확인 완료");
+      toast.success("STEP1 완료 처리되었습니다.");
+      moveStage1TaskStep(1);
+      return;
+    }
+
+    if (activeStage1Modal === "CONTACT_EXECUTION") {
+      if (detail.contactExecution.status === "NOT_STARTED") {
+        toast.error("접촉 실행 기록이 없어 완료 처리할 수 없습니다.");
+        return;
+      }
+      appendTimeline({
+        type: "MESSAGE_SENT",
+        at: now,
+        summary: "STAGE1_CONTACT_ATTEMPT · 접촉 실행 완료",
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog("STAGE1_CONTACT_ATTEMPT: 접촉 실행 완료");
+      toast.success("STEP2 완료 처리되었습니다.");
+      moveStage1TaskStep(1);
+      return;
+    }
+
+    if (activeStage1Modal === "RESPONSE_HANDLING") {
+      const hasResponseRecorded = Boolean(detail.contactExecution.lastOutcomeCode || detail.contactExecution.lastResponseAt);
+      if (!hasResponseRecorded) {
+        toast.error("응답 결과를 먼저 저장해야 완료 처리할 수 있습니다.");
+        return;
+      }
+      appendTimeline({
+        type: "MESSAGE_SENT",
+        at: now,
+        summary: `STAGE1_RESPONSE_RECORDED · ${detail.contactExecution.lastOutcomeCode ? OUTCOME_LABELS[detail.contactExecution.lastOutcomeCode].label : "응답 결과"} 기록`,
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog("STAGE1_RESPONSE_RECORDED: 응답 결과 저장 완료");
+      toast.success("STEP3 완료 처리되었습니다.");
+      moveStage1TaskStep(1);
+      return;
+    }
+
+    const saved = handleSaveFollowUpDecision();
+    if (!saved) return;
+    appendTimeline({
+      type: "MESSAGE_SENT",
+      at: now,
+      summary: "STAGE1_DECISION_DONE · 후속 결정 완료",
+      by: detail.header.assigneeName,
+    });
+    appendAuditLog("STAGE1_DECISION_DONE: 후속 결정 완료");
+    toast.success("STEP4 완료 처리되었습니다.");
+    closeStage1Modal();
+  }, [
+    activeStage1Modal,
+    appendAuditLog,
+    closeStage1Modal,
+    detail.contactExecution.lastOutcomeCode,
+    detail.contactExecution.lastResponseAt,
+    detail.contactExecution.status,
+    detail.header.assigneeName,
+    detail.policyGates,
+    handleSaveFollowUpDecision,
+    moveStage1TaskStep,
   ]);
 
   const handleFlowAction = useCallback(
@@ -5327,36 +6834,82 @@ export function Stage1OpsDetail({
   );
 
   useEffect(() => {
-    const nextStage3Action = detail.stage3?.recommendedActions.find((action) => action.decision === "PENDING");
+    const summaryMissingCount = mode === "stage2" ? stage2MissingRequirements.length : missingCount;
+    const summaryWarningCount = mode === "stage2" ? Math.max(0, 4 - stage2CompletedCount) : warningCount;
+    const stage2OpsDelayRiskPct =
+      mode === "stage3" && isStage2OpsView
+        ? Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round(
+                detail.header.sla.level === "OVERDUE"
+                  ? 76
+                  : detail.header.sla.level === "DUE_SOON"
+                    ? 58
+                    : 32 + Math.max(0, summaryMissingCount * 4 + summaryWarningCount * 3),
+              ),
+            ),
+          )
+        : undefined;
+    const stage2OpsRiskLabel: Stage3RiskSummary["risk2y_label"] =
+      stage2OpsDelayRiskPct == null ? "MID" : stage2OpsDelayRiskPct >= 70 ? "HIGH" : stage2OpsDelayRiskPct >= 45 ? "MID" : "LOW";
+    const stage2OpsTrend: Stage3RiskSummary["trend"] =
+      stage2OpsDelayRiskPct == null
+        ? "FLAT"
+        : stage2OpsDelayRiskPct >= 70
+          ? "UP"
+          : stage2OpsDelayRiskPct >= 45
+            ? "VOLATILE"
+            : "DOWN";
+
     onHeaderSummaryChange?.({
       contactMode: strategyBadge,
       effectiveMode: effectiveStrategy,
       slaLevel: detail.header.sla.level,
       qualityScore: detail.header.dataQuality.score,
-      missingCount,
-      warningCount,
+      missingCount: summaryMissingCount,
+      warningCount: summaryWarningCount,
       lastUpdatedAt: detail.timeline[0]?.at,
-      nextActionLabel:
-        mode === "stage3"
-          ? nextStage3Action
-            ? `${nextStage3Action.title} 실행`
-            : "다음 액션 확인"
+      nextActionLabel: mode === "stage2" ? stage2NextActionLabel : undefined,
+      stage2Meta:
+        mode === "stage2" || isStage2OpsView
+          ? {
+              diagnosisStatus: stage2Diagnosis.status,
+              completionPct: stage2CompletionPct,
+              requiredDataPct: stage2RequiredDataPct,
+              completedCount: stage2CompletedCount,
+              classificationLabel: stage2CurrentLabel,
+              mciStage: stage2CurrentLabel === "MCI" ? stage2ResolvedMciStage : undefined,
+              stage3EntryNeeded: stage2Stage3EntryNeeded,
+              enteredAt: stage2EnteredAt,
+              targetAt: stage2TargetAt,
+              delayDays: stage2TargetDelayDays,
+              nextActionLabel: stage2NextActionLabel,
+            }
           : undefined,
       stage3Meta:
         mode === "stage3" && detail.stage3
           ? {
               opsStatus: detail.stage3.headerMeta.opsStatus,
-              risk2yNowPct: toPercentValue(detail.stage3.transitionRisk.risk2y_now),
-              risk2yLabel: detail.stage3.transitionRisk.risk2y_label,
-              trend: detail.stage3.transitionRisk.trend,
-              modelVersion: detail.stage3.transitionRisk.modelVersion,
+              risk2yNowPct: isStage2OpsView ? stage2OpsDelayRiskPct ?? 0 : toPercentValue(detail.stage3.transitionRisk.risk2y_now),
+              risk2yLabel: isStage2OpsView ? stage2OpsRiskLabel : deriveStage3RiskLabel(detail.stage3.transitionRisk.risk2y_now),
+              trend: isStage2OpsView ? stage2OpsTrend : detail.stage3.transitionRisk.trend,
+              modelVersion: isStage2OpsView ? "stage2-ops-v1.0" : detail.stage3.transitionRisk.modelVersion,
               riskUpdatedAt: detail.stage3.transitionRisk.updatedAt,
               nextReevalAt: detail.stage3.headerMeta.nextReevalAt,
               nextTrackingContactAt: detail.stage3.headerMeta.nextTrackingContactAt,
               nextProgramAt: detail.stage3.headerMeta.nextProgramAt,
+              diffPathStatus: detail.stage3.diffPathStatus,
               planStatus: detail.stage3.headerMeta.planStatus,
               trackingCycleDays: detail.stage3.headerMeta.trackingCycleDays,
-              churnRisk: detail.stage3.headerMeta.churnRisk,
+              churnRisk: isStage2OpsView
+                ? detail.header.sla.level === "OVERDUE"
+                  ? "HIGH"
+                  : detail.header.sla.level === "DUE_SOON"
+                    ? "MID"
+                    : "LOW"
+                : detail.stage3.headerMeta.churnRisk,
             }
           : undefined,
     });
@@ -5369,8 +6922,20 @@ export function Stage1OpsDetail({
     missingCount,
     mode,
     onHeaderSummaryChange,
+    stage2CompletedCount,
+    stage2CompletionPct,
+    stage2CurrentLabel,
+    stage2ResolvedMciStage,
+    stage2Diagnosis.status,
+    stage2EnteredAt,
+    stage2MissingRequirements.length,
+    stage2NextActionLabel,
+    stage2Stage3EntryNeeded,
+    stage2TargetAt,
+    stage2TargetDelayDays,
     strategyBadge,
     warningCount,
+    isStage2OpsView,
   ]);
 
   useEffect(() => {
@@ -5394,6 +6959,457 @@ export function Stage1OpsDetail({
     });
   }, [activeProgramDraft, detail.header.assigneeName]);
 
+  if (isStage2Mode) {
+    const stage2StepItems = [
+      {
+        key: "STEP 1",
+        title: "검사 수행 관리",
+        status: detail.reservationInfo?.scheduledAt ? "DONE" : detail.linkageStatus !== "NOT_CREATED" ? "IN_PROGRESS" : "PENDING",
+        reason: detail.reservationInfo?.scheduledAt
+          ? `예약 ${formatDateTime(detail.reservationInfo.scheduledAt)}`
+          : "예약/수행 상태 점검 필요",
+      },
+      {
+        key: "STEP 2",
+        title: "검사 결과 입력",
+        status: stage2CompletedCount >= 4 ? "DONE" : stage2CompletedCount > 0 ? "IN_PROGRESS" : "PENDING",
+        reason: `필수 4항목 중 ${stage2CompletedCount}개 완료`,
+      },
+      {
+        key: "STEP 3",
+        title: "분류 확정",
+        status: stage2ConfirmedAt ? "DONE" : stage2CanConfirm ? "IN_PROGRESS" : "BLOCKED",
+        reason: stage2ConfirmedAt ? "분류 확정 완료" : stage2CanConfirm ? "확정 가능" : "요건 미충족",
+      },
+      {
+        key: "STEP 4",
+        title: "다음 단계 결정",
+        status: stage2Diagnosis.nextStep ? "DONE" : stage2ConfirmedAt ? "IN_PROGRESS" : "PENDING",
+        reason: stage2Diagnosis.nextStep ? `선택 ${stage2Diagnosis.nextStep}` : "분류 확정 후 진행",
+      },
+    ] as const;
+
+    const testRows = [
+      {
+        label: "전문의 진찰",
+        done: Boolean(stage2Diagnosis.tests.specialist),
+        sub: stage2Diagnosis.tests.specialist ? "소견 확인 완료" : "소견 확인 필요",
+      },
+      {
+        label: "MMSE",
+        done: typeof stage2Diagnosis.tests.mmse === "number",
+        sub: typeof stage2Diagnosis.tests.mmse === "number" ? `점수 ${stage2Diagnosis.tests.mmse}` : "미입력",
+      },
+      {
+        label: "CDR or GDS",
+        done: typeof stage2Diagnosis.tests.cdr === "number",
+        sub: typeof stage2Diagnosis.tests.cdr === "number" ? `점수 ${stage2Diagnosis.tests.cdr}` : "미입력",
+      },
+      {
+        label: "신경인지검사",
+        done: Boolean(stage2Diagnosis.tests.neuroCognitiveType),
+        sub: stage2Diagnosis.tests.neuroCognitiveType ?? "유형 미선택",
+      },
+    ];
+
+    return (
+      <div className="space-y-5">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+          <aside className="space-y-4 xl:col-span-3">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">Stage1 요약 카드</h3>
+              <div className="mt-3 space-y-2 text-xs">
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">선별 결과</p>
+                  <p className="mt-1 font-semibold text-slate-900">
+                    {detail.riskEvidence.topFactors[0]?.title ?? "선별 근거 확인 필요"}
+                  </p>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">우선도 점수</p>
+                  <p className="mt-1 font-semibold text-slate-900">{modelPriorityValue}점</p>
+                </div>
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">인지저하 여부</p>
+                  <p className="mt-1 font-semibold text-slate-900">{stage2CurrentLabel === "정상" ? "아님" : "확인"}</p>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">Stage2 검사 구성 Scorecard</h3>
+              <div className="mt-3 space-y-2 text-xs">
+                {testRows.map((row) => (
+                  <article key={row.label} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-slate-900">{row.label}</p>
+                      <span
+                        className={cn(
+                          "rounded-md border px-2 py-0.5 text-[10px] font-semibold",
+                          row.done ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-700",
+                        )}
+                      >
+                        {row.done ? "DONE" : "MISSING"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-600">{row.sub}</p>
+                  </article>
+                ))}
+                <p className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700">
+                  완료율 {stage2CompletedCount}/4 ({stage2CompletionPct}%)
+                </p>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">Stage2 분류 결과 카드</h3>
+              <p className="mt-3 text-xs text-slate-500">결과 라벨</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">
+                {stage2Diagnosis.classification?.label ?? "미확정"}
+                {stage2Diagnosis.classification?.label === "MCI" && stage2Diagnosis.classification.mciStage
+                  ? ` (${stage2Diagnosis.classification.mciStage})`
+                  : ""}
+              </p>
+              <div className="mt-3 space-y-2 text-xs">
+                {([
+                  { key: "NORMAL", label: "NORMAL", pct: toPercentUnknown(stage2Diagnosis.classification?.probs?.NORMAL) ?? 0, tone: "bg-emerald-500" },
+                  { key: "MCI", label: "MCI", pct: toPercentUnknown(stage2Diagnosis.classification?.probs?.MCI) ?? 0, tone: "bg-blue-500" },
+                  { key: "AD", label: "AD", pct: toPercentUnknown(stage2Diagnosis.classification?.probs?.AD) ?? 0, tone: "bg-rose-500" },
+                ] as const).map((entry) => (
+                  <div key={entry.key}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-slate-700">{entry.label}</span>
+                      <span className="text-[11px] text-slate-600">{entry.pct}%</span>
+                    </div>
+                    <div className="mt-1 h-2 rounded-full bg-slate-100">
+                      <div className={cn("h-2 rounded-full", entry.tone)} style={{ width: `${entry.pct}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-[11px] text-slate-700">
+                <p>신경심리검사 및 임상평가 기반 분류</p>
+                <p>운영 참고용 ANN 세분화 결과 포함</p>
+              </div>
+            </section>
+          </aside>
+
+          <section className="space-y-4 xl:col-span-6">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900">Stage2 Step Workflow</h3>
+                <span className="text-[11px] text-slate-500">
+                  완료 {stage2StepItems.filter((step) => step.status === "DONE").length}/4
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                {stage2StepItems.map((step) => (
+                  <article key={step.key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold text-slate-500">{step.key}</p>
+                      <span
+                        className={cn(
+                          "rounded-md border px-2 py-0.5 text-[10px] font-semibold",
+                          step.status === "DONE"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : step.status === "IN_PROGRESS"
+                              ? "border-blue-200 bg-blue-50 text-blue-700"
+                              : step.status === "BLOCKED"
+                                ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : "border-slate-200 bg-white text-slate-600",
+                        )}
+                      >
+                        {step.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm font-bold text-slate-900">{step.title}</p>
+                    <p className="mt-1 text-[11px] text-slate-600">{step.reason}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">STEP 2. 검사 결과 입력</h3>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                <label className="text-[11px] text-slate-600">
+                  MMSE 점수
+                  <input
+                    value={stage2Diagnosis.tests.mmse ?? ""}
+                    onChange={(event) =>
+                      setStage2Diagnosis((prev) => ({
+                        ...prev,
+                        tests: {
+                          ...prev.tests,
+                          mmse: event.target.value === "" ? undefined : Number(event.target.value),
+                        },
+                      }))
+                    }
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                  />
+                </label>
+                <label className="text-[11px] text-slate-600">
+                  CDR 점수
+                  <input
+                    value={stage2Diagnosis.tests.cdr ?? ""}
+                    onChange={(event) =>
+                      setStage2Diagnosis((prev) => ({
+                        ...prev,
+                        tests: {
+                          ...prev.tests,
+                          cdr: event.target.value === "" ? undefined : Number(event.target.value),
+                        },
+                      }))
+                    }
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                  />
+                </label>
+                <label className="text-[11px] text-slate-600">
+                  신경인지검사
+                  <select
+                    value={stage2Diagnosis.tests.neuroCognitiveType ?? ""}
+                    onChange={(event) =>
+                      setStage2Diagnosis((prev) => ({
+                        ...prev,
+                        tests: {
+                          ...prev.tests,
+                          neuroCognitiveType:
+                            (event.target.value as Stage2Diagnosis["tests"]["neuroCognitiveType"]) || undefined,
+                        },
+                      }))
+                    }
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                  >
+                    <option value="">선택</option>
+                    <option value="CERAD-K">CERAD-K</option>
+                    <option value="SNSB-II">SNSB-II</option>
+                    <option value="SNSB-C">SNSB-C</option>
+                    <option value="LICA">LICA</option>
+                  </select>
+                </label>
+                <label className="text-[11px] text-slate-600">
+                  전문의 소견
+                  <select
+                    value={stage2Diagnosis.tests.specialist ? "DONE" : "MISSING"}
+                    onChange={(event) =>
+                      setStage2Diagnosis((prev) => ({
+                        ...prev,
+                        tests: {
+                          ...prev.tests,
+                          specialist: event.target.value === "DONE",
+                        },
+                      }))
+                    }
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                  >
+                    <option value="MISSING">MISSING</option>
+                    <option value="DONE">DONE</option>
+                  </select>
+                </label>
+              </div>
+              <button
+                onClick={saveStage2TestInputs}
+                className="mt-3 inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a]"
+              >
+                <CheckCircle2 size={13} /> 결과 입력 반영
+              </button>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">STEP 3. 분류 확정</h3>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                <label className="text-[11px] text-slate-600">
+                  진단 결과 라벨
+                  <select
+                    value={stage2ClassificationDraft}
+                    onChange={(event) => setStage2ClassificationDraft(event.target.value as Stage2ClassLabel)}
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                  >
+                    <option value="정상">정상</option>
+                    <option value="MCI">MCI</option>
+                    <option value="치매">치매</option>
+                  </select>
+                </label>
+                <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+                  <p className="font-semibold">MCI 세분화(ANN)</p>
+                  <p className="mt-1">{stage2ClassificationDraft === "MCI" ? stage2DraftMciStage ?? "산출 대기" : "-"}</p>
+                </div>
+              </div>
+              <div className="mt-2 space-y-2 text-xs">
+                {([
+                  { key: "NORMAL", label: "NORMAL", pct: toPercentUnknown(stage2DraftProbs.NORMAL) ?? 0, tone: "bg-emerald-500" },
+                  { key: "MCI", label: "MCI", pct: toPercentUnknown(stage2DraftProbs.MCI) ?? 0, tone: "bg-blue-500" },
+                  { key: "AD", label: "AD", pct: toPercentUnknown(stage2DraftProbs.AD) ?? 0, tone: "bg-rose-500" },
+                ] as const).map((entry) => (
+                  <div key={entry.key}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-slate-700">{entry.label}</span>
+                      <span className="text-[11px] text-slate-600">{entry.pct}%</span>
+                    </div>
+                    <div className="mt-1 h-2 rounded-full bg-slate-100">
+                      <div className={cn("h-2 rounded-full", entry.tone)} style={{ width: `${entry.pct}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <label className="mt-3 block text-[11px] text-slate-600">
+                확정 근거 1줄(필수)
+                <textarea
+                  value={stage2RationaleDraft}
+                  onChange={(event) => setStage2RationaleDraft(event.target.value)}
+                  className="mt-1 h-20 w-full rounded-md border border-gray-200 px-2 py-1 text-xs outline-none focus:border-blue-300"
+                />
+              </label>
+              <button
+                onClick={confirmStage2Classification}
+                disabled={!stage2CanConfirm}
+                className="mt-3 inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a] disabled:opacity-50"
+              >
+                <ShieldCheck size={13} /> 분류 확정
+              </button>
+              {!stage2CanConfirm ? (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                  {stage2MissingRequirements.map((message) => (
+                    <p key={message}>- {message}</p>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">STEP 4. 다음 단계 결정</h3>
+              <p className="mt-2 text-[11px] text-slate-600">
+                분류 확정 후에만 버튼이 활성화됩니다. 현재 라벨: {stage2CurrentLabel}
+                {stage2CurrentLabel === "MCI" && stage2CurrentMciStage ? ` (${stage2CurrentMciStage})` : ""}
+              </p>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+                <button
+                  onClick={() => setStage2NextStep("FOLLOWUP_2Y", "정상 분류로 2년 후 선별검사 일정 생성")}
+                  disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "정상"}
+                  className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-white disabled:opacity-50"
+                >
+                  정상 → 2년 후 선별
+                </button>
+                <button
+                  onClick={() => setStage2NextStep("STAGE3", "MCI/치매 분류로 Stage3 진입 준비")}
+                  disabled={!stage2ConfirmedAt || !stage2NeedsStage3(stage2CurrentLabel)}
+                  className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                >
+                  Stage3 진입
+                </button>
+                <button
+                  onClick={() => setStage2NextStep("DIFF_PATH", "치매 분류로 감별검사 경로 활성화")}
+                  disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "치매"}
+                  className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                >
+                  감별검사 경로
+                </button>
+              </div>
+            </section>
+          </section>
+
+          <aside className="space-y-4 xl:col-span-3">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">검사 예약 관리</h3>
+              <div className="mt-3 space-y-2">
+                <label className="text-[11px] text-slate-600">
+                  병원 선택
+                  <select
+                    value={stage2HospitalDraft}
+                    onChange={(event) => setStage2HospitalDraft(event.target.value)}
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                  >
+                    <option value="강남구 협력병원">강남구 협력병원</option>
+                    <option value="서울의료원">서울의료원</option>
+                    <option value="신경심리 전문클리닉">신경심리 전문클리닉</option>
+                    <option value="기타 협력기관">기타 협력기관</option>
+                  </select>
+                </label>
+                <label className="text-[11px] text-slate-600">
+                  일정 등록
+                  <input
+                    type="datetime-local"
+                    value={toDateTimeLocalValue(stage2ScheduleDraft)}
+                    onChange={(event) => setStage2ScheduleDraft(fromDateTimeLocalValue(event.target.value) || stage2ScheduleDraft)}
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                  />
+                </label>
+                <button
+                  onClick={saveStage2Booking}
+                  className="inline-flex w-full items-center justify-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a]"
+                >
+                  <PhoneCall size={13} /> 일정 등록
+                </button>
+                <button
+                  onClick={() => {
+                    appendTimeline({
+                      type: "CAL_EVENT_CREATED",
+                      at: nowIso(),
+                      scheduledAt: stage2ScheduleDraft,
+                      summary: "Stage2 검사 일정 캘린더 등록",
+                      by: detail.header.assigneeName,
+                    });
+                    appendAuditLog(`캘린더 생성: ${formatDateTime(stage2ScheduleDraft)}`);
+                    toast.success("캘린더 등록 로그를 남겼습니다.");
+                  }}
+                  className="inline-flex w-full items-center justify-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white"
+                >
+                  <Timer size={13} /> 캘린더 생성
+                </button>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">결과 입력 가이드</h3>
+              <div className="mt-2 space-y-1 text-[11px] text-slate-600">
+                <p>MMSE: 일반적으로 24점 이상은 정상 범위 참고값으로 사용합니다.</p>
+                <p>CDR: 0(정상), 0.5(MCI 가능성), 1 이상(치매 가능성) 기준으로 검토합니다.</p>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <h3 className="text-sm font-bold text-slate-900">ANN 세분화 설명 패널</h3>
+              <div className="mt-2 space-y-1 text-[11px] text-slate-600">
+                <p>경도인지장애는 치매 진행 골든타임으로 조기 대응이 중요합니다.</p>
+                <p>연 10% 수준의 전환 가능성이 보고되어 추적 관리가 필요합니다.</p>
+                <p>해마 위축/혈관성 요인은 세분화 판단 시 주요 참고 항목입니다.</p>
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+          <ContactTimeline
+            timeline={filteredTimeline}
+            filter={timelineFilter}
+            onFilterChange={setTimelineFilter}
+            listClassName="max-h-[360px] overflow-y-auto pr-1"
+            mode={mode}
+            stage2OpsView={isStage2OpsView}
+          />
+          <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+            <h3 className="text-sm font-bold text-slate-900">감사 로그</h3>
+            <div className="mt-3 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+              {auditLogs.length === 0 ? (
+                <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+                  감사 로그가 없습니다.
+                </p>
+              ) : (
+                auditLogs.map((log) => (
+                  <article key={log.id} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] text-slate-500">{log.at}</p>
+                    <p className="text-xs font-semibold text-slate-800">{log.actor}</p>
+                    <p className="text-[11px] text-slate-700">{log.message}</p>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
@@ -5409,33 +7425,48 @@ export function Stage1OpsDetail({
             stage3RiskReviewedAt={detail.stage3?.riskReviewedAt}
             onStage3MarkRiskReviewed={handleStage3RiskReview}
             mode={mode}
+            stage2OpsView={isStage2OpsView}
+            stage2ResultLabel={stage2ResolvedLabel}
+            stage2MciStage={stage2ResolvedMciStage}
+            stage2Probs={stage2ResolvedProbs}
+            stage2DiagnosisStatus={stage2Diagnosis.status}
+            stage2CompletionPct={stage2CompletionPct}
+            stage2RequiredDataPct={stage2RequiredDataPct}
+            stage2NextDiagnosisAt={detail.stage3?.headerMeta.nextReevalAt}
+            stage2QualityScore={detail.header.dataQuality.score}
+            stage2WaitingCount={stage2BookingWaitingCount}
+            stage2ResultMissingCount={stage2ResultMissingCount}
+            stage2ClassificationConfirmed={stage2ClassificationConfirmed}
           />
 
-          <ContactFlowPanel flowCards={stage1FlowCards} onAction={handleFlowAction} mode={mode} />
+          <ContactFlowPanel flowCards={stage1FlowCards} onAction={handleFlowAction} mode={mode} stage2OpsView={isStage2OpsView} />
 
-          <ServiceOperationsBoard
-            strategy={effectiveStrategy}
-            strategyBadge={strategyBadge}
-            contactExecutor={detail.contactExecutor}
-            executionStatus={detail.contactExecution.status}
-            lastSentAt={detail.contactExecution.lastSentAt}
-            lastOutcome={detail.contactExecution.lastOutcomeCode}
-            retryCount={detail.contactExecution.retryCount}
-            linkageStatus={detail.linkageStatus}
-            memoCount={auditLogs.length}
-            lastContactAt={detail.contactExecution.lastResponseAt ?? detail.contactExecution.lastSentAt}
-            timelineCount={detail.timeline.length}
-            preTriage={detail.preTriageResult}
-            riskGuardrails={detail.header.riskGuardrails}
-            onOpenStrategyOverride={() => setStrategyOverrideOpen(true)}
-            mode={mode}
-          />
+          {!isStage3Mode ? (
+            <ServiceOperationsBoard
+              strategy={effectiveStrategy}
+              strategyBadge={strategyBadge}
+              contactExecutor={detail.contactExecutor}
+              executionStatus={detail.contactExecution.status}
+              lastSentAt={detail.contactExecution.lastSentAt}
+              lastOutcome={detail.contactExecution.lastOutcomeCode}
+              retryCount={detail.contactExecution.retryCount}
+              linkageStatus={detail.linkageStatus}
+              memoCount={auditLogs.length}
+              lastContactAt={detail.contactExecution.lastResponseAt ?? detail.contactExecution.lastSentAt}
+              timelineCount={detail.timeline.length}
+              preTriage={detail.preTriageResult}
+              riskGuardrails={detail.header.riskGuardrails}
+              onOpenStrategyOverride={() => setStrategyOverrideOpen(true)}
+              mode={mode}
+            />
+          ) : null}
 
           {!isStage3Mode ? (
             <>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <ContactExecutionLauncherCard
                   mode={mode}
+                  stage2OpsView={isStage2OpsView}
                   contactExecutor={detail.contactExecutor}
                   executionStatus={detail.contactExecution.status}
                   strategy={effectiveStrategy}
@@ -5464,16 +7495,28 @@ export function Stage1OpsDetail({
                 <ResponseTriagePanel
                   expanded={responsePanelExpanded}
                   onToggle={() => setResponsePanelExpanded((prev) => !prev)}
+                  executionStatus={detail.contactExecution.status}
+                  lastSentAt={detail.contactExecution.lastSentAt}
+                  assigneeName={detail.header.assigneeName}
                   selectedOutcomeCode={selectedOutcomeCode}
-                  onSelectOutcomeCode={setSelectedOutcomeCode}
+                  onSelectOutcomeCode={handleSelectOutcomeCode}
+                  reasonTags={responseReasonTags}
+                  onToggleReasonTag={handleToggleResponseReasonTag}
                   rejectReasonDraft={rejectReasonDraft}
-                  onRejectReasonDraftChange={setRejectReasonDraft}
+                  onRejectReasonDraftChange={handleRejectReasonDraftChange}
+                  noResponsePlanDraft={noResponsePlanDraft}
+                  onNoResponsePlanDraftChange={handleNoResponsePlanDraftChange}
                   outcomeNote={outcomeNote}
-                  onOutcomeNoteChange={setOutcomeNote}
+                  onOutcomeNoteChange={handleOutcomeNoteChange}
                   isSaving={isOutcomeSaving}
                   submitError={outcomeSubmitError}
+                  validationError={responseValidationError}
                   onClearError={clearSubmitError}
+                  onReset={resetResponseTriageDraft}
                   onConfirm={confirmOutcomeTriage}
+                  hasUnsavedChanges={responseDraftDirty}
+                  lastSavedAt={responseLastSavedAt}
+                  onOpenHandoffMemo={() => setHandoffMemoOpen(true)}
                   mode={mode}
                 />
 
@@ -5506,17 +7549,19 @@ export function Stage1OpsDetail({
               <section className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-sm">
                 <h3 className="text-sm font-bold text-indigo-900">다음 체크포인트</h3>
                 <p className="mt-1 text-[11px] text-indigo-800">
-                  Step 카드의 작업 열기에서 감별경로/위험추적/정밀관리 실행을 순차 기록합니다. 최종 조치는 담당자 확인 후 진행합니다.
+                  {isStage2OpsView
+                    ? "Step 카드의 작업 열기에서 근거검토/신경심리/임상평가/전문의 확정을 순차 기록합니다."
+                    : "Step 카드의 작업 열기에서 감별경로/위험추적/정밀관리 실행을 순차 기록합니다. 최종 조치는 담당자 확인 후 진행합니다."}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
                   <span className="rounded-md border border-indigo-300 bg-white px-2 py-1">
-                    다음 재평가 {formatDateTime(detail.stage3?.headerMeta.nextReevalAt)}
+                    {isStage2OpsView ? "다음 진단 일정" : "다음 재평가"} {formatDateTime(detail.stage3?.headerMeta.nextReevalAt)}
                   </span>
                   <span className="rounded-md border border-indigo-300 bg-white px-2 py-1">
-                    플랜 {stage3PlanStatusLabel(detail.stage3?.headerMeta.planStatus ?? "ACTIVE")}
+                    {isStage2OpsView ? "진단 플랜" : "플랜"} {stage3PlanStatusLabel(detail.stage3?.headerMeta.planStatus ?? "ACTIVE")}
                   </span>
                   <span className="rounded-md border border-indigo-300 bg-white px-2 py-1">
-                    추적 주기 {detail.stage3?.headerMeta.trackingCycleDays ?? 21}일
+                    {isStage2OpsView ? "결과 수신 목표" : "추적 주기"} {detail.stage3?.headerMeta.trackingCycleDays ?? 21}일
                   </span>
                 </div>
               </section>
@@ -5539,7 +7584,7 @@ export function Stage1OpsDetail({
             <>
               <section className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-bold text-slate-900">감별검사 상태 요약</h3>
+                  <h3 className="text-sm font-bold text-slate-900">{isStage2OpsView ? "진단검사 진행 상태 요약" : "감별검사 상태 요약"}</h3>
                   <button
                     onClick={() => openStage1FlowModal("CONTACT_EXECUTION")}
                     className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
@@ -5548,11 +7593,13 @@ export function Stage1OpsDetail({
                   </button>
                 </div>
                 <p className="mt-1 text-[11px] text-gray-500">
-                  상태 {detail.stage3?.diffPathStatus ?? "NONE"} · 승인 대기 {stage3PendingApprovalCount}건 · 다음 재평가{" "}
-                  {formatDateTime(detail.stage3?.headerMeta.nextReevalAt)}
+                  {isStage2OpsView ? "STEP2/3 상태" : "상태"} {detail.stage3?.diffPathStatus ?? "NONE"} · 승인 대기 {stage3PendingApprovalCount}건 ·{" "}
+                  {isStage2OpsView ? "목표일" : "다음 재평가"} {formatDateTime(detail.stage3?.headerMeta.nextReevalAt)}
                 </p>
                 <p className="mt-2 text-[10px] text-indigo-700">
-                  운영 참고: 감별경로 상태는 권고/연계 우선순위 신호이며 최종 실행은 담당자 확인 후 진행합니다.
+                  {isStage2OpsView
+                    ? "운영 참고: 진단검사 경로 상태는 예약/의뢰 우선순위 신호이며 최종 실행은 담당자 확인 후 진행합니다."
+                    : "운영 참고: 감별경로 상태는 권고/연계 우선순위 신호이며 최종 실행은 담당자 확인 후 진행합니다."}
                 </p>
               </section>
 
@@ -5561,14 +7608,19 @@ export function Stage1OpsDetail({
                   onClick={() => setStage3ContactPanelOpen((prev) => !prev)}
                   className="flex w-full items-center justify-between text-left"
                 >
-                  <span className="text-sm font-bold text-slate-900">상담/문자 실행 (확인/리마인더)</span>
+                  <span className="text-sm font-bold text-slate-900">
+                    상담/문자 실행 ({isStage2OpsView ? "예약안내/결과요청" : "확인/리마인더"})
+                  </span>
                   <span className="text-[11px] font-semibold text-slate-500">{stage3ContactPanelOpen ? "접기" : "열기"}</span>
                 </button>
-                <p className="mt-1 text-[11px] text-gray-500">재평가 일정 안내를 위한 보조 실행 패널입니다.</p>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  {isStage2OpsView ? "예약 안내/결과 요청/미응답 재접촉을 보조 실행합니다." : "재평가 일정 안내를 위한 보조 실행 패널입니다."}
+                </p>
                 {stage3ContactPanelOpen ? (
                   <div className="mt-3">
                     <ContactExecutionLauncherCard
                       mode={mode}
+                      stage2OpsView={isStage2OpsView}
                       contactExecutor={detail.contactExecutor}
                       executionStatus={detail.contactExecution.status}
                       strategy={effectiveStrategy}
@@ -5587,16 +7639,28 @@ export function Stage1OpsDetail({
                       <ResponseTriagePanel
                         expanded={responsePanelExpanded}
                         onToggle={() => setResponsePanelExpanded((prev) => !prev)}
+                        executionStatus={detail.contactExecution.status}
+                        lastSentAt={detail.contactExecution.lastSentAt}
+                        assigneeName={detail.header.assigneeName}
                         selectedOutcomeCode={selectedOutcomeCode}
-                        onSelectOutcomeCode={setSelectedOutcomeCode}
+                        onSelectOutcomeCode={handleSelectOutcomeCode}
+                        reasonTags={responseReasonTags}
+                        onToggleReasonTag={handleToggleResponseReasonTag}
                         rejectReasonDraft={rejectReasonDraft}
-                        onRejectReasonDraftChange={setRejectReasonDraft}
+                        onRejectReasonDraftChange={handleRejectReasonDraftChange}
+                        noResponsePlanDraft={noResponsePlanDraft}
+                        onNoResponsePlanDraftChange={handleNoResponsePlanDraftChange}
                         outcomeNote={outcomeNote}
-                        onOutcomeNoteChange={setOutcomeNote}
+                        onOutcomeNoteChange={handleOutcomeNoteChange}
                         isSaving={isOutcomeSaving}
                         submitError={outcomeSubmitError}
+                        validationError={responseValidationError}
                         onClearError={clearSubmitError}
+                        onReset={resetResponseTriageDraft}
                         onConfirm={confirmOutcomeTriage}
+                        hasUnsavedChanges={responseDraftDirty}
+                        lastSavedAt={responseLastSavedAt}
+                        onOpenHandoffMemo={() => setHandoffMemoOpen(true)}
                         mode={mode}
                       />
                     </div>
@@ -5606,15 +7670,15 @@ export function Stage1OpsDetail({
 
               {stage3LatestRiskReview ? (
                 <section className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-sm">
-                  <h3 className="text-sm font-bold text-indigo-900">최신 위험 추적 메모</h3>
+                  <h3 className="text-sm font-bold text-indigo-900">{isStage2OpsView ? "최신 진단 진행 메모" : "최신 위험 추적 메모"}</h3>
                   <p className="mt-1 text-[11px] text-indigo-800">{stage3LatestRiskReview.memo}</p>
                   <p className="mt-1 text-[10px] text-indigo-700">
-                    {formatDateTime(stage3LatestRiskReview.at)} · 다음 액션 {STAGE3_RISK_NEXT_ACTION_LABELS[stage3LatestRiskReview.nextAction]}
+                    {formatDateTime(stage3LatestRiskReview.at)} · {isStage2OpsView ? "다음 작업" : "다음 액션"} {STAGE3_RISK_NEXT_ACTION_LABELS[stage3LatestRiskReview.nextAction]}
                   </p>
                 </section>
               ) : null}
 
-              <RiskSignalEvidencePanel evidence={detail.riskEvidence} quality={detail.header.dataQuality} mode={mode} />
+              <RiskSignalEvidencePanel evidence={detail.riskEvidence} quality={detail.header.dataQuality} mode={mode} stage2OpsView={isStage2OpsView} />
 
               <ContactTimeline
                 timeline={filteredTimeline}
@@ -5622,6 +7686,7 @@ export function Stage1OpsDetail({
                 onFilterChange={setTimelineFilter}
                 listClassName="max-h-[300px] overflow-y-auto pr-1"
                 mode={mode}
+                stage2OpsView={isStage2OpsView}
               />
             </>
           ) : (
@@ -5630,6 +7695,7 @@ export function Stage1OpsDetail({
                 evidence={detail.riskEvidence}
                 quality={detail.header.dataQuality}
                 mode={mode}
+                stage2OpsView={isStage2OpsView}
               />
 
               <ContactTimeline
@@ -5638,6 +7704,7 @@ export function Stage1OpsDetail({
                 onFilterChange={setTimelineFilter}
                 listClassName="max-h-[340px] overflow-y-auto pr-1"
                 mode={mode}
+                stage2OpsView={isStage2OpsView}
               />
 
               <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -5823,10 +7890,12 @@ export function Stage1OpsDetail({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="text-sm font-bold text-indigo-900">
-                    Stage3 작업열기 · {stage3TaskCurrentCard?.title ?? "운영 루프"}
+                    {isStage2OpsView ? "Stage2 작업열기" : "Stage3 작업열기"} · {stage3TaskCurrentCard?.title ?? "운영 루프"}
                   </p>
                   <p className="text-[11px] text-indigo-700">
-                    추적→감별→위험추적→정밀관리 실행을 팝업에서 처리합니다. 운영 참고이며 담당자 확인 후 실행합니다.
+                    {isStage2OpsView
+                      ? "근거검토→신경심리→임상평가→전문의/분류 확정을 팝업에서 처리합니다. 운영 참고이며 담당자 확인 후 실행합니다."
+                      : "추적→감별→위험추적→정밀관리 실행을 팝업에서 처리합니다. 운영 참고이며 담당자 확인 후 실행합니다."}
                   </p>
                 </div>
                 <span className="rounded-md border border-indigo-300 bg-white px-2 py-1 text-[11px] font-semibold text-indigo-700">
@@ -5864,136 +7933,511 @@ export function Stage1OpsDetail({
 
             {stage3TaskModalStep === "PRECHECK"
               ? (() => {
-                  const currentRisk = detail.stage3?.transitionRisk ?? stage3RiskSummary;
-                  const confidence =
-                    detail.header.dataQuality.level === "GOOD"
-                      ? "HIGH"
-                      : detail.header.dataQuality.level === "WARN"
-                        ? "MID"
-                        : "LOW";
-                  const trendDeltaText = (() => {
-                    const points = currentRisk?.series ?? [];
-                    if (points.length < 4) return "최근 3구간 변화 데이터가 부족합니다.";
-                    const recent = points.slice(-4);
-                    const deltas = recent.slice(1).map((point, index) => toPercentValue(point.risk2y - recent[index].risk2y));
-                    const total = deltas.reduce((acc, value) => acc + value, 0);
-                    if (Math.max(...deltas.map((value) => Math.abs(value))) >= 10) return "최근 3구간 변동 큼";
-                    if (total > 0) return `최근 3구간 +${total}%p 상승`;
-                    if (total < 0) return `최근 3구간 ${total}%p 하락`;
-                    return "최근 3구간 큰 변화 없음";
-                  })();
-                  const stage3TriggerSummary =
-                    stage3PendingApprovalCount > 0
-                      ? `승인 필요 권고 ${stage3PendingApprovalCount}건`
-                      : detail.stage3?.recommendedActions[0]?.reason ?? "추적 기준선 점검";
-                  const recentEvents = [...detail.timeline]
-                    .filter((event) =>
-                      [
-                        "RISK_REVIEWED",
-                        "RISK_SERIES_UPDATED",
-                        "DIFF_RESULT_APPLIED",
-                        "PLAN_UPDATED",
-                        "REEVAL_SCHEDULED",
-                        "REEVAL_COMPLETED",
-                      ].includes(event.type),
-                    )
-                    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
-                    .slice(0, 3);
+                  const opsStats = buildCaseOpsStats({
+                    detail,
+                    modelPriorityValue,
+                    stage2ResultLabel: stage3CaseResultLabel,
+                    stage2MciSeverity: stage3MciSeverity,
+                    stage2TestAt: caseRecord?.updated,
+                    stage2Org: "협력기관 평가 기록",
+                  });
+                  const stage2ProbEntries: Array<{ key: "AD" | "MCI" | "NORMAL"; label: string }> = [
+                    { key: "AD", label: "AD" },
+                    { key: "MCI", label: "MCI" },
+                    { key: "NORMAL", label: "정상" },
+                  ];
+                  const hasStage2Probs = stage2ProbEntries.some(
+                    (entry) => opsStats.stage2.probs?.[entry.key] != null,
+                  );
+                  const stage3RiskNowPct = toPercentUnknown(opsStats.stage3.risk2yNow);
+                  const stage3RiskAt2yPct = toPercentUnknown(opsStats.stage3.riskAt2y);
+                  const stage3StatusLabel = opsStats.stage3.status === "RESULT_APPLIED" ? (isStage2OpsView ? "결과수신 완료" : "반영 완료") : isStage2OpsView ? "결과수신 대기" : "검사결과 대기";
+                  if (isStage2OpsView) {
+                    const reservationAttemptCount = detail.timeline.filter(
+                      (event) =>
+                        event.type === "DIFF_REFER_CREATED" ||
+                        event.type === "DIFF_SCHEDULED" ||
+                        event.type === "LINKAGE_CREATED",
+                    ).length;
+                    const contactMessageCount = detail.timeline.filter(
+                      (event) =>
+                        event.type === "CALL_ATTEMPT" ||
+                        event.type === "SMS_SENT" ||
+                        event.type === "MESSAGE_SENT",
+                    ).length;
+                    const resultInputCount = detail.timeline.filter(
+                      (event) => event.type === "STAGE2_RESULTS_RECORDED" || event.type === "DIFF_RESULT_APPLIED",
+                    ).length;
+
+                    return (
+                      <section className="rounded-lg border border-gray-200 bg-white p-4">
+                        <h4 className="text-sm font-bold text-slate-900">Stage2 진입 리뷰 & 진단검사 계획 확정</h4>
+                        <p className="mt-1 text-[11px] text-gray-600">
+                          Stage1 선별 결과와 Stage2 진입 근거를 확인하고, 필수 진단검사 항목/경로를 확정합니다.
+                        </p>
+                        <div className="mt-3">
+                          <StepChecklist items={STAGE2_TASK_CHECKLIST.PRECHECK} />
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.15fr]">
+                          <div className="space-y-3">
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                              <p className="text-xs font-semibold text-slate-800">Stage1→Stage2 요약 Scorecard</p>
+                              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                                <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">Stage1 우선도</p>
+                                  <p className="font-semibold text-slate-900">
+                                    {opsStats.stage1.priorityScore ?? "-"}점 / {opsStats.stage1.priorityBand ?? "확실하지 않음"}
+                                  </p>
+                                </div>
+                                <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">개입 레벨</p>
+                                  <p className="font-semibold text-slate-900">{opsStats.stage1.interventionLevel ?? "-"}</p>
+                                </div>
+                                <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">Stage2 진입일</p>
+                                  <p className="font-semibold text-slate-900">{formatDateTime(stage2EnteredAt)}</p>
+                                </div>
+                                <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">Stage2 상태</p>
+                                  <p className="font-semibold text-slate-900">{stage2DiagnosisStatusLabel(stage2Diagnosis.status)}</p>
+                                </div>
+                                <div className="col-span-2 rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">Stage2 진입 근거 요약</p>
+                                  <p className="font-semibold text-slate-900">
+                                    Stage1 인지저하 신호와 누락/지연 이력 기준으로 Stage2 진단검사 경로를 우선 실행합니다.
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <details className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                              <summary className="cursor-pointer text-xs font-semibold text-slate-800">이전 작업 리뷰(요약)</summary>
+                              <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+                                <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">예약/의뢰 시도</p>
+                                  <p className="font-semibold text-slate-900">{reservationAttemptCount}</p>
+                                </div>
+                                <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">연락/문자 실행</p>
+                                  <p className="font-semibold text-slate-900">{contactMessageCount}</p>
+                                </div>
+                                <div className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-slate-500">결과 입력 이벤트</p>
+                                  <p className="font-semibold text-slate-900">{resultInputCount}</p>
+                                </div>
+                              </div>
+                            </details>
+                          </div>
+
+                          <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-semibold text-slate-800">진단검사 계획 확정</p>
+                            <div className="grid grid-cols-1 gap-2 text-[11px]">
+                              {([
+                                ["specialist", "전문의 진찰 (필수)"],
+                                ["mmse", "MMSE (협약병원 의뢰 시 필수)"],
+                                ["cdrOrGds", "CDR 또는 GDS (택1)"],
+                                ["neuroCognitive", "신경인지기능검사 (택1)"],
+                              ] as const).map(([key, label]) => (
+                                <label key={key} className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <input
+                                    type="checkbox"
+                                    checked={stage2PlanRequiredDraft[key]}
+                                    onChange={(event) =>
+                                      setStage2PlanRequiredDraft((prev) => ({
+                                        ...prev,
+                                        [key]: event.target.checked,
+                                      }))
+                                    }
+                                  />
+                                  <span className="text-slate-700">{label}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2 text-[11px]">
+                              <label className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1.5">
+                                <input
+                                  type="checkbox"
+                                  checked={stage2OptionalTestsDraft.gdsk}
+                                  onChange={(event) =>
+                                    setStage2OptionalTestsDraft((prev) => ({ ...prev, gdsk: event.target.checked }))
+                                  }
+                                />
+                                GDS-K
+                              </label>
+                              <label className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1.5">
+                                <input
+                                  type="checkbox"
+                                  checked={stage2OptionalTestsDraft.adl}
+                                  onChange={(event) =>
+                                    setStage2OptionalTestsDraft((prev) => ({ ...prev, adl: event.target.checked }))
+                                  }
+                                />
+                                ADL
+                              </label>
+                              <label className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1.5">
+                                <input
+                                  type="checkbox"
+                                  checked={stage2OptionalTestsDraft.bpsd}
+                                  onChange={(event) =>
+                                    setStage2OptionalTestsDraft((prev) => ({ ...prev, bpsd: event.target.checked }))
+                                  }
+                                />
+                                BPSD
+                              </label>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 text-[11px]">
+                              <button
+                                type="button"
+                                onClick={() => setStage2PlanRouteDraft("HOSPITAL_REFERRAL")}
+                                className={cn(
+                                  "rounded border px-2 py-1.5 font-semibold",
+                                  stage2PlanRouteDraft === "HOSPITAL_REFERRAL"
+                                    ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                    : "border-slate-200 bg-white text-slate-700",
+                                )}
+                              >
+                                협약병원 의뢰
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setStage2PlanRouteDraft("CENTER_DIRECT")}
+                                className={cn(
+                                  "rounded border px-2 py-1.5 font-semibold",
+                                  stage2PlanRouteDraft === "CENTER_DIRECT"
+                                    ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                    : "border-slate-200 bg-white text-slate-700",
+                                )}
+                              >
+                                센터 직접 수행
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <label className="text-[11px] text-slate-600">
+                                기관
+                                <input
+                                  value={stage2HospitalDraft}
+                                  onChange={(event) => setStage2HospitalDraft(event.target.value)}
+                                  className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                />
+                              </label>
+                              <label className="text-[11px] text-slate-600">
+                                목표일
+                                <input
+                                  type="datetime-local"
+                                  value={toDateTimeLocalValue(stage2ScheduleDraft)}
+                                  onChange={(event) => setStage2ScheduleDraft(fromDateTimeLocalValue(event.target.value) || stage2ScheduleDraft)}
+                                  className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                />
+                              </label>
+                            </div>
+                            <label className="text-[11px] text-slate-600">
+                              전략 메모(필수, 20자 이상)
+                              <textarea
+                                value={stage3ReviewDraft.strategyMemo}
+                                onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, strategyMemo: event.target.value }))}
+                                className="mt-1 h-24 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
+                                placeholder="Stage1 근거 요약, Stage2 검사 경로, 담당자 확인 포인트를 입력하세요."
+                              />
+                            </label>
+                            <label className="flex items-center gap-1 text-[11px] text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={stage3ReviewDraft.consentConfirmed}
+                                onChange={(event) =>
+                                  setStage3ReviewDraft((prev) => ({ ...prev, consentConfirmed: event.target.checked }))
+                                }
+                              />
+                              Stage1 결과/동의 정보 확인 완료
+                            </label>
+                          </div>
+                        </div>
+                      </section>
+                    );
+                  }
 
                   return (
                     <section className="rounded-lg border border-gray-200 bg-white p-4">
-                      <h4 className="text-sm font-bold text-slate-900">케이스 상태 리뷰 & 전략 수립</h4>
+                      <h4 className="text-sm font-bold text-slate-900">{isStage2OpsView ? "Stage1 근거/진입 검토" : "케이스 상태 리뷰 & 전략 수립"}</h4>
                       <p className="mt-1 text-[11px] text-gray-600">
-                        Stage2→Stage3 진입 사유, 전환 위험 추세, 다음 실행 전략을 한 화면에서 확인합니다.
+                        {isStage2OpsView
+                          ? "Step1은 Stage1 근거와 Stage2 진입 필요성을 확인하고 담당자 검토를 기록하는 단계입니다."
+                          : "Step1은 수치 요약 중심으로 현재 상태를 확인하는 단계입니다. 운영 참고용 정보이며 담당자 확인 후 실행합니다."}
                       </p>
 
-                      <div className="mt-3 grid grid-cols-1 gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-2 md:grid-cols-4">
-                        <div className="rounded-md border border-indigo-100 bg-white p-2">
-                          <p className="text-[10px] font-semibold text-indigo-600">진입 사유 요약</p>
-                          <p className="mt-1 text-xs font-semibold text-slate-900">{stage3TriggerSummary}</p>
-                          <p className="mt-1 text-[10px] text-slate-500">운영 참고 · 담당자 확인 필요</p>
-                        </div>
-                        <div className="rounded-md border border-indigo-100 bg-white p-2">
-                          <p className="text-[10px] font-semibold text-indigo-600">최신 전환위험(2년)</p>
-                          <p className="mt-1 text-xs font-semibold text-slate-900">
-                            {toPercentValue(currentRisk?.risk2y_now ?? 0)}% · {currentRisk?.risk2y_label ?? "LOW"}
+                      <div className="mt-3 grid grid-cols-2 gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-2 md:grid-cols-3 xl:grid-cols-6">
+                        <div
+                          title="업무 우선도는 운영 실행 순서를 나타내는 보조 지표입니다."
+                          className="rounded-md border border-indigo-100 bg-white p-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                        >
+                          <p className="text-[10px] font-semibold text-indigo-600">업무 우선도</p>
+                          <p className="mt-1 text-xs font-bold text-slate-900">
+                            {opsStats.stage1.priorityBand ?? "확실하지 않음"} · {opsStats.stage1.priorityScore ?? "-"}점
                           </p>
-                          <p className="mt-1 text-[10px] text-slate-500">신뢰수준 {confidence}</p>
+                          <p className="mt-1 text-[10px] text-slate-500">개입 {opsStats.stage1.interventionLevel ?? "-"}</p>
                         </div>
-                        <div className="rounded-md border border-indigo-100 bg-white p-2">
-                          <p className="text-[10px] font-semibold text-indigo-600">추세 요약</p>
-                          <p className="mt-1 text-xs font-semibold text-slate-900">{currentRisk?.trend ?? "FLAT"}</p>
-                          <p className="mt-1 text-[10px] text-slate-500">{trendDeltaText}</p>
+                        <div
+                          title="Stage2 결과 라벨(케이스 기준)입니다."
+                          className="rounded-md border border-indigo-100 bg-white p-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                        >
+                          <p className="text-[10px] font-semibold text-indigo-600">Stage2 결과</p>
+                          <p className="mt-1 text-xs font-bold text-slate-900">
+                            {opsStats.stage2.resultLabel ?? "확실하지 않음"}
+                            {opsStats.stage2.mciSeverity ? `(${opsStats.stage2.mciSeverity})` : ""}
+                          </p>
+                          <p className="mt-1 text-[10px] text-slate-500">{formatDateTime(opsStats.stage2.testAt)}</p>
                         </div>
-                        <div className="rounded-md border border-indigo-100 bg-white p-2">
-                          <p className="text-[10px] font-semibold text-indigo-600">다음 일정</p>
-                          <p className="mt-1 text-[10px] text-slate-600">
-                            재평가 {formatDateTime(detail.stage3?.headerMeta.nextReevalAt)}
+                        <div
+                          title="정상/AD/MCI 분류 확률입니다. 데이터 미수집 시 확실하지 않음으로 표시됩니다."
+                          className="rounded-md border border-indigo-100 bg-white p-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                        >
+                          <p className="text-[10px] font-semibold text-indigo-600">Stage2 분류 확률</p>
+                          <p className="mt-1 text-xs font-bold text-slate-900">
+                            {hasStage2Probs ? "모델 추정치(운영 참고)" : "확실하지 않음(미수집)"}
                           </p>
-                          <p className="text-[10px] text-slate-600">
-                            추적 접촉 {formatDateTime(detail.stage3?.headerMeta.nextTrackingContactAt)}
+                          {hasStage2Probs ? (
+                            <div className="mt-1 space-y-1">
+                              {stage2ProbEntries.map((entry) => {
+                                const pct = toPercentUnknown(opsStats.stage2.probs?.[entry.key]) ?? 0;
+                                return (
+                                  <div key={entry.key} className="space-y-0.5">
+                                    <div className="flex items-center justify-between text-[10px] text-slate-500">
+                                      <span>{entry.label}</span>
+                                      <span>{pct}%</span>
+                                    </div>
+                                    <div className="h-1.5 rounded bg-slate-100">
+                                      <div className="h-full rounded bg-indigo-400" style={{ width: `${pct}%` }} />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="mt-1 text-[10px] text-slate-500">결과 라벨 기준으로만 확인</p>
+                          )}
+                        </div>
+                        <div
+                          title={isStage2OpsView ? "진단 지연 위험(운영 참고)입니다." : "2년 전환위험 현재값입니다. 담당자 확인 전 운영 참고용입니다."}
+                          className="rounded-md border border-indigo-100 bg-white p-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                        >
+                          <p className="text-[10px] font-semibold text-indigo-600">{isStage2OpsView ? "진단 지연 위험(현재)" : "Stage3 전환위험(현재)"}</p>
+                          <p className="mt-1 text-xs font-bold text-slate-900">
+                            {stage3RiskNowPct == null ? "확실하지 않음(데이터 없음)" : `${stage3RiskNowPct}%`}
                           </p>
+                          <p className="mt-1 text-[10px] text-slate-500">{isStage2OpsView ? "진행 위험" : "전환위험"} {opsStats.stage3.risk2yLabel ?? "-"}</p>
+                        </div>
+                        <div
+                          title={isStage2OpsView ? "목표일 기준 지연 추정치입니다." : "현재 추세 기반 2년 후 예측값입니다."}
+                          className="rounded-md border border-indigo-100 bg-white p-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                        >
+                          <p className="text-[10px] font-semibold text-indigo-600">{isStage2OpsView ? "목표일 지연 예측" : "Stage3 2년 후 예측"}</p>
+                          <p className="mt-1 text-xs font-bold text-slate-900">
+                            {stage3RiskAt2yPct == null ? "확실하지 않음(데이터 없음)" : `${stage3RiskAt2yPct}%`}
+                          </p>
+                          <p className="mt-1 text-[10px] text-slate-500">신뢰수준 {opsStats.stage3.confidence ?? "-"}</p>
+                        </div>
+                        <div
+                          title="데이터 품질과 누락 건수입니다."
+                          className="rounded-md border border-indigo-100 bg-white p-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                        >
+                          <p className="text-[10px] font-semibold text-indigo-600">데이터 품질</p>
+                          <p className="mt-1 text-xs font-bold text-slate-900">
+                            {opsStats.dataQuality?.score ?? "-"}%
+                          </p>
+                          <p className="mt-1 text-[10px] text-slate-500">누락 {opsStats.dataQuality?.missingCount ?? 0}건</p>
                         </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1.4fr_1fr]">
+                      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1.6fr_1fr]">
                         <div className="space-y-3">
-                          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                              <p className="text-[10px] font-semibold text-slate-700">Stage1 요약</p>
-                              <p className="mt-1 text-[11px] text-slate-600">
-                                우선도 {modelPriorityValue} / {modelPriorityMeta.label}
+                          <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
+                            <article className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] font-semibold text-slate-700">Stage1 수치 요약</p>
+                                <button
+                                  type="button"
+                                  onClick={() => toast(modelPriorityMeta.guide)}
+                                  className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-700"
+                                >
+                                  기준 보기
+                                </button>
+                              </div>
+                              <p className="mt-1 text-[11px] text-slate-700">
+                                업무 우선도: <strong>{opsStats.stage1.priorityBand ?? "확실하지 않음"}</strong> ({opsStats.stage1.priorityScore ?? "-"}점 /{" "}
+                                {opsStats.stage1.interventionLevel ?? "-"})
                               </p>
-                            </div>
-                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                              <p className="text-[10px] font-semibold text-slate-700">Stage2 결과</p>
-                              <p className="mt-1 text-[11px] text-slate-600">
-                                {stage3CaseResultLabel}
-                                {stage3CaseResultLabel === "MCI" ? `(${stage3MciSeverity})` : ""} · {formatDateTime(caseRecord?.updated)}
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                상위 {opsStats.stage1.percentileTop ?? "-"}% · 업데이트 {formatDateTime(opsStats.stage1.updatedAt)}
                               </p>
+                            </article>
+
+                            <article className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                              <p className="text-[10px] font-semibold text-slate-700">Stage2 분류 요약(케이스 기준)</p>
+                              <p className="mt-1 text-[11px] text-slate-700">
+                                결과 라벨:{" "}
+                                <strong>
+                                  {opsStats.stage2.resultLabel ?? "확실하지 않음"}
+                                  {opsStats.stage2.mciSeverity ? `(${opsStats.stage2.mciSeverity})` : ""}
+                                </strong>
+                              </p>
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                분류 확률: {hasStage2Probs ? "모델 추정치(운영 참고)" : "확실하지 않음(미수집)"}
+                              </p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {([
+                                  ["신경심리", opsStats.stage2.tests?.neuropsych],
+                                  ["임상평가", opsStats.stage2.tests?.clinical],
+                                  ["전문의", opsStats.stage2.tests?.specialist],
+                                ] as const).map(([label, status]) => (
+                                  <span
+                                    key={label}
+                                    className={cn(
+                                      "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                                      status === "DONE" ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600",
+                                    )}
+                                  >
+                                    {label} {status === "DONE" ? "완료" : "미확인"}
+                                  </span>
+                                ))}
+                              </div>
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                검사일 {formatDateTime(opsStats.stage2.testAt)} · {opsStats.stage2.org ?? "기관 정보 없음"}
+                              </p>
+                            </article>
+
+                            <article className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                              <p className="text-[10px] font-semibold text-slate-700">Stage3 전환위험/상태</p>
+                              <p className="mt-1 text-[11px] text-slate-700">
+                                전환위험:{" "}
+                                <strong>
+                                  {opsStats.stage3.risk2yLabel ?? "확실하지 않음"} ({stage3RiskNowPct == null ? "-" : `${stage3RiskNowPct}%`})
+                                </strong>
+                              </p>
+                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                                <span
+                                  className={cn(
+                                    "rounded px-1.5 py-0.5 text-[10px] font-semibold",
+                                    opsStats.stage3.status === "RESULT_APPLIED"
+                                      ? "bg-emerald-100 text-emerald-700"
+                                      : "bg-amber-100 text-amber-700",
+                                  )}
+                                >
+                                  상태: {stage3StatusLabel}
+                                </span>
+                                {opsStats.stage3.status === "RESULT_PENDING" ? (
+                                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                                    임시 추정치
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                신뢰수준 {opsStats.stage3.confidence ?? "-"} · 재평가 {formatDateTime(opsStats.stage3.nextReevalAt)}
+                              </p>
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                다음 추적 {formatDateTime(opsStats.stage3.nextContactAt)} · 2년 후 예측 {stage3RiskAt2yPct ?? "-"}%
+                              </p>
+                            </article>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                              <p className="text-[10px] font-semibold text-slate-700">접촉 시도(30일)</p>
+                              <p className="mt-1 text-sm font-bold text-slate-900">{opsStats.opsCounts?.contactAttempts30d ?? 0}</p>
                             </div>
-                            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                              <p className="text-[10px] font-semibold text-slate-700">Stage3 상태</p>
-                              <p className="mt-1 text-[11px] text-slate-600">
-                                {stage3OpsStatusLabel(detail.stage3?.headerMeta.opsStatus ?? "TRACKING")} · 담당 {detail.header.assigneeName}
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                              <p className="text-[10px] font-semibold text-slate-700">성공(30일)</p>
+                              <p className="mt-1 text-sm font-bold text-emerald-700">{opsStats.opsCounts?.contactSuccess30d ?? 0}</p>
+                            </div>
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                              <p className="text-[10px] font-semibold text-slate-700">실패 누적(30일)</p>
+                              <p className="mt-1 text-sm font-bold text-rose-700">{opsStats.opsCounts?.contactFail30d ?? 0}</p>
+                            </div>
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                              <p className="text-[10px] font-semibold text-slate-700">예약 생성</p>
+                              <p className="mt-1 text-sm font-bold text-slate-900">{opsStats.opsCounts?.bookings ?? 0}</p>
+                            </div>
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                              <p className="text-[10px] font-semibold text-slate-700">프로그램(예정/완료)</p>
+                              <p className="mt-1 text-sm font-bold text-slate-900">
+                                {(opsStats.opsCounts?.programsPlanned ?? 0) + (opsStats.opsCounts?.programsDone ?? 0)} / {opsStats.opsCounts?.programsDone ?? 0}
                               </p>
                             </div>
                           </div>
 
-                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                            <p className="text-xs font-semibold text-slate-800">전환위험 시계열(운영 참고)</p>
-                            {currentRisk ? <RiskTrendChart risk={currentRisk} stageBadge={detail.stage3?.diffPathStatus} /> : null}
-                          </div>
-
-                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                            <p className="text-xs font-semibold text-slate-800">변곡점/이벤트 요약</p>
+                          <details className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <summary className="cursor-pointer text-xs font-semibold text-slate-800">이력(참고용)</summary>
                             <div className="mt-2 space-y-1.5">
-                              {recentEvents.length > 0 ? (
-                                recentEvents.map((event) => (
-                                  <div key={`${event.type}-${event.at}`} className="rounded border border-slate-200 bg-white px-2 py-1">
-                                    <p className="text-[11px] font-semibold text-slate-700">{eventTitle(event)}</p>
-                                    <p className="text-[10px] text-slate-500">{formatDateTime(event.at)} · {eventDetail(event)}</p>
-                                  </div>
-                                ))
-                              ) : (
-                                <p className="text-[11px] text-slate-500">최근 핵심 이벤트가 없습니다.</p>
-                              )}
+                              {detail.timeline.slice(0, 8).map((event, idx) => (
+                                <div key={`${event.at}-${idx}`} className="rounded border border-slate-200 bg-white px-2 py-1.5">
+                                  <p className="text-[11px] font-semibold text-slate-700">{eventTitle(event)}</p>
+                                  <p className="text-[10px] text-slate-500">{formatDateTime(event.at)} · {event.by}</p>
+                                  <p className="text-[10px] text-slate-600">{eventDetail(event)}</p>
+                                </div>
+                              ))}
+                              {detail.timeline.length === 0 ? (
+                                <p className="rounded border border-slate-200 bg-white px-2 py-1.5 text-[10px] text-slate-500">
+                                  기록이 없습니다.
+                                </p>
+                              ) : null}
                             </div>
+                          </details>
+
+                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs font-semibold text-slate-800">{isStage2OpsView ? "Stage1→Stage2 진입 근거(운영 참고)" : "Stage2→Stage3 전이 근거(운영 참고)"}</p>
+                            <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                              <li>{isStage2OpsView ? "• Stage1 선별 근거 기준으로 Stage2 진단검사 경로가 필요합니다." : "• 최근 평가 기록에서 추가 감별검사 권고 신호가 확인되었습니다."}</li>
+                              <li>{isStage2OpsView ? "• 미응답/지연 이력으로 예약·의뢰 우선순위가 상향되었습니다." : "• 추적 지연/미응답 이력으로 정밀관리 연계 우선순위가 상향되었습니다."}</li>
+                              <li>{isStage2OpsView ? "• 운영 가이드 기준 상 신경심리/임상평가/전문의 경로를 순차 실행해야 합니다." : "• 운영 가이드 기준 상 감별검사/뇌영상 경로 시작이 필요합니다."}</li>
+                              <li>• 최종 조치는 담당자 검토 및 의료진 확인 전 운영 참고용입니다.</li>
+                            </ul>
                           </div>
                         </div>
 
                         <div className="space-y-3">
                           <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                            <p className="text-xs font-semibold text-slate-800">리뷰 체크리스트(필수)</p>
+                            <p className="text-xs font-semibold text-slate-800">전략 수립(필수)</p>
                             <div className="mt-2 space-y-1 text-[11px] text-slate-700">
-                              <label className="flex items-center gap-1">
-                                <input
-                                  type="checkbox"
-                                  checked={stage3ReviewDraft.diffNeeded}
-                                  onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, diffNeeded: event.target.checked }))}
-                                />
-                                감별검사/뇌영상 경로 필요
-                              </label>
+                              <div>
+                                <p className="text-[11px] font-semibold text-slate-700">{isStage2OpsView ? "Stage2 진입/진단검사 필요 여부(필수)" : "감별검사 필요 여부(필수)"}</p>
+                                <div className="mt-1 grid grid-cols-2 gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setStage3ReviewDraft((prev) => ({
+                                        ...prev,
+                                        diffNeeded: true,
+                                        diffDecisionSet: true,
+                                      }))
+                                    }
+                                    className={cn(
+                                      "rounded border px-2 py-1 text-[10px] font-semibold",
+                                      stage3ReviewDraft.diffDecisionSet && stage3ReviewDraft.diffNeeded
+                                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                        : "border-slate-200 bg-white text-slate-600",
+                                    )}
+                                  >
+                                    필요
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setStage3ReviewDraft((prev) => ({
+                                        ...prev,
+                                        diffNeeded: false,
+                                        diffDecisionSet: true,
+                                      }))
+                                    }
+                                    className={cn(
+                                      "rounded border px-2 py-1 text-[10px] font-semibold",
+                                      stage3ReviewDraft.diffDecisionSet && !stage3ReviewDraft.diffNeeded
+                                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
+                                        : "border-slate-200 bg-white text-slate-600",
+                                    )}
+                                  >
+                                    보류
+                                  </button>
+                                </div>
+                              </div>
                               <label className="flex items-center gap-1">
                                 <input
                                   type="checkbox"
@@ -6020,9 +8464,19 @@ export function Stage1OpsDetail({
                                 />
                                 검사결과 입력/연결 완료 여부 확인
                               </label>
+                              <label className="flex items-center gap-1">
+                                <input
+                                  type="checkbox"
+                                  checked={stage3ReviewDraft.consentConfirmed}
+                                  onChange={(event) =>
+                                    setStage3ReviewDraft((prev) => ({ ...prev, consentConfirmed: event.target.checked }))
+                                  }
+                                />
+                                상담 동의 확인
+                              </label>
                             </div>
                             <div className="mt-2">
-                              <label className="text-[11px] font-semibold text-slate-600">우선순위</label>
+                              <label className="text-[11px] font-semibold text-slate-600">업무 우선순위(운영)</label>
                               <select
                                 value={stage3ReviewDraft.priority}
                                 onChange={(event) =>
@@ -6044,21 +8498,25 @@ export function Stage1OpsDetail({
                                 value={stage3ReviewDraft.strategyMemo}
                                 onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, strategyMemo: event.target.value }))}
                                 className="mt-1 h-28 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
-                                placeholder={"1) Stage3 진입 사유\n2) 감별검사 계획\n3) 위험 추적/정밀관리 방향"}
+                                placeholder={
+                                  isStage2OpsView
+                                    ? "1) Stage1 근거 요약\n2) 신경심리/임상평가 계획\n3) 전문의/최종분류 준비사항"
+                                    : "1) 왜 Stage3로 전이되었는지\n2) 감별검사/뇌영상 계획\n3) 정밀관리/추적 방향"
+                                }
                               />
                             </div>
                           </div>
 
                           <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
                             <p className="text-[11px] text-indigo-800">
-                              완료로 표시 시 `STAGE3_REVIEW_DONE`, `RISK_REVIEWED` 이벤트가 감사로그/타임라인에 기록됩니다.
+                              완료 시 <strong>{isStage2OpsView ? "STEP1 검토 완료" : "STAGE3_REVIEW_DONE"}</strong> 이벤트와 전략 메모가 타임라인/감사로그에 기록됩니다.
                             </p>
                             <button
                               type="button"
                               onClick={() => moveStage3TaskStep(1)}
                               className="mt-2 w-full rounded-md border border-indigo-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
                             >
-                              Step2로 이동
+                              {isStage2OpsView ? "Step2(신경심리검사)로 이동" : "Step2(감별경로)로 이동"}
                             </button>
                           </div>
                         </div>
@@ -6071,163 +8529,381 @@ export function Stage1OpsDetail({
             {stage3TaskModalStep === "CONTACT_EXECUTION"
               ? (() => {
                   const diffStatus = detail.stage3?.diffPathStatus ?? "NONE";
-                  const diffStepIndex = STAGE3_DIFF_STATUS_STEPS.findIndex((item) => item.status === diffStatus);
+                  const flowItems: Array<{ key: keyof Stage3Step2FlowState; label: string }> = [
+                    { key: "consultStarted", label: "1) 상담 시작" },
+                    { key: "infoCollected", label: "2) 정보 수집" },
+                    { key: "ragGenerated", label: "3) RAG 자동기록" },
+                    { key: "bookingConfirmed", label: "4) 예약 확정" },
+                    { key: "messageSent", label: "5) 확인 문자" },
+                    { key: "calendarSynced", label: "6) 캘린더 등록" },
+                  ];
+                  if (isStage2OpsView) {
+                    return (
+                      <section className="rounded-lg border border-gray-200 bg-white p-4">
+                        <h4 className="text-sm font-bold text-slate-900">검사 결과 입력</h4>
+                        <p className="mt-1 text-[11px] text-gray-600">
+                          MMSE/CDR(GDS)/신경인지검사/전문의 소견을 입력하고 누락 항목을 0으로 맞춥니다.
+                        </p>
+                        <div className="mt-3">
+                          <StepChecklist items={STAGE2_TASK_CHECKLIST.CONTACT_EXECUTION} />
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                          <label className="text-[11px] text-slate-600">
+                            MMSE 점수
+                            <input
+                              value={stage2Diagnosis.tests.mmse ?? ""}
+                              onChange={(event) =>
+                                setStage2Diagnosis((prev) => ({
+                                  ...prev,
+                                  tests: {
+                                    ...prev.tests,
+                                    mmse: event.target.value === "" ? undefined : Number(event.target.value),
+                                  },
+                                }))
+                              }
+                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                            />
+                          </label>
+                          <label className="text-[11px] text-slate-600">
+                            CDR/GDS 점수
+                            <input
+                              value={stage2Diagnosis.tests.cdr ?? ""}
+                              onChange={(event) =>
+                                setStage2Diagnosis((prev) => ({
+                                  ...prev,
+                                  tests: {
+                                    ...prev.tests,
+                                    cdr: event.target.value === "" ? undefined : Number(event.target.value),
+                                  },
+                                }))
+                              }
+                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                            />
+                          </label>
+                          <label className="text-[11px] text-slate-600">
+                            신경인지검사 유형
+                            <select
+                              value={stage2Diagnosis.tests.neuroCognitiveType ?? ""}
+                              onChange={(event) =>
+                                setStage2Diagnosis((prev) => ({
+                                  ...prev,
+                                  tests: {
+                                    ...prev.tests,
+                                    neuroCognitiveType:
+                                      (event.target.value as Stage2Diagnosis["tests"]["neuroCognitiveType"]) || undefined,
+                                  },
+                                }))
+                              }
+                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                            >
+                              <option value="">선택</option>
+                              <option value="CERAD-K">CERAD-K</option>
+                              <option value="SNSB-II">SNSB-II</option>
+                              <option value="SNSB-C">SNSB-C</option>
+                              <option value="LICA">LICA</option>
+                            </select>
+                          </label>
+                          <label className="text-[11px] text-slate-600">
+                            전문의 소견
+                            <select
+                              value={stage2Diagnosis.tests.specialist ? "DONE" : "MISSING"}
+                              onChange={(event) =>
+                                setStage2Diagnosis((prev) => ({
+                                  ...prev,
+                                  tests: {
+                                    ...prev.tests,
+                                    specialist: event.target.value === "DONE",
+                                  },
+                                }))
+                              }
+                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                            >
+                              <option value="MISSING">MISSING</option>
+                              <option value="DONE">DONE</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        {stage2ResultMissingCount > 0 ? (
+                          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                            누락 경고: 필수 검사 입력 {stage2ResultMissingCount}건이 남아 있습니다.
+                          </div>
+                        ) : (
+                          <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
+                            필수 검사 입력 누락이 없습니다. 결과 반영 후 STEP3로 이동할 수 있습니다.
+                          </div>
+                        )}
+
+                        <button
+                          onClick={saveStage2TestInputs}
+                          className="mt-3 inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a]"
+                        >
+                          <CheckCircle2 size={13} /> 결과 입력 반영
+                        </button>
+                      </section>
+                    );
+                  }
                   const approvedReady = stage3PendingApprovalCount === 0;
+                  const highPriorityRecs = ragRecommendations.slice(0, 3);
 
                   return (
                     <section className="rounded-lg border border-gray-200 bg-white p-4">
-                      <h4 className="text-sm font-bold text-slate-900">감별검사/뇌영상 경로 실행 보드</h4>
+                      <h4 className="text-sm font-bold text-slate-900">{isStage2OpsView ? "2차 1단계 신경심리검사 실행" : "감별검사/뇌영상 경로 실행"}</h4>
                       <p className="mt-1 text-[11px] text-gray-600">
-                        권고→의뢰→예약→결과 입력 순서로 실행하고, 각 단계 산출물을 운영 기록으로 남깁니다.
+                        {isStage2OpsView
+                          ? "의뢰/예약/결과수신 경로를 한 화면에서 처리하고 문자/캘린더 기록까지 연결합니다."
+                          : "전화 상담 기반 정보 수집 → RAG 자동기록 → 예약/문자/캘린더 패키지 실행까지 한 화면에서 처리합니다."}
                       </p>
 
                       <div className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 p-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-xs font-semibold text-indigo-900">Path Progress</p>
+                          <p className="text-xs font-semibold text-indigo-900">업무 플로우 미리보기</p>
                           <span className="rounded border border-indigo-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
                             현재 상태 {diffStatus} · 승인대기 {stage3PendingApprovalCount}건
                           </span>
                         </div>
-                        <div className="mt-2 grid grid-cols-1 gap-1.5 md:grid-cols-5">
-                          {STAGE3_DIFF_STATUS_STEPS.map((step, idx) => {
-                            const isDone = diffStepIndex >= idx;
-                            const isCurrent = step.status === diffStatus;
+                        <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-6">
+                          {flowItems.map((step) => {
+                            const done = stage3Step2Flow[step.key];
                             return (
                               <div
-                                key={step.status}
+                                key={step.key}
                                 className={cn(
                                   "rounded border px-2 py-1.5 text-[10px]",
-                                  isCurrent
-                                    ? "border-indigo-300 bg-white text-indigo-800"
-                                    : isDone
-                                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                                      : "border-slate-200 bg-white text-slate-600",
+                                  done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-600",
                                 )}
                               >
                                 <p className="font-semibold">{step.label}</p>
-                                <p className="mt-0.5 leading-relaxed">{step.artifact}</p>
+                                <p className="mt-0.5">{done ? "DONE" : "PENDING"}</p>
                               </div>
                             );
                           })}
                         </div>
                       </div>
 
-                      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_1fr]">
-                        <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                          <p className="text-xs font-semibold text-slate-800">순서형 액션 보드</p>
-                          {STAGE3_DIFF_ACTION_CARDS.map((action) => (
-                            <div key={action.id} className={cn("rounded-md border p-2", action.tone)}>
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div>
-                                  <p className="text-[11px] font-semibold">{action.title}</p>
-                                  <p className="text-[10px] opacity-80">{action.description}</p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (action.id === "RESCHEDULE_REEVAL") {
-                                      handleStage3ReevalAction("RESCHEDULE");
-                                      return;
-                                    }
-                                    handleStage3DiffPathAction(action.id);
-                                  }}
-                                  className="rounded border border-current/40 bg-white px-2 py-1 text-[10px] font-semibold"
-                                >
-                                  실행
-                                </button>
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
-                                <span>{action.completionHint}</span>
-                                <span className="opacity-70">{action.eventHint}</span>
-                              </div>
-                            </div>
-                          ))}
+                      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.1fr]">
+                        <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-slate-800">상담 프로그램 패널</p>
+                            <span className="text-[10px] text-slate-500">기존 상담 UI 재사용</span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStage3Step2Flow((prev) => ({ ...prev, consultStarted: true }));
+                                handleCallStart();
+                              }}
+                              className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700"
+                            >
+                              상담 시작
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const first = highPriorityRecs[0];
+                                if (first) {
+                                  handleApplyRagRecommendation(first);
+                                  setStage3Step2Flow((prev) => ({ ...prev, consultStarted: true }));
+                                  toast.success("추천 스크립트를 불러왔습니다.");
+                                } else {
+                                  toast("추천 스크립트가 아직 없습니다.");
+                                }
+                              }}
+                              className="rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700"
+                            >
+                              스크립트 추천
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!callMemo.trim()) {
+                                  toast.error("통화 메모를 먼저 입력해 주세요.");
+                                  return;
+                                }
+                                setStage3Step2Flow((prev) => ({ ...prev, infoCollected: true }));
+                                setStage3DiffDraft((prev) => ({ ...prev, note: callMemo.trim() }));
+                                appendAuditLog(`Stage3 통화 메모 반영: ${callMemo.slice(0, 60)}`);
+                              }}
+                              className="rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700"
+                            >
+                              통화 메모 반영
+                            </button>
+                          </div>
+
+                          <SmsPanel
+                            stageLabel="3차"
+                            templates={smsTemplatesForExecutor}
+                            defaultVars={{
+                              centerName: DEFAULT_CENTER_NAME,
+                              centerPhone: DEFAULT_CENTER_PHONE,
+                              bookingLink: reservationInfoToBookingLine(detail.reservationInfo),
+                            }}
+                            caseId={detail.header.caseId}
+                            citizenPhone={caseRecord?.profile.phone ?? "010-0000-0000"}
+                            guardianPhone={caseRecord?.profile.guardianPhone}
+                            callScripts={callScriptsForModal}
+                            compact
+                            onConsultation={handleStage3Step2Consultation}
+                            onSmsSent={handleStage3Step2SmsSent}
+                          />
                         </div>
 
-                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                          <p className="text-xs font-semibold text-slate-800">상세 입력/산출물</p>
-                          <label className="mt-2 block text-[11px] text-slate-600">
-                            기관명
-                            <input
-                              value={stage3DiffDraft.orgName}
-                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, orgName: event.target.value }))}
-                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
-                            />
-                          </label>
-                          <label className="mt-2 block text-[11px] text-slate-600">
-                            연락처
-                            <input
-                              value={stage3DiffDraft.orgPhone}
-                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, orgPhone: event.target.value }))}
-                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
-                            />
-                          </label>
-                          <label className="mt-2 block text-[11px] text-slate-600">
-                            결과 라벨(운영 참고)
-                            <select
-                              value={stage3DiffDraft.resultLabel}
-                              onChange={(event) =>
-                                setStage3DiffDraft((prev) => ({
-                                  ...prev,
-                                  resultLabel: event.target.value as Stage3DiffDraft["resultLabel"],
-                                }))
-                              }
-                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
-                            >
-                              <option value="양성 신호">양성 신호</option>
-                              <option value="음성 신호">음성 신호</option>
-                              <option value="불확실">불확실</option>
-                            </select>
-                          </label>
-                          <div className="mt-2 grid grid-cols-2 gap-2">
-                            <label className="block text-[11px] text-slate-600">
-                              Aβ (선택)
+                        <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs font-semibold text-slate-800">연계/예약 폼(자동 채움 중심)</p>
+                          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                            <label className="text-[11px] text-slate-600">
+                              병원/기관
                               <input
-                                value={stage3DiffDraft.abeta ?? ""}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, abeta: event.target.value }))}
+                                value={stage3DiffDraft.preferredHospital}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, preferredHospital: event.target.value }))}
                                 className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
                               />
                             </label>
-                            <label className="block text-[11px] text-slate-600">
-                              tau (선택)
+                            <label className="text-[11px] text-slate-600">
+                              연락처
                               <input
-                                value={stage3DiffDraft.tau ?? ""}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, tau: event.target.value }))}
+                                value={stage3DiffDraft.orgPhone}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, orgPhone: event.target.value }))}
+                                className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                              />
+                            </label>
+                            <label className="text-[11px] text-slate-600">
+                              예약 일시
+                              <input
+                                type="datetime-local"
+                                value={toDateTimeLocalValue(stage3DiffDraft.bookingAt)}
+                                onChange={(event) =>
+                                  setStage3DiffDraft((prev) => ({
+                                    ...prev,
+                                    bookingAt: fromDateTimeLocalValue(event.target.value) || prev.bookingAt,
+                                  }))
+                                }
+                                className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                              />
+                            </label>
+                            <label className="text-[11px] text-slate-600">
+                              대체 일정
+                              <input
+                                type="datetime-local"
+                                value={toDateTimeLocalValue(stage3DiffDraft.bookingAltAt)}
+                                onChange={(event) =>
+                                  setStage3DiffDraft((prev) => ({
+                                    ...prev,
+                                    bookingAltAt: fromDateTimeLocalValue(event.target.value) || prev.bookingAltAt,
+                                  }))
+                                }
                                 className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
                               />
                             </label>
                           </div>
-                          <label className="mt-2 block text-[11px] text-slate-600">
-                            결과 요약
+                          <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-700">
+                            <label className="flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                checked={stage3DiffDraft.testBiomarker}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, testBiomarker: event.target.checked }))}
+                              />
+                              바이오마커
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                checked={stage3DiffDraft.testBrainImaging}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, testBrainImaging: event.target.checked }))}
+                              />
+                              뇌영상
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                checked={stage3DiffDraft.caregiverCompanion}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, caregiverCompanion: event.target.checked }))}
+                              />
+                              보호자 동행
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                checked={stage3DiffDraft.mobilityIssue}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, mobilityIssue: event.target.checked }))}
+                              />
+                              이동/교통 이슈
+                            </label>
+                          </div>
+                          <label className="block text-[11px] text-slate-600">
+                            안내/준비사항
                             <textarea
-                              value={stage3DiffDraft.resultSummary}
-                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, resultSummary: event.target.value }))}
-                              className="mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
-                              placeholder="결과 수집/요약 내용을 입력합니다."
-                            />
-                          </label>
-                          <label className="mt-2 flex items-center gap-1 text-[11px] text-slate-700">
-                            <input
-                              type="checkbox"
-                              checked={stage3DiffDraft.riskReady}
-                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, riskReady: event.target.checked }))}
-                            />
-                            이 결과로 Step3 전환위험 재산출 가능
-                          </label>
-                          <label className="mt-2 block text-[11px] text-slate-600">
-                            운영 메모
-                            <textarea
-                              value={stage3DiffDraft.note}
-                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, note: event.target.value }))}
+                              value={stage3DiffDraft.prepGuide}
+                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, prepGuide: event.target.value }))}
                               className="mt-1 h-14 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
                             />
                           </label>
-                          <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50 px-2 py-1 text-[10px] text-indigo-700">
-                            완료 조건: 상태 SCHEDULED 또는 COMPLETED + 승인 대기 0건. 결과 입력이 있으면 Step3에서 전환위험 추적이 활성화됩니다.
+                          <label className="block text-[11px] text-slate-600">
+                            상담/운영 메모
+                            <textarea
+                              value={stage3DiffDraft.note}
+                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, note: event.target.value }))}
+                              className="mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
+                            />
+                          </label>
+
+                          <div className="rounded-md border border-indigo-200 bg-white p-2">
+                            <div className="flex flex-wrap items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={runStage3RagAutoFill}
+                                className="rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700"
+                              >
+                                RAG 자동 채움
+                              </button>
+                              {stage3RagAutoFill ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={applyStage3RagAutoFill}
+                                    className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700"
+                                  >
+                                    적용
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={ignoreStage3RagAutoFill}
+                                    className="rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700"
+                                  >
+                                    무시
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
+                            {stage3RagAutoFill ? (
+                              <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-[10px] text-slate-600">
+                                <p className="font-semibold text-slate-800">
+                                  추천 입력(확인 필요) · 신뢰도 {stage3RagAutoFill.confidenceLabel}
+                                </p>
+                                <p className="mt-1">변경 필드: {stage3RagAutoFill.changedFields.join(", ") || "없음"}</p>
+                                {stage3RagAutoFill.reasonSnippets.map((snippet) => (
+                                  <p key={snippet} className="mt-0.5">- {snippet}</p>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
-                          {!approvedReady ? (
-                            <p className="mt-1 text-[10px] text-amber-700">승인 대기 권고가 남아 있어 완료 버튼이 제한될 수 있습니다.</p>
-                          ) : null}
+
+                          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
+                            <p className="text-[10px] text-emerald-800">
+                              완료 조건: SCHEDULED 이상 + 승인 대기 0건. 예약 확정 시 문자/캘린더/감사 로그를 일괄 기록합니다.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={runStage3BookingBundle}
+                              disabled={!approvedReady}
+                              className="mt-2 w-full rounded-md border border-emerald-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              예약 확정 패키지 실행
+                            </button>
+                            {!approvedReady ? <p className="mt-1 text-[10px] text-amber-700">승인 대기 액션을 먼저 처리하세요.</p> : null}
+                          </div>
                         </div>
                       </div>
 
@@ -6271,151 +8947,235 @@ export function Stage1OpsDetail({
               : null}
 
             {stage3TaskModalStep === "RESPONSE_HANDLING" ? (
-              <section className="rounded-lg border border-gray-200 bg-white p-4">
-                <h4 className="text-sm font-bold text-slate-900">검사결과 기반 전환 위험 예측/추적</h4>
-                <p className="mt-1 text-[11px] text-gray-600">
-                  감별경로 예약/결과 입력 이후에만 위험 추세 검토를 완료할 수 있습니다.
-                </p>
-                {!stage3DiffReadyForRisk ? (
-                  <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-800">
-                    감별경로 상태가 {detail.stage3?.diffPathStatus ?? "NONE"} 입니다. STEP2에서 예약 또는 완료 상태를 먼저 기록해 주세요.
+              isStage2OpsView ? (
+                <section className="rounded-lg border border-gray-200 bg-white p-4">
+                  <h4 className="text-sm font-bold text-slate-900">분류 확정</h4>
+                  <p className="mt-1 text-[11px] text-gray-600">
+                    정상/MCI/치매 분류를 담당자 확인으로 확정합니다. 모델 확률은 운영 참고 정보입니다.
+                  </p>
+                  <div className="mt-3">
+                    <StepChecklist items={STAGE2_TASK_CHECKLIST.RESPONSE_HANDLING} />
                   </div>
-                ) : (
-                  <div className="mt-3 space-y-3">
-                    <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
-                      <p className="text-xs font-semibold text-indigo-900">
-                        2년 전환 위험도 {toPercentValue(detail.stage3?.transitionRisk.risk2y_now ?? 0)}%
-                      </p>
-                      <p className="mt-1 text-[11px] text-indigo-800">
-                        신뢰 {detail.stage3?.transitionRisk.risk2y_label} · 추세 {detail.stage3?.transitionRisk.trend} · 모델 {detail.stage3?.transitionRisk.modelVersion}
-                      </p>
-                      {detail.stage3 ? <RiskTrendChart risk={detail.stage3.transitionRisk} /> : null}
+
+                  <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <Stage2ClassificationViz
+                      probs={stage2DraftProbs}
+                      predictedLabel={stage2ClassificationDraft}
+                      mciSeverity={stage2DraftMciStage}
+                      mciScore={stage2ClassificationDraft === "MCI" ? (stage2DraftMciStage === "위험" ? 82 : stage2DraftMciStage === "양호" ? 34 : 58) : undefined}
+                    />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <label className="text-[11px] text-slate-600">
+                      분류 결과
+                      <select
+                        value={stage2ClassificationDraft}
+                        onChange={(event) => setStage2ClassificationDraft(event.target.value as Stage2ClassLabel)}
+                        className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                      >
+                        <option value="정상">정상</option>
+                        <option value="MCI">MCI</option>
+                        <option value="치매">치매</option>
+                      </select>
+                    </label>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+                      <p className="font-semibold">MCI 세분화(ANN)</p>
+                      <p className="mt-1">{stage2ClassificationDraft === "MCI" ? stage2DraftMciStage ?? "산출 대기" : "-"}</p>
                     </div>
-                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                      <label className="text-[11px] text-slate-600">
-                        추세 검토 메모(필수)
-                        <textarea
-                          value={stage3RiskReviewDraft.memo}
-                          onChange={(event) => setStage3RiskReviewDraft((prev) => ({ ...prev, memo: event.target.value }))}
-                          className="mt-1 h-24 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
-                          placeholder="왜 위험이 상승/하락했는지, 어떤 후속 조치가 필요한지 기록하세요."
-                        />
-                      </label>
-                      <div>
-                        <label className="text-[11px] text-slate-600">다음 액션</label>
-                        <select
-                          value={stage3RiskReviewDraft.nextAction}
-                          onChange={(event) =>
-                            setStage3RiskReviewDraft((prev) => ({
-                              ...prev,
-                              nextAction: event.target.value as Stage3RiskReviewDraft["nextAction"],
-                            }))
-                          }
-                          className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
-                        >
-                          {Object.entries(STAGE3_RISK_NEXT_ACTION_LABELS).map(([value, label]) => (
-                            <option key={value} value={value}>
-                              {label}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() =>
-                            handleStage3RiskReview({
-                              summary: `중간 검토: ${stage3RiskReviewDraft.memo || "메모 없음"} · 다음 액션: ${STAGE3_RISK_NEXT_ACTION_LABELS[stage3RiskReviewDraft.nextAction]}`,
-                              nextAction: stage3RiskReviewDraft.nextAction,
-                            })
-                          }
-                          className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
-                        >
-                          추세 검토 기록
-                        </button>
+                  </div>
+
+                  <label className="mt-3 block text-[11px] text-slate-600">
+                    확정 근거 1줄(필수)
+                    <textarea
+                      value={stage2RationaleDraft}
+                      onChange={(event) => setStage2RationaleDraft(event.target.value)}
+                      className="mt-1 h-20 w-full rounded-md border border-gray-200 px-2 py-1 text-xs outline-none focus:border-blue-300"
+                      placeholder="분류 근거를 입력하세요. (운영 참고 / 담당자 확인 필요)"
+                    />
+                  </label>
+
+                  {!stage2CanConfirm ? (
+                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                      {stage2MissingRequirements.map((message) => (
+                        <p key={message}>- {message}</p>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <button
+                    onClick={confirmStage2Classification}
+                    disabled={!stage2CanConfirm}
+                    className="mt-3 inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a] disabled:opacity-50"
+                  >
+                    <ShieldCheck size={13} /> 분류 확정
+                  </button>
+                </section>
+              ) : (
+                <section className="rounded-lg border border-gray-200 bg-white p-4">
+                  <h4 className="text-sm font-bold text-slate-900">검사결과 기반 전환 위험 예측/추적</h4>
+                  <p className="mt-1 text-[11px] text-gray-600">
+                    감별경로 예약/결과 입력 이후에만 위험 추세 검토를 완료할 수 있습니다.
+                  </p>
+                  {!stage3DiffReadyForRisk ? (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-800">
+                      감별경로 상태가 {detail.stage3?.diffPathStatus ?? "NONE"} 입니다. STEP2에서 예약 또는 완료 상태를 먼저 기록해 주세요.
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3">
+                      <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                        <p className="text-xs font-semibold text-indigo-900">2년 전환 위험도 {toPercentValue(detail.stage3?.transitionRisk.risk2y_now ?? 0)}%</p>
+                        <p className="mt-1 text-[11px] text-indigo-800">
+                          신뢰 {deriveStage3RiskLabel(detail.stage3?.transitionRisk.risk2y_now ?? 0)} · 추세 {detail.stage3?.transitionRisk.trend} · 모델{" "}
+                          {detail.stage3?.transitionRisk.modelVersion}
+                        </p>
+                        {detail.stage3 ? <RiskTrendChart risk={detail.stage3.transitionRisk} stage2OpsView={false} /> : null}
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                        <label className="text-[11px] text-slate-600">
+                          추세 검토 메모(필수)
+                          <textarea
+                            value={stage3RiskReviewDraft.memo}
+                            onChange={(event) => setStage3RiskReviewDraft((prev) => ({ ...prev, memo: event.target.value }))}
+                            className="mt-1 h-24 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
+                            placeholder="왜 위험이 상승/하락했는지, 어떤 후속 조치가 필요한지 기록하세요."
+                          />
+                        </label>
+                        <div>
+                          <label className="text-[11px] text-slate-600">다음 액션</label>
+                          <select
+                            value={stage3RiskReviewDraft.nextAction}
+                            onChange={(event) =>
+                              setStage3RiskReviewDraft((prev) => ({
+                                ...prev,
+                                nextAction: event.target.value as Stage3RiskReviewDraft["nextAction"],
+                              }))
+                            }
+                            className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                          >
+                            {Object.entries(STAGE3_RISK_NEXT_ACTION_LABELS).map(([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() =>
+                              handleStage3RiskReview({
+                                summary: `중간 검토: ${stage3RiskReviewDraft.memo || "메모 없음"} · 다음 액션: ${STAGE3_RISK_NEXT_ACTION_LABELS[stage3RiskReviewDraft.nextAction]}`,
+                                nextAction: stage3RiskReviewDraft.nextAction,
+                              })
+                            }
+                            className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                          >
+                            추세 검토 기록
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
-              </section>
+                  )}
+                </section>
+              )
             ) : null}
 
             {stage3TaskModalStep === "FOLLOW_UP" ? (
-              <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
-                <h4 className="text-sm font-bold text-slate-900">관리 제공(프로그램·연계)</h4>
-                <p className="text-[11px] text-gray-600">
-                  기존 프로그램 제공 UI를 재사용해 실행/연계를 기록하고 추적 계획을 확정합니다.
-                </p>
-
-                <div className="rounded-md border border-slate-200 bg-white p-3">
-                  <p className="mb-2 text-[11px] text-slate-600">
-                    빠른 실행보드는 제거되었고, 아래 프로그램 제공 UI에서 선택/실행을 기록합니다.
-                    <span className="ml-1 font-semibold text-slate-800">추천 상위 3개 일괄 추가</span> 기능은 유지됩니다.
+              isStage2OpsView ? (
+                <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+                  <h4 className="text-sm font-bold text-slate-900">다음 단계 결정</h4>
+                  <p className="text-[11px] text-gray-600">
+                    분류 확정 결과를 기준으로 정상 추적/Stage3 진입/감별 경로 중 1개를 결정하고 기록합니다.
                   </p>
-                  <CaseDetailPrograms
-                    caseId={detail.header.caseId}
-                    stage={3}
-                    resultLabel={stage3CaseResultLabel}
-                    mciSeverity={stage3MciSeverity}
-                    riskTags={detail.header.riskGuardrails ?? []}
-                    actorName={detail.header.assigneeName}
-                  />
-                </div>
+                  <StepChecklist items={STAGE2_TASK_CHECKLIST.FOLLOW_UP} />
 
-                <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
-                  <p className="text-xs font-semibold text-indigo-900">추적 계획 확정</p>
-                  <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    <label className="text-[11px] text-indigo-800">
-                      다음 추적 일정
-                      <input
-                        type="datetime-local"
-                        value={toDateTimeLocalValue(stage3TrackingPlanDraft.nextTrackingAt)}
-                        onChange={(event) =>
-                          setStage3TrackingPlanDraft((prev) => ({
-                            ...prev,
-                            nextTrackingAt: fromDateTimeLocalValue(event.target.value) || prev.nextTrackingAt,
-                          }))
-                        }
-                        className="mt-1 h-8 w-full rounded-md border border-indigo-200 px-2 text-[11px] outline-none focus:border-indigo-400"
-                      />
-                    </label>
-                    <label className="text-[11px] text-indigo-800">
-                      리마인더 시간
-                      <input
-                        type="time"
-                        value={stage3TrackingPlanDraft.reminderTime}
-                        onChange={(event) => setStage3TrackingPlanDraft((prev) => ({ ...prev, reminderTime: event.target.value }))}
-                        className="mt-1 h-8 w-full rounded-md border border-indigo-200 px-2 text-[11px] outline-none focus:border-indigo-400"
-                      />
-                    </label>
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-semibold text-slate-800">다음 단계 선택</p>
+                    <p className="mt-1 text-[11px] text-slate-600">
+                      현재 분류: {stage2CurrentLabel}
+                      {stage2CurrentLabel === "MCI" && stage2CurrentMciStage ? ` (${stage2CurrentMciStage})` : ""}
+                    </p>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                      <button
+                        onClick={() => setStage2NextStep("FOLLOWUP_2Y", "정상 분류로 2년 후 선별검사 일정 생성")}
+                        disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "정상"}
+                        className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
+                      >
+                        정상 → 2년 후 선별
+                      </button>
+                      <button
+                        onClick={() => setStage2NextStep("STAGE3", "MCI/치매 분류로 Stage3 진입 생성")}
+                        disabled={!stage2ConfirmedAt || !stage2NeedsStage3(stage2CurrentLabel)}
+                        className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] font-semibold text-blue-700 disabled:opacity-50"
+                      >
+                        MCI → Stage3 진입
+                      </button>
+                      <button
+                        onClick={() => setStage2NextStep("DIFF_PATH", "치매 분류로 감별검사 경로 전환")}
+                        disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "치매"}
+                        className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-semibold text-rose-700 disabled:opacity-50"
+                      >
+                        치매 → 감별 경로
+                      </button>
+                    </div>
                   </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
-                    <label className="text-[11px] text-indigo-800">
-                      D-Day
-                      <input
-                        type="number"
-                        min={0}
-                        max={7}
-                        value={stage3TrackingPlanDraft.reminderDaysBefore}
-                        onChange={(event) =>
-                          setStage3TrackingPlanDraft((prev) => ({ ...prev, reminderDaysBefore: Number(event.target.value) || 0 }))
-                        }
-                        className="mt-1 h-8 w-full rounded-md border border-indigo-200 px-2 text-[11px] outline-none focus:border-indigo-400"
-                      />
-                    </label>
-                    <label className="text-[11px] text-indigo-800">
-                      재시도 횟수
-                      <input
-                        type="number"
-                        min={0}
-                        max={5}
-                        value={stage3TrackingPlanDraft.retryCount}
-                        onChange={(event) =>
-                          setStage3TrackingPlanDraft((prev) => ({ ...prev, retryCount: Number(event.target.value) || 0 }))
-                        }
-                        className="mt-1 h-8 w-full rounded-md border border-indigo-200 px-2 text-[11px] outline-none focus:border-indigo-400"
-                      />
-                    </label>
+
+                  <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                    <p className="text-xs font-semibold text-indigo-900">안내 실행(보조)</p>
+                    <p className="mt-1 text-[11px] text-indigo-800">
+                      일정 안내/결과 요청은 우측 상담·문자 패널에서 실행됩니다. 완료 시 타임라인/감사로그에 함께 기록됩니다.
+                    </p>
                   </div>
-                </div>
-              </section>
+                </section>
+              ) : (
+                <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+                  <h4 className="text-sm font-bold text-slate-900">관리 제공(프로그램·연계)</h4>
+                  <p className="text-[11px] text-gray-600">
+                    기존 프로그램 제공 UI를 재사용해 실행/연계를 기록하고 추적 계획을 확정합니다.
+                  </p>
+                  <div className="rounded-md border border-slate-200 bg-white p-3">
+                    <p className="mb-2 text-[11px] text-slate-600">
+                      빠른 실행보드는 제거되었고, 아래 프로그램 제공 UI에서 선택/실행을 기록합니다.
+                      <span className="ml-1 font-semibold text-slate-800">추천 상위 3개 일괄 추가</span> 기능은 유지됩니다.
+                    </p>
+                    <CaseDetailPrograms
+                      caseId={detail.header.caseId}
+                      stage={3}
+                      resultLabel={stage3CaseResultLabel}
+                      mciSeverity={stage3MciSeverity}
+                      riskTags={detail.header.riskGuardrails ?? []}
+                      actorName={detail.header.assigneeName}
+                    />
+                  </div>
+
+                  <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                    <p className="text-xs font-semibold text-indigo-900">추적 계획 확정</p>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      <label className="text-[11px] text-indigo-800">
+                        다음 추적 일정
+                        <input
+                          type="datetime-local"
+                          value={toDateTimeLocalValue(stage3TrackingPlanDraft.nextTrackingAt)}
+                          onChange={(event) =>
+                            setStage3TrackingPlanDraft((prev) => ({
+                              ...prev,
+                              nextTrackingAt: fromDateTimeLocalValue(event.target.value) || prev.nextTrackingAt,
+                            }))
+                          }
+                          className="mt-1 h-8 w-full rounded-md border border-indigo-200 px-2 text-[11px] outline-none focus:border-indigo-400"
+                        />
+                      </label>
+                      <label className="text-[11px] text-indigo-800">
+                        리마인더 시간
+                        <input
+                          type="time"
+                          value={stage3TrackingPlanDraft.reminderTime}
+                          onChange={(event) => setStage3TrackingPlanDraft((prev) => ({ ...prev, reminderTime: event.target.value }))}
+                          className="mt-1 h-8 w-full rounded-md border border-indigo-200 px-2 text-[11px] outline-none focus:border-indigo-400"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </section>
+              )
             ) : null}
 
             <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-2 rounded-lg border border-slate-200 bg-white/95 p-3 backdrop-blur">
@@ -6451,340 +9211,399 @@ export function Stage1OpsDetail({
       </Dialog>
 
       <Dialog
-        open={!isStage3Mode && activeStage1Modal === "PRECHECK"}
-        onOpenChange={(open) => {
-          if (!open) closeStage1Modal();
-        }}
-      >
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-4">
-          <h3 className="text-sm font-bold text-slate-900">
-            {isStage3Mode ? "전환 위험 추적(기준선/리뷰)" : isStage2Mode ? "2차 평가 결과 확인" : "사전 조건 확인"}
-          </h3>
-          <p className="mt-1 text-[11px] text-gray-500">
-            {isStage3Mode
-              ? "감별경로 단계 진입 전, 추적 기준선(동의/연락채널/주기)과 위험 리뷰를 확인합니다."
-              : isStage2Mode
-                ? "분기/연계 실행 전, 필수 근거와 입력값 충족 여부를 확인합니다."
-                : "운영 실행 전, 대상자 접촉 채널의 유효성과 제한 사항을 확인합니다."}
-          </p>
-          <div className="mt-3">
-            <PolicyGatePanel gates={detail.policyGates} onFix={handleGateFixAction} mode={mode} />
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={!isStage3Mode && activeStage1Modal === "CONTACT_EXECUTION"}
+        open={!isStage3Mode && Boolean(activeStage1Modal)}
         onOpenChange={(open) => {
           if (!open) closeStage1Modal();
         }}
       >
         <DialogContent className="w-[96vw] max-w-[96vw] sm:max-w-[1700px] max-h-[92vh] overflow-y-auto p-4">
           <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div>
-                <p className="text-sm font-bold text-slate-900">
-                  {isStage3Mode ? "감별경로 실행(보조 연락 포함)" : isStage2Mode ? "분기/연계 실행" : "접촉 실행"}
-                </p>
-                <p className="text-[11px] text-slate-600">
-                  {isStage3Mode
-                    ? "이 패널은 감별경로 권고/의뢰/예약 실행과 보조 연락을 함께 처리합니다."
-                    : isStage2Mode
-                      ? "분기 안내와 연계 실행 기록을 같은 패널에서 처리합니다."
-                      : "접촉 주체에 따라 실행 방식이 달라집니다."}
-                </p>
-              </div>
-              <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-semibold", CONTACT_EXECUTOR_TONES[detail.contactExecutor])}>
-                {CONTACT_EXECUTOR_LABELS[detail.contactExecutor]}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(340px,0.8fr)_minmax(600px,1.2fr)]">
-              <RagRecommendationPanel
-                loading={ragLoading}
-                recommendations={ragRecommendations}
-                selectedId={selectedRagId}
-                editedScript={ragEditedScript}
-                onSelect={handleApplyRagRecommendation}
-                onEditScript={setRagEditedScript}
-              />
-
-              {detail.contactExecutor === "HUMAN" ? (
-                <SmsPanel
-                  stageLabel={stageLabel}
-                  templates={smsTemplatesForExecutor}
-                  defaultVars={{
-                    centerName: DEFAULT_CENTER_NAME,
-                    centerPhone: DEFAULT_CENTER_PHONE,
-                    bookingLink: reservationInfoToBookingLine(detail.reservationInfo),
-                  }}
-                  caseId={detail.header.caseId}
-                  citizenPhone={caseRecord?.profile.phone ? (isStage2Mode || isStage3Mode ? caseRecord.profile.phone : maskPhone(caseRecord.profile.phone)) : "010-****-1234"}
-                  guardianPhone={
-                    caseRecord?.profile.guardianPhone
-                      ? isStage2Mode || isStage3Mode
-                        ? caseRecord.profile.guardianPhone
-                        : maskPhone(caseRecord.profile.guardianPhone)
-                      : undefined
-                  }
-                  callScripts={callScriptsForModal}
-                  onSmsSent={(item) => {
-                    if (item.type === "BOOKING" && !detail.reservationInfo) {
-                      toast.error("예약 정보가 없어 예약안내 문자는 전송할 수 없습니다.");
-                      appendAuditLog("예약안내 발송 차단: 예약 객체 없음");
-                      return;
-                    }
-                    appendTimeline({
-                      type: "SMS_SENT",
-                      at: nowIso(),
-                      templateId: item.templateLabel,
-                      status: item.status === "SENT" ? "DELIVERED" : item.status === "SCHEDULED" ? "PENDING" : "FAILED",
-                      by: detail.header.assigneeName,
-                    });
-                    appendAuditLog(`${stageLabel} 문자 ${item.mode === "NOW" ? "발송" : "예약"}: ${item.templateLabel} (${item.status})`);
-                    if (item.status === "SENT") {
-                      completeSuggestedTodo("SMS");
-                      setRecontactDueAt(withHoursFromNow(48));
-                      setDetail((prev) => {
-                        const newExec: ContactExecution = {
-                          ...prev.contactExecution,
-                          status: "SENT",
-                          lastSentAt: nowIso(),
-                          retryCount: prev.contactExecution.retryCount + 1,
-                        };
-                        return {
-                          ...prev,
-                          contactExecution: newExec,
-                          contactFlowSteps: buildContactFlowSteps(newExec, prev.preTriageResult, prev.linkageStatus, mode),
-                        };
-                      });
-                    }
-                  }}
-                  onConsultation={(note, type, templateLabel) => {
-                    appendTimeline({
-                      type: "CALL_ATTEMPT",
-                      at: nowIso(),
-                      result: "SUCCESS",
-                      note: note || undefined,
-                      by: detail.header.assigneeName,
-                    });
-                    const recommendationLog = selectedRecommendation ? ` / 추천 스크립트: ${selectedRecommendation.title}` : "";
-                    appendAuditLog(`${stageLabel} 상담 기록: ${templateLabel}${note ? ` (${note.slice(0, 60)})` : ""}${recommendationLog}`);
-                    if (type === "CONTACT") {
-                      completeSuggestedTodo("CALL");
-                    }
-                    setDetail((prev) => {
-                      const newExec: ContactExecution = {
-                        ...prev.contactExecution,
-                        status: "WAITING_RESPONSE",
-                        lastSentAt: nowIso(),
-                        retryCount: prev.contactExecution.retryCount + 1,
-                      };
-                      return {
-                        ...prev,
-                        contactExecution: newExec,
-                        contactFlowSteps: buildContactFlowSteps(newExec, prev.preTriageResult, prev.linkageStatus, mode),
-                      };
-                    });
-                    toast.success("상담 기록이 저장되었습니다.");
-                  }}
-                />
-              ) : (
-                <section className="rounded-xl border border-violet-200 bg-violet-50/70 p-4">
-                  <h4 className="text-sm font-bold text-violet-900">Agent 접촉 수행 상태</h4>
-                  <p className="mt-1 text-[11px] text-violet-700">
-                    자동 수행은 게이트 통과와 정책 허용 시에만 실행됩니다. 운영자는 결과 확인과 예외 처리만 수행합니다.
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-bold text-indigo-900">
+                    {isStage2Mode ? "Stage2 작업열기" : "Stage1 작업열기"} · {stage1TaskCurrentCard?.title ?? "운영 루프"}
                   </p>
-
-                  <div className="mt-3 rounded-lg border border-violet-200 bg-white p-3 text-xs text-slate-700">
-                    <p>
-                      현재 상태: <strong>{AGENT_JOB_STATUS_LABELS[agentJob.status]}</strong>
-                    </p>
-                    <p className="mt-1">
-                      게이트 상태: <strong>{agentGateStatus === "PASS" ? "통과" : agentGateStatus === "NEEDS_CHECK" ? "확인 필요" : "제한"}</strong>
-                    </p>
-                    <p className="mt-1">
-                      시도 번호: <strong>{agentJob.attemptNo || detail.contactExecution.retryCount + 1}</strong>
-                    </p>
-                    <p>
-                      최근 수행:{" "}
-                      <strong>
-                        {detail.agentExecutionLogs[0]
-                          ? `${formatDateTime(detail.agentExecutionLogs[0].at)} · ${AGENT_RESULT_LABELS[detail.agentExecutionLogs[0].result]}`
-                          : "기록 없음"}
-                      </strong>
-                    </p>
-                    {agentJob.idempotencyKey ? (
-                      <p className="mt-1">
-                        중복 방지 키: <strong>{agentJob.idempotencyKey}</strong>
-                      </p>
-                    ) : null}
-                    {agentJob.lastError ? (
-                      <p className="mt-1 text-red-700">
-                        실패 사유: <strong>{agentJob.lastError}</strong>
-                      </p>
-                    ) : null}
-                    {agentJob.nextRetryAt ? (
-                      <p className="mt-1">
-                        재시도 예정: <strong>{formatDateTime(agentJob.nextRetryAt)}</strong>
-                      </p>
-                    ) : null}
-                    <p className="mt-1">STEP3/STEP4 후속 결정은 담당자가 직접 수행합니다.</p>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <p className="text-[11px] text-indigo-700">
+                    {isStage2Mode
+                      ? "근거 확인→접촉 실행→반응 처리→후속 결정을 한 패널에서 연속 수행합니다."
+                      : "사전 조건→접촉 실행→반응 처리→후속 결정을 이동 없이 연속 수행합니다."}
+                  </p>
+                </div>
+                <span className="rounded-md border border-indigo-300 bg-white px-2 py-1 text-[11px] font-semibold text-indigo-700">
+                  단계 {stage1TaskStepIndex + 1}/{stage1TaskOrder.length}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4">
+                {stage1TaskOrder.map((stepId, index) => {
+                  const card = stage1FlowCards.find((item) => item.id === stepId);
+                  const isActive = activeStage1Modal === stepId;
+                  return (
                     <button
-                      onClick={() => toast("최근 Agent 수행 상태를 확인했습니다.")}
-                      className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700"
-                    >
-                      Agent 수행 상태 확인
-                    </button>
-                    {(agentJob.status === "FAILED" || agentJob.status === "CANCELED") && agentGateStatus === "PASS" ? (
-                      <button
-                        onClick={retryAgentNow}
-                        className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"
-                      >
-                        즉시 재시도
-                      </button>
-                    ) : null}
-                    {agentJob.status === "FAILED" && agentGateStatus === "PASS" ? (
-                      <button
-                        onClick={scheduleAgentRetry}
-                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700"
-                      >
-                        재시도 예약
-                      </button>
-                    ) : null}
-                    {(agentJob.status === "QUEUED" || agentJob.status === "RUNNING") ? (
-                      <button
-                        onClick={() =>
-                          cancelAgentJob({
-                            actor: "operator",
-                            summary: "운영자 요청으로 Agent 작업을 취소했습니다.",
-                            moveToHuman: false,
-                          })
+                      key={stepId}
+                      type="button"
+                      onClick={() => {
+                        const lockReason = getFlowCardLockReason(stage1FlowCards, stepId);
+                        if (lockReason) {
+                          toast.error(lockReason);
+                          return;
                         }
-                        className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
-                      >
-                        수행 취소
-                      </button>
-                    ) : null}
-                    <button
-                      onClick={() => handleContactExecutorChange("HUMAN")}
-                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        setStage1ModalStep(stepId);
+                      }}
+                      className={cn(
+                        "rounded-md border px-2 py-1.5 text-left text-[11px]",
+                        isActive ? "border-indigo-300 bg-white text-indigo-800" : "border-indigo-100 bg-indigo-50/60 text-indigo-700",
+                      )}
                     >
-                      사람 직접 접촉으로 전환
+                      <p className="font-semibold">STEP {index + 1}</p>
+                      <p className="mt-0.5 truncate">{card?.title ?? stepId}</p>
                     </button>
-                  </div>
-                </section>
-              )}
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
-      <Dialog
-        open={!isStage3Mode && activeStage1Modal === "RESPONSE_HANDLING"}
-        onOpenChange={(open) => {
-          if (!open) closeStage1Modal();
-        }}
-      >
-        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto p-4">
-          <h3 className="text-sm font-bold text-slate-900">{isStage3Mode ? "정밀관리 제공 기록" : "반응 처리"}</h3>
-          <p className="mt-1 text-[11px] text-gray-500">
-            {isStage3Mode
-              ? "이 단계에서 재평가 예약/완료/노쇼 및 보조 접촉 결과를 기록합니다."
-              : "이 단계에서 응답 결과를 확정하고 무응답/거부/상담 전환 여부를 기록합니다."}
-          </p>
-          <div className="mt-3">
-            <ResponseTriagePanel
-              expanded
-              onToggle={closeStage1Modal}
-              selectedOutcomeCode={selectedOutcomeCode}
-              onSelectOutcomeCode={setSelectedOutcomeCode}
-              rejectReasonDraft={rejectReasonDraft}
-              onRejectReasonDraftChange={setRejectReasonDraft}
-              outcomeNote={outcomeNote}
-              onOutcomeNoteChange={setOutcomeNote}
-              isSaving={isOutcomeSaving}
-              submitError={outcomeSubmitError}
-              onClearError={clearSubmitError}
-              onConfirm={confirmOutcomeTriage}
-              mode={mode}
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
+            {activeStage1Modal === "PRECHECK" ? (
+              <section className="rounded-lg border border-gray-200 bg-white p-4">
+                <h3 className="text-sm font-bold text-slate-900">{isStage2Mode ? "2차 평가 결과 확인" : "사전 조건 확인"}</h3>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  {isStage2Mode
+                    ? "분기/연계 실행 전, 필수 근거와 입력값 충족 여부를 확인합니다."
+                    : "운영 실행 전, 대상자 접촉 채널의 유효성과 제한 사항을 확인합니다."}
+                </p>
+                <div className="mt-3">
+                  <PolicyGatePanel gates={detail.policyGates} onFix={handleGateFixAction} mode={mode} />
+                </div>
+              </section>
+            ) : null}
 
-      <Dialog
-        open={!isStage3Mode && activeStage1Modal === "FOLLOW_UP"}
-        onOpenChange={(open) => {
-          if (!open) closeStage1Modal();
-        }}
-      >
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto p-4">
-          <h3 className="text-sm font-bold text-slate-900">
-            {isStage3Mode ? "관리 제공(프로그램·연계)" : isStage2Mode ? "확정/후속조치" : "후속 결정"}
-          </h3>
-          <p className="mt-1 text-[11px] text-gray-500">
-            {isStage3Mode
-              ? "이 단계에서 플랜 업데이트, 연계 실행, 운영 상태 변경을 기록합니다."
-              : isStage2Mode
-              ? "이 단계에서 담당자 확정, 연계 상태 확인, 추적 계획 생성을 완료합니다."
-              : "이 단계에서 유지/보류/전환/연계를 확정하고 후속 조치와 인수인계를 완료합니다."}
-          </p>
+            {activeStage1Modal === "CONTACT_EXECUTION" ? (
+              <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">{isStage2Mode ? "분기/연계 실행" : "접촉 실행"}</p>
+                    <p className="text-[11px] text-slate-600">
+                      {isStage2Mode
+                        ? "분기 안내와 연계 실행 기록을 같은 패널에서 처리합니다."
+                        : "접촉 주체에 따라 실행 방식이 달라집니다."}
+                    </p>
+                  </div>
+                  <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-semibold", CONTACT_EXECUTOR_TONES[detail.contactExecutor])}>
+                    {CONTACT_EXECUTOR_LABELS[detail.contactExecutor]}
+                  </span>
+                </div>
 
-          <div className="mt-3 space-y-3">
-            <FollowUpDecisionPanel
-              draft={followUpDecisionDraft}
-              reservationInfo={detail.reservationInfo}
-              onChange={setFollowUpDecisionDraft}
-              onSave={handleSaveFollowUpDecision}
-            />
+                <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(340px,0.8fr)_minmax(600px,1.2fr)]">
+                  <RagRecommendationPanel
+                    loading={ragLoading}
+                    recommendations={ragRecommendations}
+                    selectedId={selectedRagId}
+                    editedScript={ragEditedScript}
+                    onSelect={handleApplyRagRecommendation}
+                    onEditScript={setRagEditedScript}
+                  />
 
-            <LinkageActionPanel
-              linkageStatus={detail.linkageStatus}
-              reservationInfo={detail.reservationInfo}
-              onAction={handleLinkageAction}
-              mode={mode}
-            />
+                  {detail.contactExecutor === "HUMAN" ? (
+                    <SmsPanel
+                      stageLabel={stageLabel}
+                      templates={smsTemplatesForExecutor}
+                      defaultVars={{
+                        centerName: DEFAULT_CENTER_NAME,
+                        centerPhone: DEFAULT_CENTER_PHONE,
+                        bookingLink: reservationInfoToBookingLine(detail.reservationInfo),
+                      }}
+                      caseId={detail.header.caseId}
+                      citizenPhone={caseRecord?.profile.phone ? (isStage2Mode || isStage3Mode ? caseRecord.profile.phone : maskPhone(caseRecord.profile.phone)) : "010-****-1234"}
+                      guardianPhone={
+                        caseRecord?.profile.guardianPhone
+                          ? isStage2Mode || isStage3Mode
+                            ? caseRecord.profile.guardianPhone
+                            : maskPhone(caseRecord.profile.guardianPhone)
+                          : undefined
+                      }
+                      callScripts={callScriptsForModal}
+                      onSmsSent={(item) => {
+                        if (item.type === "BOOKING" && !detail.reservationInfo) {
+                          toast.error("예약 정보가 없어 예약안내 문자는 전송할 수 없습니다.");
+                          appendAuditLog("예약안내 발송 차단: 예약 객체 없음");
+                          return;
+                        }
+                        appendTimeline({
+                          type: "SMS_SENT",
+                          at: nowIso(),
+                          templateId: item.templateLabel,
+                          status: item.status === "SENT" ? "DELIVERED" : item.status === "SCHEDULED" ? "PENDING" : "FAILED",
+                          by: detail.header.assigneeName,
+                        });
+                        appendAuditLog(`${stageLabel} 문자 ${item.mode === "NOW" ? "발송" : "예약"}: ${item.templateLabel} (${item.status})`);
+                        if (item.status === "SENT") {
+                          completeSuggestedTodo("SMS");
+                          setRecontactDueAt(withHoursFromNow(48));
+                          setDetail((prev) => {
+                            const newExec: ContactExecution = {
+                              ...prev.contactExecution,
+                              status: "SENT",
+                              lastSentAt: nowIso(),
+                              retryCount: prev.contactExecution.retryCount + 1,
+                            };
+                            return {
+                              ...prev,
+                              contactExecution: newExec,
+                              contactFlowSteps: buildContactFlowSteps(newExec, prev.preTriageResult, prev.linkageStatus, mode),
+                            };
+                          });
+                        }
+                      }}
+                      onConsultation={(note, type, templateLabel) => {
+                        appendTimeline({
+                          type: "CALL_ATTEMPT",
+                          at: nowIso(),
+                          result: "SUCCESS",
+                          note: note || undefined,
+                          by: detail.header.assigneeName,
+                        });
+                        const recommendationLog = selectedRecommendation ? ` / 추천 스크립트: ${selectedRecommendation.title}` : "";
+                        appendAuditLog(`${stageLabel} 상담 기록: ${templateLabel}${note ? ` (${note.slice(0, 60)})` : ""}${recommendationLog}`);
+                        if (type === "CONTACT") {
+                          completeSuggestedTodo("CALL");
+                        }
+                        setDetail((prev) => {
+                          const newExec: ContactExecution = {
+                            ...prev.contactExecution,
+                            status: "WAITING_RESPONSE",
+                            lastSentAt: nowIso(),
+                            retryCount: prev.contactExecution.retryCount + 1,
+                          };
+                          return {
+                            ...prev,
+                            contactExecution: newExec,
+                            contactFlowSteps: buildContactFlowSteps(newExec, prev.preTriageResult, prev.linkageStatus, mode),
+                          };
+                        });
+                        toast.success("상담 기록이 저장되었습니다.");
+                      }}
+                    />
+                  ) : (
+                    <section className="rounded-xl border border-violet-200 bg-violet-50/70 p-4">
+                      <h4 className="text-sm font-bold text-violet-900">Agent 접촉 수행 상태</h4>
+                      <p className="mt-1 text-[11px] text-violet-700">
+                        자동 수행은 게이트 통과와 정책 허용 시에만 실행됩니다. 운영자는 결과 확인과 예외 처리만 수행합니다.
+                      </p>
 
-            <NextActionPanel
-              mode={mode}
-              execution={detail.contactExecution}
-              strategy={effectiveStrategy}
-              preTriageReady={preTriageReady}
-              strategyDecided={Boolean(detail.preTriageResult?.strategy)}
-              hasVulnerableGuardrail={Boolean(detail.header.riskGuardrails?.length)}
-              linkageStatus={detail.linkageStatus}
-              onOpenSmsModal={() => openStage1FlowModal("CONTACT_EXECUTION")}
-              onOpenOutcomeTriage={() => openStage1FlowModal("RESPONSE_HANDLING")}
-              onOpenHandoffMemo={() => setHandoffMemoOpen(true)}
-              onOpenStrategyOverride={() => setStrategyOverrideOpen(true)}
-            />
+                      <div className="mt-3 rounded-lg border border-violet-200 bg-white p-3 text-xs text-slate-700">
+                        <p>
+                          현재 상태: <strong>{AGENT_JOB_STATUS_LABELS[agentJob.status]}</strong>
+                        </p>
+                        <p className="mt-1">
+                          게이트 상태: <strong>{agentGateStatus === "PASS" ? "통과" : agentGateStatus === "NEEDS_CHECK" ? "확인 필요" : "제한"}</strong>
+                        </p>
+                        <p className="mt-1">
+                          시도 번호: <strong>{agentJob.attemptNo || detail.contactExecution.retryCount + 1}</strong>
+                        </p>
+                        <p>
+                          최근 수행:{" "}
+                          <strong>
+                            {detail.agentExecutionLogs[0]
+                              ? `${formatDateTime(detail.agentExecutionLogs[0].at)} · ${AGENT_RESULT_LABELS[detail.agentExecutionLogs[0].result]}`
+                              : "기록 없음"}
+                          </strong>
+                        </p>
+                        {agentJob.idempotencyKey ? (
+                          <p className="mt-1">
+                            중복 방지 키: <strong>{agentJob.idempotencyKey}</strong>
+                          </p>
+                        ) : null}
+                        {agentJob.lastError ? (
+                          <p className="mt-1 text-red-700">
+                            실패 사유: <strong>{agentJob.lastError}</strong>
+                          </p>
+                        ) : null}
+                        {agentJob.nextRetryAt ? (
+                          <p className="mt-1">
+                            재시도 예정: <strong>{formatDateTime(agentJob.nextRetryAt)}</strong>
+                          </p>
+                        ) : null}
+                        <p className="mt-1">STEP3/STEP4 후속 결정은 담당자가 직접 수행합니다.</p>
+                      </div>
 
-            <HandoffMemoGeneratorCard
-              expanded={handoffMemoOpen || Boolean(detail.contactExecution.handoffMemo)}
-              onToggle={() => setHandoffMemoOpen((prev) => !prev)}
-              memoText={handoffMemoText}
-              onMemoChange={setHandoffMemoText}
-              onSave={() => {
-                appendAuditLog(`인수인계 메모 저장: ${handoffMemoText.slice(0, 80)}...`);
-                toast.success("인수인계 메모가 저장되었습니다.");
-                setHandoffMemoOpen(false);
-              }}
-              mode={mode}
-            />
+                      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                        <button
+                          onClick={() => toast("최근 Agent 수행 상태를 확인했습니다.")}
+                          className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700"
+                        >
+                          Agent 수행 상태 확인
+                        </button>
+                        {(agentJob.status === "FAILED" || agentJob.status === "CANCELED") && agentGateStatus === "PASS" ? (
+                          <button
+                            onClick={retryAgentNow}
+                            className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"
+                          >
+                            즉시 재시도
+                          </button>
+                        ) : null}
+                        {agentJob.status === "FAILED" && agentGateStatus === "PASS" ? (
+                          <button
+                            onClick={scheduleAgentRetry}
+                            className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700"
+                          >
+                            재시도 예약
+                          </button>
+                        ) : null}
+                        {(agentJob.status === "QUEUED" || agentJob.status === "RUNNING") ? (
+                          <button
+                            onClick={() =>
+                              cancelAgentJob({
+                                actor: "operator",
+                                summary: "운영자 요청으로 Agent 작업을 취소했습니다.",
+                                moveToHuman: false,
+                              })
+                            }
+                            className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700"
+                          >
+                            수행 취소
+                          </button>
+                        ) : null}
+                        <button
+                          onClick={() => handleContactExecutorChange("HUMAN")}
+                          className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          사람 직접 접촉으로 전환
+                        </button>
+                      </div>
+                    </section>
+                  )}
+                </div>
+              </section>
+            ) : null}
 
-            <InterventionLevelPanel
-              level={detail.interventionLevel}
-              statusLabel={detail.header.statusLabel}
-              guides={interventionGuides}
-              onChangeLevel={openLevelChangeModal}
-              onHold={() => openStatusReasonModal("보류")}
-              onExclude={() => openStatusReasonModal("우선순위 제외")}
-              mode={mode}
-            />
+            {activeStage1Modal === "RESPONSE_HANDLING" ? (
+              <section className="rounded-lg border border-gray-200 bg-white p-4">
+                <h3 className="text-sm font-bold text-slate-900">반응 처리</h3>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  이 단계에서 응답 결과를 확정하고 무응답/거부/상담 전환 여부를 기록합니다.
+                </p>
+                <div className="mt-3">
+                  <ResponseTriagePanel
+                    expanded
+                    onToggle={closeStage1Modal}
+                    executionStatus={detail.contactExecution.status}
+                    lastSentAt={detail.contactExecution.lastSentAt}
+                    assigneeName={detail.header.assigneeName}
+                    selectedOutcomeCode={selectedOutcomeCode}
+                    onSelectOutcomeCode={handleSelectOutcomeCode}
+                    reasonTags={responseReasonTags}
+                    onToggleReasonTag={handleToggleResponseReasonTag}
+                    rejectReasonDraft={rejectReasonDraft}
+                    onRejectReasonDraftChange={handleRejectReasonDraftChange}
+                    noResponsePlanDraft={noResponsePlanDraft}
+                    onNoResponsePlanDraftChange={handleNoResponsePlanDraftChange}
+                    outcomeNote={outcomeNote}
+                    onOutcomeNoteChange={handleOutcomeNoteChange}
+                    isSaving={isOutcomeSaving}
+                    submitError={outcomeSubmitError}
+                    validationError={responseValidationError}
+                    onClearError={clearSubmitError}
+                    onReset={resetResponseTriageDraft}
+                    onConfirm={confirmOutcomeTriage}
+                    hasUnsavedChanges={responseDraftDirty}
+                    lastSavedAt={responseLastSavedAt}
+                    onOpenHandoffMemo={() => setHandoffMemoOpen(true)}
+                    mode={mode}
+                  />
+                </div>
+              </section>
+            ) : null}
+
+            {activeStage1Modal === "FOLLOW_UP" ? (
+              <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+                <h3 className="text-sm font-bold text-slate-900">{isStage2Mode ? "확정/후속조치" : "후속 결정"}</h3>
+                <p className="mt-1 text-[11px] text-gray-500">
+                  {isStage2Mode
+                    ? "이 단계에서 담당자 확정, 연계 상태 확인, 추적 계획 생성을 완료합니다."
+                    : "이 단계에서 유지/보류/전환/연계를 확정하고 후속 조치와 인수인계를 완료합니다."}
+                </p>
+
+                <FollowUpDecisionPanel
+                  draft={followUpDecisionDraft}
+                  reservationInfo={detail.reservationInfo}
+                  onChange={setFollowUpDecisionDraft}
+                  onSave={handleSaveFollowUpDecision}
+                />
+
+                <LinkageActionPanel
+                  linkageStatus={detail.linkageStatus}
+                  reservationInfo={detail.reservationInfo}
+                  onAction={handleLinkageAction}
+                  mode={mode}
+                />
+
+                <NextActionPanel
+                  mode={mode}
+                  execution={detail.contactExecution}
+                  strategy={effectiveStrategy}
+                  preTriageReady={preTriageReady}
+                  strategyDecided={Boolean(detail.preTriageResult?.strategy)}
+                  hasVulnerableGuardrail={Boolean(detail.header.riskGuardrails?.length)}
+                  linkageStatus={detail.linkageStatus}
+                  onOpenSmsModal={() => openStage1FlowModal("CONTACT_EXECUTION")}
+                  onOpenOutcomeTriage={() => openStage1FlowModal("RESPONSE_HANDLING")}
+                  onOpenHandoffMemo={() => setHandoffMemoOpen(true)}
+                  onOpenStrategyOverride={() => setStrategyOverrideOpen(true)}
+                />
+
+                <HandoffMemoGeneratorCard
+                  expanded={handoffMemoOpen || Boolean(detail.contactExecution.handoffMemo)}
+                  onToggle={() => setHandoffMemoOpen((prev) => !prev)}
+                  memoText={handoffMemoText}
+                  onMemoChange={setHandoffMemoText}
+                  onSave={() => {
+                    appendAuditLog(`인수인계 메모 저장: ${handoffMemoText.slice(0, 80)}...`);
+                    toast.success("인수인계 메모가 저장되었습니다.");
+                    setHandoffMemoOpen(false);
+                  }}
+                  mode={mode}
+                />
+
+                <InterventionLevelPanel
+                  level={detail.interventionLevel}
+                  statusLabel={detail.header.statusLabel}
+                  guides={interventionGuides}
+                  onChangeLevel={openLevelChangeModal}
+                  onHold={() => openStatusReasonModal("보류")}
+                  onExclude={() => openStatusReasonModal("우선순위 제외")}
+                  mode={mode}
+                />
+              </section>
+            ) : null}
+
+            <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-2 rounded-lg border border-slate-200 bg-white/95 p-3 backdrop-blur">
+              <button
+                onClick={closeStage1Modal}
+                className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700"
+              >
+                닫기
+              </button>
+              <button
+                onClick={() => moveStage1TaskStep(-1)}
+                disabled={stage1TaskStepIndex <= 0}
+                className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-40"
+              >
+                이전
+              </button>
+              <button
+                onClick={() => moveStage1TaskStep(1)}
+                disabled={stage1TaskStepIndex < 0 || stage1TaskStepIndex >= stage1TaskOrder.length - 1}
+                className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-40"
+              >
+                다음
+              </button>
+              <button
+                onClick={handleStage1TaskComplete}
+                className="rounded-md bg-[#15386a] px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                완료로 표시
+              </button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
@@ -6862,32 +9681,6 @@ export function Stage1OpsDetail({
           })
         }
         onConfirm={confirmOutcome}
-      />
-
-      <NoResponsePlanModal
-        open={noResponsePlanModalOpen}
-        draft={noResponsePlanDraft}
-        saving={isOutcomeSaving}
-        errorMessage={outcomeSubmitError}
-        note={outcomeNote}
-        retryCount={detail.contactExecution.retryCount}
-        lastContactAt={detail.contactExecution.lastResponseAt ?? detail.contactExecution.lastSentAt}
-        slaLevel={detail.header.sla.level}
-        currentLevel={detail.interventionLevel}
-        priorityValue={modelPriorityValue}
-        onClose={() => {
-          if (isOutcomeSaving) return;
-          setNoResponsePlanModalOpen(false);
-        }}
-        onChange={(next) => {
-          clearSubmitError();
-          setNoResponsePlanDraft(next);
-        }}
-        onChangeNote={(value) => {
-          clearSubmitError();
-          setOutcomeNote(value);
-        }}
-        onConfirm={confirmNoResponseOutcome}
       />
 
       {/* ═══ 접촉 전략 Override 모달 ═══ */}
@@ -7087,6 +9880,7 @@ function ServiceOperationsBoard({
   riskGuardrails,
   onOpenStrategyOverride,
   mode = "stage1",
+  stage2OpsView = false,
 }: {
   strategy: RecommendedContactStrategy;
   strategyBadge: ContactStrategy;
@@ -7103,9 +9897,11 @@ function ServiceOperationsBoard({
   riskGuardrails?: string[];
   onOpenStrategyOverride: () => void;
   mode?: StageOpsMode;
+  stage2OpsView?: boolean;
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
   const isStage3Mode = mode === "stage3";
+  const isStage2OpsMode = isStage3Mode && stage2OpsView;
 
   const execLabels: Record<ContactExecutionStatus, { label: string; tone: string }> = {
     NOT_STARTED: { label: "미접촉", tone: "text-gray-600" },
@@ -7135,10 +9931,69 @@ function ServiceOperationsBoard({
     strategyReasons.push("취약군 보호 정책에 따라 상담사 우선으로 진행합니다.");
   }
 
-  const cards = isStage3Mode ? [
-    {
-      title: "전환 위험도",
-      value: retryCount >= 3 ? "HIGH" : retryCount >= 1 ? "MID" : "LOW",
+  const cards = isStage2OpsMode
+    ? [
+        {
+          title: "진단 진행률",
+          value: linkageStatus === "BOOKING_DONE" || linkageStatus === "REFERRAL_CREATED" ? "75%" : "50%",
+          sub: `현재 단계 ${linkageLabelMap[linkageStatus]} · 로그 ${timelineCount}건`,
+          helperTitle: "운영 근거",
+          helper: [
+            `최근 기록: ${formatDateTime(lastContactAt)}`,
+            `예약/의뢰 상태: ${linkageLabelMap[linkageStatus]}`,
+            "진단 진행률은 예약/결과/확정 단계 기록을 기준으로 계산됩니다.",
+          ],
+          tone: "border-blue-200 bg-blue-50 text-blue-700",
+          icon: Shield,
+        },
+        {
+          title: "예약/의뢰 대기",
+          value: linkageStatus === "BOOKING_DONE" || linkageStatus === "REFERRAL_CREATED" ? "0건" : "1건",
+          sub: "병원 의뢰/예약 확정 필요",
+          helperTitle: "운영 근거",
+          helper: [
+            `현재 상태: ${linkageLabelMap[linkageStatus]}`,
+            "대기 건은 Step2 작업 열기에서 즉시 처리합니다.",
+            `재시도 누적: ${retryCount}회`,
+          ],
+          tone:
+            linkageStatus === "BOOKING_DONE" || linkageStatus === "REFERRAL_CREATED"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-amber-200 bg-amber-50 text-amber-700",
+          icon: AlertCircle,
+        },
+        {
+          title: "결과 수신 지연",
+          value: retryCount >= 3 ? "지연" : retryCount >= 1 ? "주의" : "정상",
+          sub: `재시도 ${retryCount}회 · ${detailTrendLabel(lastOutcome)}`,
+          helperTitle: "운영 근거",
+          helper: [
+            `마지막 확인: ${formatDateTime(lastSentAt)}`,
+            `현재 실행 상태: ${execLabels[executionStatus].label}`,
+            "결과 수신 지연은 재요청/미응답 누적을 함께 반영합니다.",
+          ],
+          tone: retryCount >= 3 ? "border-red-200 bg-red-50 text-red-700" : "border-slate-200 bg-slate-50 text-slate-700",
+          icon: Zap,
+        },
+        {
+          title: "분류 확정 상태",
+          value: linkageStatus === "BOOKING_DONE" ? "확정 준비" : "미확정",
+          sub: `${formatDateTime(lastContactAt)} · 메모 ${memoCount}건`,
+          helperTitle: "운영 근거",
+          helper: [
+            `분류 확정 전제: 신경심리/임상평가/전문의 기록`,
+            `누적 로그: ${timelineCount}건`,
+            "최종 분류 확정은 담당자/의료진 확인 후 진행합니다.",
+          ],
+          tone: linkageStatus === "BOOKING_DONE" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-gray-200 bg-gray-50 text-gray-700",
+          icon: History,
+        },
+      ]
+    : isStage3Mode
+      ? [
+        {
+          title: "전환 위험도",
+          value: retryCount >= 3 ? "HIGH" : retryCount >= 1 ? "MID" : "LOW",
       sub: `추세 ${detailTrendLabel(lastOutcome)} · 로그 ${timelineCount}건`,
       helperTitle: "운영 근거",
       helper: [
@@ -7186,8 +10041,9 @@ function ServiceOperationsBoard({
       ],
       tone: "border-gray-200 bg-gray-50 text-gray-700",
       icon: History,
-    },
-  ] : [
+        },
+      ]
+      : [
     {
       title: "접촉 방식",
       value: strategyValue,
@@ -7245,8 +10101,8 @@ function ServiceOperationsBoard({
       ],
       tone: "border-gray-200 bg-gray-50 text-gray-700",
       icon: History,
-    },
-  ];
+        },
+      ];
 
   return (
     <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -7301,6 +10157,7 @@ function ServiceOperationsBoard({
 
 function ContactExecutionLauncherCard({
   mode = "stage1",
+  stage2OpsView = false,
   contactExecutor,
   executionStatus,
   strategy,
@@ -7316,6 +10173,7 @@ function ContactExecutionLauncherCard({
   onScheduleRetry,
 }: {
   mode?: StageOpsMode;
+  stage2OpsView?: boolean;
   contactExecutor: ContactExecutor;
   executionStatus: ContactExecutionStatus;
   strategy: RecommendedContactStrategy;
@@ -7332,6 +10190,7 @@ function ContactExecutionLauncherCard({
 }) {
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
+  const isStage2OpsMode = isStage3Mode && stage2OpsView;
   const statusLabelMap: Record<ContactExecutionStatus, string> = {
     NOT_STARTED: "미접촉",
     SENT: "발송완료",
@@ -7348,7 +10207,7 @@ function ContactExecutionLauncherCard({
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
           <MessageSquare size={15} className="text-[#15386a]" />
-          상담/문자 실행 ({isStage3Mode ? "확인/리마인더" : isStage2Mode ? "2차" : "1차"})
+          상담/문자 실행 ({isStage2OpsMode ? "예약안내/결과요청" : isStage3Mode ? "확인/리마인더" : isStage2Mode ? "2차" : "1차"})
         </h3>
         <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-semibold", CONTACT_EXECUTOR_TONES[contactExecutor])}>
           {CONTACT_EXECUTOR_LABELS[contactExecutor]}
@@ -7357,12 +10216,16 @@ function ContactExecutionLauncherCard({
       <p className="mt-1 text-[11px] text-gray-500">
         {contactExecutor === "HUMAN"
           ? isStage3Mode
-            ? "재평가 일정 안내를 위한 확인 연락은 담당자가 직접 수행합니다."
+            ? isStage2OpsMode
+              ? "예약 안내/결과 요청 연락은 담당자가 직접 수행합니다."
+              : "재평가 일정 안내를 위한 확인 연락은 담당자가 직접 수행합니다."
             : isStage2Mode
             ? "분기 안내/연계 동의 확인은 담당자가 직접 수행합니다."
             : "전화/문자 실행은 담당자가 직접 수행합니다."
           : isStage3Mode
-            ? "Agent 리마인더 결과 확인/기록 전용 모드입니다. 핵심 조치는 재평가/플랜 패널에서 수행합니다."
+            ? isStage2OpsMode
+              ? "Agent 안내 결과 확인/기록 전용 모드입니다. 핵심 조치는 진단검사 패널에서 수행합니다."
+              : "Agent 리마인더 결과 확인/기록 전용 모드입니다. 핵심 조치는 재평가/플랜 패널에서 수행합니다."
             : isStage2Mode
             ? "Agent 안내 결과 확인/기록 전용 모드입니다. 확정과 후속조치는 담당자가 수행합니다."
             : "Agent 접촉 결과 확인/기록 전용 모드입니다. 후속 결정은 담당자가 수행합니다."}
@@ -7400,7 +10263,9 @@ function ContactExecutionLauncherCard({
       >
         {contactExecutor === "HUMAN"
           ? isStage3Mode
-            ? "보조 연락 실행 열기"
+            ? isStage2OpsMode
+              ? "예약/결과 안내 실행 열기"
+              : "보조 연락 실행 열기"
             : isStage2Mode
             ? "분기 안내/문자 실행 열기"
             : "상담/문자 실행 열기"
@@ -7754,12 +10619,15 @@ function ContactFlowPanel({
   flowCards,
   onAction,
   mode = "stage1",
+  stage2OpsView = false,
 }: {
   flowCards: Stage1FlowCard[];
   onAction: (action: Stage1FlowAction) => void;
   mode?: StageOpsMode;
+  stage2OpsView?: boolean;
 }) {
-  const title = mode === "stage2" ? "Stage2 진행 흐름" : mode === "stage3" ? "Stage3 운영 루프" : "Stage1 진행 흐름";
+  const title =
+    mode === "stage2" ? "Stage2 진행 흐름" : mode === "stage3" ? (stage2OpsView ? "Stage2 진단검사 운영 루프" : "Stage3 운영 루프") : "Stage1 진행 흐름";
   const doneCount = flowCards.filter((card) => card.status === "COMPLETED").length;
 
   return (
@@ -7788,10 +10656,7 @@ function ContactFlowPanel({
                   <button
                     type="button"
                     onClick={() => {
-                      if (isLocked) {
-                        toast.error(lockReason ?? "선행 단계를 먼저 완료해 주세요.");
-                        return;
-                      }
+                      if (isLocked) return;
                       onAction(card.action);
                     }}
                     aria-disabled={isLocked}
@@ -7817,17 +10682,35 @@ function ContactFlowPanel({
                     </div>
 
                     <p className="mt-1 text-[11px] text-slate-600">{card.description}</p>
-                    <p className="mt-2 text-xs font-semibold text-slate-800">{card.metricLabel}</p>
-
                     <div className={cn("mt-2 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed", tone.reasonTone)}>
                       <p className="font-semibold">상태 사유</p>
-                      <p className="mt-0.5">{card.reason}</p>
+                      <p
+                        className="mt-0.5 text-[10px]"
+                        style={{
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical",
+                          overflow: "hidden",
+                        }}
+                      >
+                        {card.reason}
+                      </p>
                     </div>
 
                     {isLocked ? (
-                      <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-2 text-[11px] leading-relaxed text-amber-900">
+                      <div className="mt-2 max-h-0 overflow-hidden rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-0 text-[11px] leading-relaxed text-amber-900 opacity-0 transition-all duration-200 group-hover:max-h-24 group-hover:py-2 group-hover:opacity-100 group-focus-visible:max-h-24 group-focus-visible:py-2 group-focus-visible:opacity-100">
                         <p className="font-semibold">선행 단계 필요</p>
-                        <p className="mt-0.5">{lockReason}</p>
+                        <p
+                          className="mt-0.5 text-[10px]"
+                          style={{
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {lockReason}
+                        </p>
                       </div>
                     ) : (
                       <div className="mt-2 max-h-0 overflow-hidden rounded-lg border border-dashed border-slate-300 bg-white/70 px-2.5 py-0 text-[11px] text-slate-700 opacity-0 transition-all duration-200 group-hover:max-h-24 group-hover:py-2 group-hover:opacity-100 group-focus-visible:max-h-24 group-focus-visible:py-2 group-focus-visible:opacity-100">
@@ -7854,8 +10737,10 @@ function ContactFlowPanel({
 
       <p className="mt-3 text-[11px] text-gray-500">
         {mode === "stage3"
-          ? "단계 카드를 누르면 추적·재평가·관리 제공 작업으로 이동합니다. 현재 운영 단계가 강조됩니다."
-          : "단계 카드를 누르면 관련 작업 화면으로 바로 이동합니다. 현재 단계에는 강조 윤곽이 표시됩니다."}
+          ? stage2OpsView
+            ? "단계 카드를 누르면 단일 작업 패널에서 근거검토→신경심리→임상평가→전문의/분류 확정을 연속 수행합니다."
+            : "단계 카드를 누르면 단일 작업 패널에서 추적·재평가·관리 제공을 연속 수행합니다. 현재 운영 단계가 강조됩니다."
+          : "단계 카드를 누르면 단일 작업 패널이 열리고 Step1~4를 연속 수행할 수 있습니다."}
       </p>
     </section>
   );
@@ -8113,33 +10998,61 @@ function NextActionPanel({
 function ResponseTriagePanel({
   expanded,
   onToggle,
+  executionStatus,
+  lastSentAt,
+  assigneeName,
   selectedOutcomeCode,
   onSelectOutcomeCode,
+  reasonTags,
+  onToggleReasonTag,
   rejectReasonDraft,
   onRejectReasonDraftChange,
+  noResponsePlanDraft,
+  onNoResponsePlanDraftChange,
   outcomeNote,
   onOutcomeNoteChange,
   isSaving,
   submitError,
+  validationError,
   onClearError,
+  onReset,
   onConfirm,
+  hasUnsavedChanges,
+  lastSavedAt,
+  onOpenHandoffMemo,
   mode = "stage1",
 }: {
   expanded: boolean;
   onToggle: () => void;
+  executionStatus: ContactExecutionStatus;
+  lastSentAt?: string;
+  assigneeName: string;
   selectedOutcomeCode: OutcomeCode | null;
   onSelectOutcomeCode: (code: OutcomeCode | null) => void;
+  reasonTags: ResponseReasonTag[];
+  onToggleReasonTag: (tag: ResponseReasonTag) => void;
   rejectReasonDraft: RejectReasonDraft;
   onRejectReasonDraftChange: (next: RejectReasonDraft) => void;
+  noResponsePlanDraft: NoResponsePlanDraft;
+  onNoResponsePlanDraftChange: (next: NoResponsePlanDraft) => void;
   outcomeNote: string;
   onOutcomeNoteChange: (note: string) => void;
   isSaving: boolean;
   submitError?: string | null;
+  validationError?: string | null;
   onClearError: () => void;
+  onReset: () => void;
   onConfirm: () => void | Promise<void>;
+  hasUnsavedChanges: boolean;
+  lastSavedAt?: string | null;
+  onOpenHandoffMemo?: () => void;
   mode?: StageOpsMode;
 }) {
   const isStage3Mode = mode === "stage3";
+  const currentStatusLabel = selectedOutcomeCode
+    ? OUTCOME_LABELS[selectedOutcomeCode].label
+    : CONTACT_STATUS_HINT[executionStatus];
+
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
@@ -8160,12 +11073,37 @@ function ResponseTriagePanel({
 
       {expanded ? (
         <div className="mt-3 space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="grid grid-cols-1 gap-2 text-[11px] md:grid-cols-3">
+              <p className="text-slate-600">
+                현재 상태: <strong className="text-slate-900">{currentStatusLabel}</strong>
+              </p>
+              <p className="text-slate-600">
+                최근 발송: <strong className="text-slate-900">{formatDateTime(lastSentAt)}</strong>
+              </p>
+              <p className="text-slate-600">
+                담당자: <strong className="text-slate-900">{assigneeName}</strong>
+              </p>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-600">
+              먼저 결과 유형을 선택하고, 필요한 입력을 채운 뒤 저장하세요.
+            </p>
+          </div>
+
+          <div className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11px] font-semibold text-indigo-800">
+            운영 참고 · 담당자 확인 필요
+          </div>
+
+          {validationError ? (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
+              <p className="text-[11px] font-semibold text-red-700">{validationError}</p>
+            </div>
+          ) : null}
+
           {submitError ? (
             <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2">
               <div className="flex items-start justify-between gap-2">
-                <p className="text-[11px] font-semibold text-red-700">
-                  저장 실패: {submitError}
-                </p>
+                <p className="text-[11px] font-semibold text-red-700">저장 실패: {submitError}</p>
                 <button
                   onClick={onClearError}
                   className="rounded border border-red-200 px-1.5 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100"
@@ -8176,153 +11114,266 @@ function ResponseTriagePanel({
             </div>
           ) : null}
 
-          <div className="grid grid-cols-2 gap-2">
-            {(Object.keys(OUTCOME_LABELS) as OutcomeCode[]).map((code) => {
-              const meta = OUTCOME_LABELS[code];
-              if (code === "REFUSE") {
+          <div>
+            <p className="text-[11px] font-semibold text-gray-600">결과 유형 (단일 선택)</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+              {RESPONSE_PRIMARY_OUTCOMES.map((code) => {
+                const meta = OUTCOME_LABELS[code];
+                const selected = selectedOutcomeCode === code;
                 return (
-                  <div key={code} className="group/refuse relative">
-                    <button
-                      onClick={() => {
-                        onClearError();
-                        onSelectOutcomeCode(code);
-                      }}
-                      className={cn(
-                        "w-full rounded-lg border-2 px-3 py-2 text-left transition-colors",
-                        selectedOutcomeCode === code ? `${meta.tone} border-current` : "border-gray-200 bg-gray-50 hover:bg-gray-100"
-                      )}
-                    >
-                      <p className="text-xs font-semibold text-slate-900">{meta.label}</p>
-                    </button>
-
-                    <div
-                      className={cn(
-                        "pointer-events-none absolute left-0 top-[calc(100%+6px)] z-40 w-[320px] rounded-lg border border-red-200 bg-white p-3 shadow-xl transition-all",
-                        "opacity-0 translate-y-1",
-                        "group-hover/refuse:pointer-events-auto group-hover/refuse:opacity-100 group-hover/refuse:translate-y-0",
-                        "group-focus-within/refuse:pointer-events-auto group-focus-within/refuse:opacity-100 group-focus-within/refuse:translate-y-0"
-                      )}
-                    >
-                      <p className="text-[11px] font-semibold text-red-700">거부 코드 입력 (저장 필수)</p>
-                      <p className="mt-0.5 text-[10px] text-gray-500">버튼에 마우스를 올리면 입력창이 열립니다.</p>
-
-                      <div className="mt-2">
-                        <label className="text-[10px] font-semibold text-gray-600">거부 코드</label>
-                        <select
-                          value={rejectReasonDraft.code ?? ""}
-                          onChange={(event) => {
-                            onClearError();
-                            const nextCode = (event.target.value || null) as RejectReasonCode | null;
-                            onRejectReasonDraftChange({ ...rejectReasonDraft, code: nextCode });
-                          }}
-                          className="mt-1 w-full rounded-md border border-gray-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:border-red-300"
-                        >
-                          <option value="">코드 선택</option>
-                          {REJECT_REASON_OPTIONS.map((option) => (
-                            <option key={option.code} value={option.code}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="mt-2">
-                        <label className="text-[10px] font-semibold text-gray-600">거부 수준</label>
-                        <div className="mt-1 grid grid-cols-2 gap-1">
-                          {REJECT_LEVEL_OPTIONS.map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => {
-                                onClearError();
-                                onRejectReasonDraftChange({ ...rejectReasonDraft, level: option.value });
-                              }}
-                              className={cn(
-                                "rounded-md border px-2 py-1 text-[10px] font-semibold",
-                                rejectReasonDraft.level === option.value
-                                  ? "border-red-300 bg-red-50 text-red-700"
-                                  : "border-gray-200 bg-gray-50 text-gray-600"
-                              )}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {rejectReasonDraft.code === "R7_OTHER" ? (
-                        <div className="mt-2">
-                          <label className="text-[10px] font-semibold text-gray-600">기타 사유 (필수)</label>
-                          <textarea
-                            value={rejectReasonDraft.detail}
-                            onChange={(event) => {
-                              onClearError();
-                              onRejectReasonDraftChange({ ...rejectReasonDraft, detail: event.target.value });
-                            }}
-                            className="mt-1 h-14 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-red-300"
-                          />
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
+                  <button
+                    key={code}
+                    type="button"
+                    onClick={() => {
+                      onClearError();
+                      onSelectOutcomeCode(code);
+                    }}
+                    className={cn(
+                      "rounded-lg border-2 px-3 py-2 text-left transition-colors",
+                      selected ? `${meta.tone} border-current` : "border-gray-200 bg-gray-50 hover:bg-gray-100",
+                    )}
+                  >
+                    <p className="text-xs font-semibold text-slate-900">{meta.label}</p>
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      {code === "CONTINUE_SELF"
+                        ? "응답 확인 후 다음 단계 진행"
+                        : code === "SCHEDULE_LATER"
+                          ? "일정 보류 후 추후 재처리"
+                          : code === "REQUEST_GUARDIAN"
+                            ? "보호자 연락으로 전환"
+                            : code === "REQUEST_HUMAN"
+                              ? "사람 상담으로 전환"
+                              : code === "NO_RESPONSE"
+                                ? "무응답으로 재접촉 계획 생성"
+                                : "중단/거부 사유를 기록"}
+                    </p>
+                  </button>
                 );
-              }
+              })}
+            </div>
+          </div>
 
-              return (
-                <button
-                  key={code}
-                  onClick={() => {
-                    onClearError();
-                    onSelectOutcomeCode(code);
-                  }}
-                  className={cn(
-                    "rounded-lg border-2 px-3 py-2 text-left transition-colors",
-                    selectedOutcomeCode === code ? `${meta.tone} border-current` : "border-gray-200 bg-gray-50 hover:bg-gray-100"
-                  )}
-                >
-                  <p className="text-xs font-semibold text-slate-900">{meta.label}</p>
-                </button>
-              );
-            })}
+          {selectedOutcomeCode === "NO_RESPONSE" ? (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+              <p className="text-[11px] font-semibold text-blue-800">무응답 재접촉 계획 (필수)</p>
+              <p className="mt-1 text-[10px] text-blue-700">
+                재시도 카운트는 저장 시 자동으로 +1 반영됩니다. 현재 {noResponsePlanDraft.channel === "CALL" ? "전화" : "문자"} 채널로 설정되어 있습니다.
+              </p>
+              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-600">채널</label>
+                  <div className="mt-1 grid grid-cols-2 gap-1">
+                    {(Object.keys(NO_RESPONSE_CHANNEL_LABEL) as Array<"CALL" | "SMS">).map((channel) => (
+                      <button
+                        key={channel}
+                        type="button"
+                        onClick={() =>
+                          onNoResponsePlanDraftChange({
+                            ...noResponsePlanDraft,
+                            channel,
+                            strategy: NO_RESPONSE_CHANNEL_STRATEGY[channel],
+                          })
+                        }
+                        className={cn(
+                          "rounded-md border px-2 py-1 text-[10px] font-semibold",
+                          noResponsePlanDraft.channel === channel
+                            ? "border-blue-300 bg-blue-100 text-blue-800"
+                            : "border-gray-200 bg-white text-gray-600",
+                        )}
+                      >
+                        {NO_RESPONSE_CHANNEL_LABEL[channel]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <label className="text-[10px] font-semibold text-gray-600">
+                  다음 접촉 일시
+                  <input
+                    type="datetime-local"
+                    value={toDateTimeLocalValue(noResponsePlanDraft.nextContactAt)}
+                    onChange={(event) => {
+                      const next = fromDateTimeLocalValue(event.target.value);
+                      onNoResponsePlanDraftChange({
+                        ...noResponsePlanDraft,
+                        nextContactAt: next || noResponsePlanDraft.nextContactAt,
+                      });
+                    }}
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-blue-400"
+                  />
+                </label>
+                <label className="text-[10px] font-semibold text-gray-600">
+                  담당자
+                  <input
+                    type="text"
+                    value={noResponsePlanDraft.assigneeId}
+                    onChange={(event) => {
+                      onNoResponsePlanDraftChange({
+                        ...noResponsePlanDraft,
+                        assigneeId: event.target.value,
+                      });
+                    }}
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-blue-400"
+                    placeholder="담당자 이름 또는 ID"
+                  />
+                </label>
+              </div>
+              <label className="mt-2 inline-flex items-center gap-2 text-[10px] text-blue-800">
+                <input
+                  type="checkbox"
+                  checked={noResponsePlanDraft.applyL3}
+                  onChange={(event) =>
+                    onNoResponsePlanDraftChange({
+                      ...noResponsePlanDraft,
+                      applyL3: event.target.checked,
+                    })
+                  }
+                />
+                권고에 따라 개입 레벨 L3를 적용합니다.
+              </label>
+            </div>
+          ) : null}
+
+          {selectedOutcomeCode === "REFUSE" ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+              <p className="text-[11px] font-semibold text-red-800">거부 사유 입력 (필수)</p>
+              <p className="mt-1 text-[10px] text-red-700">거부 사유는 운영 개선과 민원 대응 근거로 활용됩니다.</p>
+              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                <label className="text-[10px] font-semibold text-gray-600">
+                  거부 코드
+                  <select
+                    value={rejectReasonDraft.code ?? ""}
+                    onChange={(event) => {
+                      const nextCode = (event.target.value || null) as RejectReasonCode | null;
+                      onRejectReasonDraftChange({ ...rejectReasonDraft, code: nextCode });
+                    }}
+                    className="mt-1 h-8 w-full rounded-md border border-gray-200 bg-white px-2 text-[11px] outline-none focus:border-red-300"
+                  >
+                    <option value="">코드 선택</option>
+                    {REJECT_REASON_OPTIONS.map((option) => (
+                      <option key={option.code} value={option.code}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div>
+                  <label className="text-[10px] font-semibold text-gray-600">거부 수준</label>
+                  <div className="mt-1 grid grid-cols-2 gap-1">
+                    {REJECT_LEVEL_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => onRejectReasonDraftChange({ ...rejectReasonDraft, level: option.value })}
+                        className={cn(
+                          "h-8 rounded-md border px-2 text-[10px] font-semibold",
+                          rejectReasonDraft.level === option.value
+                            ? "border-red-300 bg-red-100 text-red-700"
+                            : "border-gray-200 bg-white text-gray-600",
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              {rejectReasonDraft.code === "R7_OTHER" ? (
+                <label className="mt-2 block text-[10px] font-semibold text-gray-600">
+                  기타 사유 (필수)
+                  <textarea
+                    value={rejectReasonDraft.detail}
+                    onChange={(event) => onRejectReasonDraftChange({ ...rejectReasonDraft, detail: event.target.value })}
+                    className="mt-1 h-14 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-red-300"
+                    placeholder="기타 거부 사유를 입력하세요"
+                  />
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+
+          {selectedOutcomeCode === "REQUEST_GUARDIAN" || selectedOutcomeCode === "REQUEST_HUMAN" ? (
+            <div className="rounded-lg border border-violet-200 bg-violet-50 p-3">
+              <p className="text-[11px] font-semibold text-violet-800">인계 메모 작성 (권장)</p>
+              <p className="mt-1 text-[10px] text-violet-700">인계 정보까지 함께 기록하면 후속 조치가 빨라집니다.</p>
+              <button
+                type="button"
+                onClick={onOpenHandoffMemo}
+                className="mt-2 rounded-md border border-violet-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-100"
+              >
+                인계 메모 열기
+              </button>
+            </div>
+          ) : null}
+
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-[11px] font-semibold text-amber-800">보조 사유 태그 (복수 선택)</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {(Object.keys(RESPONSE_REASON_TAG_META) as ResponseReasonTag[]).map((tag) => {
+                const meta = RESPONSE_REASON_TAG_META[tag];
+                const selected = reasonTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => onToggleReasonTag(tag)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-[10px] font-semibold transition-colors",
+                      selected ? meta.tone : "border-gray-200 bg-white text-gray-600",
+                    )}
+                    title={meta.hint}
+                  >
+                    {meta.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div>
             <label className="text-[11px] font-semibold text-gray-600">메모 (선택)</label>
             <textarea
               value={outcomeNote}
-              onChange={(event) => {
-                onClearError();
-                onOutcomeNoteChange(event.target.value);
-              }}
+              onChange={(event) => onOutcomeNoteChange(event.target.value)}
               className="mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-xs outline-none focus:border-blue-400"
               placeholder="응답 내용을 간단히 기록하세요"
             />
           </div>
 
-          <div className="flex justify-end gap-2">
-            <button
-              onClick={() => {
-                onSelectOutcomeCode(null);
-                onOutcomeNoteChange("");
-                onRejectReasonDraftChange({
-                  code: null,
-                  level: "TEMP",
-                  detail: "",
-                  createFollowupEvent: false,
-                  followupAt: withHoursFromNow(168),
-                });
-              }}
-              className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700"
-            >
-              초기화
-            </button>
-            <button
-              onClick={onConfirm}
-              disabled={!selectedOutcomeCode || isSaving}
-              className="rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
-            >
-              {isSaving ? "저장 중..." : "저장"}
-            </button>
+          <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white/95 px-3 py-2 backdrop-blur">
+            <div className="flex items-center gap-2 text-[11px]">
+              <span
+                className={cn(
+                  "rounded-full border px-2 py-0.5 font-semibold",
+                  hasUnsavedChanges
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700",
+                )}
+              >
+                {hasUnsavedChanges ? "저장되지 않음" : "저장 완료"}
+              </span>
+              {lastSavedAt ? <span className="text-gray-500">최근 저장 {formatDateTime(lastSavedAt)}</span> : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onToggle}
+                className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700"
+              >
+                닫기
+              </button>
+              <button
+                onClick={onReset}
+                className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700"
+              >
+                초기화
+              </button>
+              <button
+                onClick={onConfirm}
+                disabled={isSaving}
+                className="rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
+              >
+                {isSaving ? "저장 중..." : "저장"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
@@ -8577,18 +11628,21 @@ export function RiskSignalEvidencePanel({
   evidence,
   quality,
   mode = "stage1",
+  stage2OpsView = false,
 }: {
   evidence: Stage1Detail["riskEvidence"];
   quality: CaseHeader["dataQuality"];
   mode?: StageOpsMode;
+  stage2OpsView?: boolean;
 }) {
   const isStage3Mode = mode === "stage3";
+  const isStage2OpsMode = isStage3Mode && stage2OpsView;
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
           <Layers size={15} className="text-slate-500" />
-          {isStage3Mode ? "전환 위험 근거(운영 참고)" : "위험 신호 근거"}
+          {isStage2OpsMode ? "진단 진행 근거(운영 참고)" : isStage3Mode ? "전환 위험 근거(운영 참고)" : "위험 신호 근거"}
         </h3>
         <span className="text-[11px] text-gray-500">산출 시각 {formatDateTime(evidence.computedAt)} · {evidence.version}</span>
       </div>
@@ -8612,7 +11666,8 @@ export function RiskSignalEvidencePanel({
         <p>데이터 최신성: 최근 48시간 내 동기화 기준</p>
         <p title="품질 점수는 누락 필드, 연락처 검증, 최근성 기준의 운영 점수입니다.">품질 점수: {quality.score}% (툴팁 확인 가능)</p>
         <p>누락 필드: {quality.notes?.join(", ") ?? "없음"}</p>
-        {isStage3Mode ? <p>운영 참고: 최종 조치는 담당자·의료진 확인 전 기준으로만 활용합니다.</p> : null}
+        {isStage2OpsMode ? <p>운영 참고: 진단 예약/의뢰/확정은 담당자·의료진 확인 후 진행합니다.</p> : null}
+        {!isStage2OpsMode && isStage3Mode ? <p>운영 참고: 최종 조치는 담당자·의료진 확인 전 기준으로만 활용합니다.</p> : null}
       </div>
     </section>
   );
@@ -8621,201 +11676,440 @@ export function RiskSignalEvidencePanel({
 function RiskTrendChart({
   risk,
   stageBadge,
-  threshold = 60,
+  threshold = 65,
+  stage2OpsView = false,
 }: {
   risk: Stage3RiskSummary;
   stageBadge?: Stage3DiffPathStatus;
   threshold?: number;
+  stage2OpsView?: boolean;
 }) {
   const gradientId = useId().replace(/:/g, "");
-  const data = risk.series.map((point) => {
-    const eventCode = point.event ?? (point.source === "manual" ? "REEVAL" : undefined);
-    const eventLabel =
-      eventCode === "DIFF_RESULT_APPLIED"
-        ? "검사결과 입력"
-        : eventCode === "PLAN_UPDATED"
-          ? "플랜 업데이트"
-          : eventCode === "REEVAL"
-            ? "재평가"
-            : undefined;
-    const axisLabel = (() => {
-      const date = new Date(point.t);
-      if (!Number.isNaN(date.getTime())) {
-        const mm = String(date.getMonth() + 1).padStart(2, "0");
-        const dd = String(date.getDate()).padStart(2, "0");
-        return `${mm}-${dd}`;
-      }
-      return point.t.slice(5, 10);
-    })();
-    const riskPct = toPercentValue(point.risk2y);
+  const formatAxisLabel = (iso: string, fullYear = false) => {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return iso.slice(5, 10);
+    const yy = String(date.getFullYear()).slice(2);
+    const yyyy = String(date.getFullYear());
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    return fullYear ? `${yyyy}.${mm}.${dd}` : `${yy}.${mm}.${dd}`;
+  };
+  const mapEventLabel = (event?: Stage3RiskTrendPoint["event"] | "REEVAL") =>
+    event === "DIFF_RESULT_APPLIED"
+      ? stage2OpsView
+        ? "검사결과 수신"
+        : "검사결과 반영"
+      : event === "PLAN_UPDATED"
+        ? stage2OpsView
+          ? "분류/플랜 갱신"
+          : "플랜 갱신"
+        : event === "REEVAL"
+          ? stage2OpsView
+            ? "진단 진행 검토"
+            : "재평가"
+          : undefined;
+
+  const histSeries = useMemo(() => {
+    const normalized = risk.series
+      .map((point) => {
+        const parsed = new Date(point.t);
+        const date = Number.isNaN(parsed.getTime()) ? new Date(risk.updatedAt) : parsed;
+        const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+        return {
+          t: safeDate.toISOString(),
+          date: safeDate,
+          risk01: clamp01(point.risk2y),
+          ciLow01: point.ciLow == null ? undefined : clamp01(point.ciLow),
+          ciHigh01: point.ciHigh == null ? undefined : clamp01(point.ciHigh),
+          eventLabel: mapEventLabel(point.event ?? (point.source === "manual" ? "REEVAL" : undefined)),
+        };
+      })
+      .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    if (normalized.length === 0) {
+      const fallbackDate = (() => {
+        const parsed = new Date(risk.updatedAt);
+        return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+      })();
+      return [
+        {
+          t: fallbackDate.toISOString(),
+          date: fallbackDate,
+          risk01: clamp01(risk.risk2y_now),
+          ciLow01: undefined,
+          ciHigh01: undefined,
+          eventLabel: undefined,
+        },
+      ];
+    }
+    return normalized;
+  }, [risk.risk2y_now, risk.series, risk.updatedAt]);
+
+  const lastHist = histSeries[histSeries.length - 1];
+  const currentRisk01 = clamp01(lastHist?.risk01 ?? risk.risk2y_now);
+  const currentRiskPct = toPercentValue(currentRisk01);
+  const currentRiskLabel = deriveStage3RiskLabel(currentRisk01);
+  const projectionDelta =
+    risk.trend === "UP"
+      ? 0.14
+      : risk.trend === "DOWN"
+        ? -0.1
+        : risk.trend === "VOLATILE"
+          ? 0.08
+          : 0.02;
+  const riskAt2y01 = clamp01(currentRisk01 + projectionDelta);
+  const riskAt2yPct = toPercentValue(riskAt2y01);
+  const forecastMonths = [6, 12, 18, 24];
+  const forecastSeries = forecastMonths.map((month, idx) => {
+    const forecastDate = new Date(lastHist.date);
+    forecastDate.setMonth(forecastDate.getMonth() + month);
+    const ratio = (idx + 1) / forecastMonths.length;
+    const risk01 = clamp01(currentRisk01 + (riskAt2y01 - currentRisk01) * ratio);
     return {
-      t: point.t,
-      axisLabel,
-      riskPct,
-      riskHighPct: riskPct >= threshold ? riskPct : null,
-      ciLowPct: point.ciLow == null ? undefined : toPercentValue(point.ciLow),
-      ciHighPct: point.ciHigh == null ? undefined : toPercentValue(point.ciHigh),
-      eventLabel,
+      t: forecastDate.toISOString(),
+      date: forecastDate,
+      riskPct: toPercentValue(risk01),
+      axisLabel: formatAxisLabel(forecastDate.toISOString()),
     };
   });
-  const hasInterval = data.some((point) => point.ciLowPct != null && point.ciHighPct != null);
-  const latest = data[data.length - 1];
-  const eventPoints = data.filter((point) => Boolean(point.eventLabel)).slice(-3);
+
+  type RiskChartRow = {
+    t: string;
+    axisLabel: string;
+    pointKind: "HIST" | "FORECAST";
+    histRiskPct: number | null;
+    forecastRiskPct: number | null;
+    areaRiskPct: number | null;
+    riskPct: number;
+    ciLowPct?: number;
+    ciHighPct?: number;
+    eventLabel?: string;
+  };
+
+  const chartData: RiskChartRow[] = [
+    ...histSeries.map((point, idx) => {
+      const riskPct = toPercentValue(point.risk01);
+      return {
+        t: point.t,
+        axisLabel: formatAxisLabel(point.t),
+        pointKind: "HIST",
+        histRiskPct: riskPct,
+        forecastRiskPct: idx === histSeries.length - 1 ? riskPct : null,
+        areaRiskPct: riskPct,
+        riskPct,
+        ciLowPct: point.ciLow01 == null ? undefined : toPercentValue(point.ciLow01),
+        ciHighPct: point.ciHigh01 == null ? undefined : toPercentValue(point.ciHigh01),
+        eventLabel: point.eventLabel,
+      };
+    }),
+    ...forecastSeries.map((point) => ({
+      t: point.t,
+      axisLabel: point.axisLabel,
+      pointKind: "FORECAST" as const,
+      histRiskPct: null,
+      forecastRiskPct: point.riskPct,
+      areaRiskPct: point.riskPct,
+      riskPct: point.riskPct,
+      ciLowPct: undefined,
+      ciHighPct: undefined,
+      eventLabel: undefined,
+    })),
+  ];
+  const axisLabelMap = useMemo(() => {
+    const map = new Map<string, string>();
+    chartData.forEach((point, index) => {
+      const date = new Date(point.t);
+      if (Number.isNaN(date.getTime())) {
+        map.set(point.t, point.axisLabel);
+        return;
+      }
+      const isEdge = index === 0 || index === chartData.length - 1;
+      const prevDate = index > 0 ? new Date(chartData[index - 1].t) : null;
+      const yearChanged = prevDate ? prevDate.getFullYear() !== date.getFullYear() : false;
+      map.set(point.t, formatAxisLabel(point.t, isEdge || yearChanged));
+    });
+    return map;
+  }, [chartData]);
+
+  const hasInterval = chartData.some((point) => point.ciLowPct != null && point.ciHighPct != null);
+  const eventPoints = chartData.filter((point) => point.pointKind === "HIST" && Boolean(point.eventLabel)).slice(-3);
+  const highPoints = chartData.filter((point) => point.riskPct >= threshold);
+  const latestHighPoint = highPoints[highPoints.length - 1];
+  const forecastEndPoint = chartData[chartData.length - 1];
+  const areaTone = currentRiskPct >= threshold
+    ? { top: "#ef4444", bottom: "#ef4444" }
+    : { top: "#2563eb", bottom: "#2563eb" };
   const recentTrendSummary = (() => {
-    if (data.length < 4) return "최근 구간 데이터가 적어 추세 해석은 제한적입니다.";
-    const recent = data.slice(-4);
-    const deltas = recent.slice(1).map((point, idx) => point.riskPct - recent[idx].riskPct);
+    if (histSeries.length < 4) return "최근 구간 데이터가 적어 추세 해석은 제한적입니다.";
+    const recent = histSeries.slice(-4).map((point) => toPercentValue(point.risk01));
+    const deltas = recent.slice(1).map((point, idx) => point - recent[idx]);
     const rising = deltas.filter((delta) => delta > 0).length;
     const falling = deltas.filter((delta) => delta < 0).length;
     const maxSwing = Math.max(...deltas.map((delta) => Math.abs(delta)));
-    if (maxSwing >= 10) return "최근 3구간 변동이 큽니다. 재평가/감별검사 확인 후 재점검이 필요합니다.";
+    if (maxSwing >= 10) return stage2OpsView ? "최근 3구간 변동이 큽니다. 결과 수신/재요청 상태를 재점검해 주세요." : "최근 3구간 변동이 큽니다. 감별검사/재평가 결과 확인 후 재점검이 필요합니다.";
     if (rising >= 2) return "최근 3구간 중 상승 구간이 우세합니다.";
     if (falling >= 2) return "최근 3구간 중 하락 구간이 우세합니다.";
     return "최근 구간은 큰 급변 없이 유지됩니다.";
   })();
   const stageBadgeLabel =
     stageBadge === "COMPLETED"
-      ? "현재 단계: 검사결과 입력 완료"
+      ? stage2OpsView
+        ? "현재 단계: 결과 수신 완료"
+        : "현재 단계: 검사결과 반영 완료"
       : stageBadge === "SCHEDULED"
-        ? "현재 단계: 감별검사 예약됨"
+        ? stage2OpsView
+          ? "현재 단계: 진단 예약됨"
+          : "현재 단계: 감별검사 예약됨"
         : stageBadge === "REFERRED"
-          ? "현재 단계: 의뢰 진행중"
+          ? stage2OpsView
+            ? "현재 단계: 의뢰 진행중"
+            : "현재 단계: 의뢰 진행중"
           : stageBadge === "RECOMMENDED"
-            ? "현재 단계: 권고 생성"
-            : "현재 단계: 검사결과 대기";
+            ? stage2OpsView
+              ? "현재 단계: 의뢰/예약 대기"
+              : "현재 단계: 권고 생성"
+            : stage2OpsView
+              ? "현재 단계: 결과 수신 대기"
+              : "현재 단계: 검사결과 대기";
 
-  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: Array<{ payload: { axisLabel: string; riskPct: number; ciLowPct?: number; ciHighPct?: number; eventLabel?: string } }>; label?: string }) => {
+  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: RiskChartRow }> }) => {
     if (!active || !payload || payload.length === 0) return null;
     const point = payload[0]?.payload;
     if (!point) return null;
     return (
       <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] shadow-sm">
-        <p className="font-semibold text-slate-800">{point.axisLabel} · 운영 기준 추세</p>
-        <p className="mt-0.5 text-slate-700">2년 전환위험(추정) {point.riskPct}%</p>
+        <p className="font-semibold text-slate-800">{formatDateTime(point.t)} · {point.pointKind === "FORECAST" ? "미래 예측(+2y)" : "관측/추정"}</p>
+        <p className="mt-0.5 text-slate-700">{stage2OpsView ? "진단 진행/지연 지표" : "전환위험(운영 참고)"} {point.riskPct}%</p>
         {point.ciLowPct != null && point.ciHighPct != null ? (
           <p className="text-slate-500">구간 {point.ciLowPct}% ~ {point.ciHighPct}%</p>
         ) : null}
         {point.eventLabel ? <p className="text-slate-500">이벤트 {point.eventLabel}</p> : null}
-        {label ? <p className="text-slate-400">{label}</p> : null}
+        {point.riskPct >= threshold ? (
+          <p className="text-red-600">{stage2OpsView ? `${threshold}% 지연 임계 초과` : `${threshold}% 초과 포인트`}</p>
+        ) : null}
       </div>
     );
   };
 
   return (
-    <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2">
-      <div className="h-52 w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 4 }}>
-            <defs>
-              <linearGradient id={`risk-grad-${gradientId}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.35} />
-                <stop offset="100%" stopColor="#60a5fa" stopOpacity={0.05} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke="#e5e7eb" strokeDasharray="4 4" />
-            <XAxis
-              dataKey="t"
-              tick={{ fontSize: 10, fill: "#64748b" }}
-              axisLine={false}
-              tickLine={false}
-              interval="preserveStartEnd"
-              tickMargin={8}
-              tickFormatter={(value: string) => {
-                const date = new Date(value);
-                if (Number.isNaN(date.getTime())) return value.slice(5, 10);
-                const mm = String(date.getMonth() + 1).padStart(2, "0");
-                const dd = String(date.getDate()).padStart(2, "0");
-                return `${mm}-${dd}`;
-              }}
-            />
-            <YAxis
-              domain={[0, 100]}
-              ticks={[0, 25, 50, 75, 100]}
-              tickFormatter={(value) => `${value}%`}
-              tick={{ fontSize: 10, fill: "#64748b" }}
-              axisLine={false}
-              tickLine={false}
-              width={34}
-            />
-            <Tooltip content={<CustomTooltip />} />
-            <ReferenceArea y1={threshold} y2={100} fill="#fecaca" fillOpacity={0.35} />
-            <ReferenceLine y={threshold} stroke="#dc2626" strokeDasharray="4 3" />
-            {eventPoints.map((point, index) => (
-              <ReferenceLine
-                key={`event-${point.t}-${index}`}
-                x={point.t}
-                stroke="#94a3b8"
-                strokeDasharray="3 3"
-                label={{ value: point.eventLabel, position: "insideTop", fill: "#64748b", fontSize: 9 }}
+    <div className="rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+          {stage2OpsView ? "현재 진행/지연" : "현재 위험"} {currentRiskPct}% ({currentRiskLabel})
+        </span>
+        <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+          {stage2OpsView ? "목표일 예측" : "2년 후 예측"} {riskAt2yPct}%
+        </span>
+        <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+          추세 {risk.trend}
+        </span>
+      </div>
+
+      <div className="mt-2 grid grid-cols-1 gap-2.5 xl:grid-cols-[1fr_220px]">
+        <div className="h-56 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 8, right: 24, left: 0, bottom: 6 }}>
+              <defs>
+                <linearGradient id={`risk-grad-${gradientId}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={areaTone.top} stopOpacity={0.3} />
+                  <stop offset="100%" stopColor={areaTone.bottom} stopOpacity={0.04} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#e5e7eb" strokeDasharray="4 4" />
+              <XAxis
+                dataKey="t"
+                tick={{ fontSize: 10, fill: "#64748b" }}
+                axisLine={false}
+                tickLine={false}
+                interval="preserveStartEnd"
+                minTickGap={16}
+                tickMargin={8}
+                tickFormatter={(value: string) => axisLabelMap.get(value) ?? formatAxisLabel(value, true)}
               />
-            ))}
-            {hasInterval ? (
-              <Area type="monotone" dataKey="ciHighPct" stroke="none" fill="#bfdbfe" fillOpacity={0.28} isAnimationActive={false} />
-            ) : null}
-            {hasInterval ? (
-              <Line
+              <YAxis
+                domain={[0, 100]}
+                ticks={[0, 25, 50, 75, 100]}
+                tickFormatter={(value) => `${value}%`}
+                tick={{ fontSize: 10, fill: "#64748b" }}
+                axisLine={false}
+                tickLine={false}
+                width={34}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <ReferenceLine y={threshold} stroke="#dc2626" strokeDasharray="4 3" />
+              {eventPoints.map((point, index) => (
+                <ReferenceLine
+                  key={`event-${point.t}-${index}`}
+                  x={point.t}
+                  stroke="#94a3b8"
+                  strokeDasharray="3 3"
+                />
+              ))}
+              {hasInterval ? (
+                <Line
+                  type="monotone"
+                  dataKey="ciLowPct"
+                  stroke="#94a3b8"
+                  strokeDasharray="4 4"
+                  strokeWidth={1}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              ) : null}
+              {hasInterval ? (
+                <Line
+                  type="monotone"
+                  dataKey="ciHighPct"
+                  stroke="#94a3b8"
+                  strokeDasharray="4 4"
+                  strokeWidth={1}
+                  dot={false}
+                  isAnimationActive={false}
+                />
+              ) : null}
+              <Area
                 type="monotone"
-                dataKey="ciLowPct"
-                stroke="#60a5fa"
-                strokeDasharray="4 3"
-                strokeWidth={1}
-                dot={false}
+                dataKey="areaRiskPct"
+                stroke="none"
+                fill={`url(#risk-grad-${gradientId})`}
                 isAnimationActive={false}
               />
-            ) : null}
-            <Area type="monotone" dataKey="riskPct" stroke="none" fill={`url(#risk-grad-${gradientId})`} isAnimationActive={false} />
-            <Line
-              type="monotone"
-              dataKey="riskPct"
-              stroke="#64748b"
-              strokeWidth={2}
-              isAnimationActive={false}
-              dot={(props: { cx?: number; cy?: number; payload?: { riskPct?: number } }) => {
-                if (props.cx == null || props.cy == null) return null;
-                const isHigh = Number(props.payload?.riskPct ?? 0) >= threshold;
-                return (
-                  <circle
-                    cx={props.cx}
-                    cy={props.cy}
-                    r={isHigh ? 4 : 3}
-                    fill={isHigh ? "#dc2626" : "#64748b"}
-                    stroke="#ffffff"
-                    strokeWidth={1.2}
-                  />
-                );
-              }}
-              activeDot={{ r: 5 }}
-            />
-            <Line
-              type="monotone"
-              dataKey="riskHighPct"
-              stroke="#dc2626"
-              strokeWidth={2.8}
-              dot={false}
-              connectNulls={false}
-              isAnimationActive={false}
-            />
-            {latest ? (
-              <ReferenceDot
-                x={latest.t}
-                y={latest.riskPct}
-                r={5}
-                fill="#dc2626"
-                stroke="#fff"
-                strokeWidth={1.5}
-                label={{ value: `${latest.axisLabel} ${latest.riskPct}%`, position: "top", fill: "#991b1b", fontSize: 10 }}
+              <Line
+                type="monotone"
+                dataKey="histRiskPct"
+                stroke="#334155"
+                strokeWidth={2.2}
+                isAnimationActive={false}
+                dot={(props: { cx?: number; cy?: number; payload?: RiskChartRow }) => {
+                  if (props.cx == null || props.cy == null || !props.payload || props.payload.histRiskPct == null) return null;
+                  const isHigh = props.payload.riskPct >= threshold;
+                  return (
+                    <circle
+                      cx={props.cx}
+                      cy={props.cy}
+                      r={isHigh ? 4 : 3}
+                      fill={isHigh ? "#dc2626" : "#334155"}
+                      stroke="#ffffff"
+                      strokeWidth={1.2}
+                    />
+                  );
+                }}
+                activeDot={{ r: 5 }}
               />
-            ) : null}
-          </LineChart>
-        </ResponsiveContainer>
+              <Line
+                type="monotone"
+                dataKey="forecastRiskPct"
+                stroke="#2563eb"
+                strokeDasharray="6 4"
+                strokeWidth={2}
+                connectNulls={false}
+                isAnimationActive={false}
+                dot={(props: { cx?: number; cy?: number; payload?: RiskChartRow }) => {
+                  if (props.cx == null || props.cy == null || !props.payload || props.payload.forecastRiskPct == null) return null;
+                  const isHigh = props.payload.riskPct >= threshold;
+                  return (
+                    <circle
+                      cx={props.cx}
+                      cy={props.cy}
+                      r={isHigh ? 4 : 3}
+                      fill={isHigh ? "#dc2626" : "#2563eb"}
+                      stroke="#ffffff"
+                      strokeWidth={1.1}
+                    />
+                  );
+                }}
+              />
+              {forecastEndPoint ? (
+                <ReferenceDot
+                  x={forecastEndPoint.t}
+                  y={forecastEndPoint.riskPct}
+                  r={5}
+                  fill={forecastEndPoint.riskPct >= threshold ? "#dc2626" : "#2563eb"}
+                  stroke="#fff"
+                  strokeWidth={1.4}
+                  label={{ value: `+2y ${forecastEndPoint.riskPct}%`, position: "top", fill: "#1e293b", fontSize: 10 }}
+                />
+              ) : null}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="space-y-2 rounded-md border border-slate-200 bg-white p-2">
+          <p className="text-[10px] font-semibold text-slate-700">{stageBadgeLabel}</p>
+          <p className="text-[10px] text-slate-500">
+            업데이트 {formatDateTime(risk.updatedAt)} · 모델 {risk.modelVersion}
+          </p>
+          {latestHighPoint ? (
+            <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700">
+              <p className="font-semibold">{threshold}% 초과 시점</p>
+              <p>{latestHighPoint.axisLabel} · {latestHighPoint.riskPct}% (운영 참고)</p>
+            </div>
+          ) : (
+            <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-700">
+              <p className="font-semibold">{threshold}% 초과 포인트 없음</p>
+              <p>현재 구간은 임계치 미만입니다.</p>
+            </div>
+          )}
+          <div className="space-y-1">
+            <p className="text-[10px] font-semibold text-slate-700">핵심 이벤트</p>
+            {eventPoints.length ? (
+              eventPoints.map((point) => (
+                <p key={`${point.t}-${point.eventLabel}`} className="text-[10px] text-slate-600">
+                  {point.axisLabel} · {point.eventLabel}
+                </p>
+              ))
+            ) : (
+              <p className="text-[10px] text-slate-500">최근 이벤트 없음</p>
+            )}
+          </div>
+        </div>
       </div>
-      {latest ? (
-        <p className="mt-1 text-[10px] text-slate-500">
-          마지막 포인트 {latest.axisLabel} · {latest.riskPct}% · 모델 {risk.modelVersion}
-        </p>
-      ) : null}
-      <p className="mt-0.5 text-[10px] text-slate-600">{stageBadgeLabel}</p>
-      <p className="mt-0.5 text-[10px] text-slate-500">{recentTrendSummary}</p>
+
+      <p className="mt-1 text-[10px] text-slate-500">{recentTrendSummary}</p>
+      <p className="mt-0.5 text-[10px] text-slate-500">
+        {stage2OpsView
+          ? "운영 참고: 지표는 진단 예약/의뢰/확정 우선순위 판단에 활용합니다."
+          : "운영 참고: 확률 추정치는 담당자 확인 후 실행 우선순위 결정에 활용합니다."}
+      </p>
+    </div>
+  );
+}
+
+const STAGE2_TASK_CHECKLIST: Record<Stage1FlowCardId, string[]> = {
+  PRECHECK: [
+    "Stage1 선별 결과와 Stage2 진입 근거 확인",
+    "필수 검사 4항목(전문의/MMSE/CDR·GDS/신경인지) 수행 계획 확정",
+    "수행 경로(협약병원 의뢰/센터 직접 수행) 선택",
+    "기관/담당자/목표일 설정",
+  ],
+  CONTACT_EXECUTION: [
+    "MMSE 점수 입력",
+    "CDR 또는 GDS 점수 입력",
+    "신경인지검사 유형/결과 입력",
+    "전문의 진찰/소견 완료 여부 확인",
+  ],
+  RESPONSE_HANDLING: [
+    "분류 결과(정상/MCI/치매) 선택",
+    "모델 분류 확률 확인(운영 참고)",
+    "MCI일 때 세분화(양호/중간/위험) 확인",
+    "담당자 확인 후 분류 확정",
+  ],
+  FOLLOW_UP: [
+    "정상/MCI/치매에 맞는 다음 단계 1개 선택",
+    "안내 실행(전화/문자) 및 캘린더 등록 여부 확인",
+    "다음 단계 결정 이벤트 기록",
+  ],
+};
+
+function StepChecklist({ items }: { items: string[] }) {
+  return (
+    <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+      <p className="text-xs font-semibold text-indigo-900">해야 할 작업</p>
+      <ul className="mt-1 space-y-1 text-[11px] text-indigo-800">
+        {items.map((item) => (
+          <li key={item}>• {item}</li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -8831,6 +12125,18 @@ export function Stage1ScorePanel({
   stage3RiskReviewedAt,
   onStage3MarkRiskReviewed,
   mode = "stage1",
+  stage2OpsView = false,
+  stage2ResultLabel,
+  stage2MciStage,
+  stage2Probs,
+  stage2DiagnosisStatus,
+  stage2CompletionPct,
+  stage2RequiredDataPct,
+  stage2NextDiagnosisAt,
+  stage2QualityScore,
+  stage2WaitingCount,
+  stage2ResultMissingCount,
+  stage2ClassificationConfirmed,
 }: {
   scoreSummary: Stage1Detail["scoreSummary"];
   modelPriorityValue: number;
@@ -8842,9 +12148,23 @@ export function Stage1ScorePanel({
   stage3RiskReviewedAt?: string;
   onStage3MarkRiskReviewed?: () => void;
   mode?: StageOpsMode;
+  stage2OpsView?: boolean;
+  stage2ResultLabel?: Stage2ClassLabel;
+  stage2MciStage?: Stage2MciStageLabel;
+  stage2Probs?: NonNullable<NonNullable<Stage2Diagnosis["classification"]>["probs"]>;
+  stage2DiagnosisStatus?: Stage2Diagnosis["status"];
+  stage2CompletionPct?: number;
+  stage2RequiredDataPct?: number;
+  stage2NextDiagnosisAt?: string;
+  stage2QualityScore?: number;
+  stage2WaitingCount?: number;
+  stage2ResultMissingCount?: number;
+  stage2ClassificationConfirmed?: boolean;
 }) {
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
+  const isStage2OpsMode = isStage3Mode && stage2OpsView;
+  const stage2MciScore = stage2MciStage === "위험" ? 82 : stage2MciStage === "양호" ? 34 : 58;
   const clampedPriority = Math.max(0, Math.min(100, modelPriorityValue));
   const topPercent = Math.max(1, 100 - clampedPriority);
   const activeBand =
@@ -8871,31 +12191,181 @@ export function Stage1ScorePanel({
   ] as const;
 
   if (isStage3Mode && stage3Risk) {
+    if (isStage2OpsMode) {
+      const topStripItems = [
+        {
+          label: "분류 결과",
+          value:
+            stage2ResultLabel === "MCI"
+              ? `${stage2ResultLabel}(${stage2MciStageDisplayLabel(stage2MciStage)})`
+              : stage2ResultLabel ?? "미확정",
+          hint: "모델 분류 결과(운영 참고)",
+        },
+        {
+          label: "2차 진단 상태",
+          value: stage2DiagnosisStatusLabel(stage2DiagnosisStatus),
+          hint: "IN_PROGRESS / COMPLETED",
+        },
+        {
+          label: "검사 완료율",
+          value: `${stage2CompletionPct ?? 0}%`,
+          hint: "필수 4항목 기준",
+        },
+        {
+          label: "필수자료 충족도",
+          value: `${stage2RequiredDataPct ?? 0}%`,
+          hint: "누락 영향 반영",
+        },
+        {
+          label: "다음 진단 일정",
+          value: formatDateTime(stage2NextDiagnosisAt),
+          hint: "예약/결과 목표일",
+        },
+        {
+          label: "데이터 품질",
+          value: `${stage2QualityScore ?? 0}%`,
+          hint: "최신성/유효성",
+        },
+      ] as const;
+
+      return (
+        <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-bold text-slate-900">Stage2 분류 확정 보드</h3>
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+              모델 분류 결과(운영 참고)
+            </span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+            {topStripItems.map((item) => (
+              <article
+                key={item.label}
+                title={item.hint}
+                className="rounded-lg border border-slate-200 bg-gradient-to-b from-white to-slate-50 px-2.5 py-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+              >
+                <p className="text-[10px] font-semibold text-slate-500">{item.label}</p>
+                <p className="mt-1 text-xs font-bold text-slate-900">{item.value}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-4">
+            <Stage2ClassificationViz
+              probs={stage2Probs}
+              predictedLabel={stage2ResultLabel}
+              mciSeverity={stage2MciStage}
+              mciScore={stage2MciScore}
+            />
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
+            {scoreSummary.map((item) => (
+              <article
+                key={item.label}
+                className="rounded-xl border border-gray-200 bg-gradient-to-b from-white to-slate-50 p-3 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                title="Stage2 운영 KPI"
+              >
+                <p className="text-[11px] font-semibold text-gray-500">{item.label}</p>
+                <p className="mt-1 text-lg font-bold text-slate-900">
+                  {item.value}
+                  {item.unit ? <span className="ml-0.5 text-xs text-gray-400">{item.unit}</span> : null}
+                </p>
+                <p className="text-[10px] text-gray-400">업데이트 {formatDateTime(item.updatedAt)}</p>
+                {item.flags?.length ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {item.flags.map((flag) => (
+                      <span key={`${item.label}-${flag}`} className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                        {flag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-3">
+            <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <p className="text-[11px] font-semibold text-slate-700">예약/의뢰 대기 건수</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{stage2WaitingCount ?? 0}건</p>
+              <p className="text-[10px] text-slate-500">예약 확정/의뢰 완료가 필요한 항목</p>
+            </article>
+            <article className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <p className="text-[11px] font-semibold text-amber-800">결과 입력 누락 항목</p>
+              <p className="mt-1 text-lg font-bold text-amber-900">{stage2ResultMissingCount ?? 0}건</p>
+              <p className="text-[10px] text-amber-700">필수 4항목(MMSE/CDR/신경인지/전문의) 기준</p>
+            </article>
+            <article className="rounded-xl border border-indigo-200 bg-indigo-50 p-3">
+              <p className="text-[11px] font-semibold text-indigo-900">분류 확정 상태</p>
+              <p className="mt-1 text-lg font-bold text-indigo-900">
+                {stage2ClassificationConfirmed ? "CONFIRMED" : "UNCONFIRMED"}
+              </p>
+              <p className="text-[10px] text-indigo-700">담당자 확인 후 확정 버튼으로 반영</p>
+            </article>
+          </div>
+        </section>
+      );
+    }
+
+    const scoreTooltipByLabel = (label: string) => {
+      if (isStage2OpsMode) {
+        if (label.includes("진단 진행률")) return "Stage2 워크플로우의 완료 비율입니다. 예약/결과/확정 기록을 반영합니다.";
+        if (label.includes("예약/의뢰 대기")) return "의뢰/예약 확정이 필요한 항목 수입니다.";
+        if (label.includes("결과 수신 지연")) return "결과 미수신/지연 누적 수준입니다.";
+        if (label.includes("분류 확정 상태")) return "정상/MCI/치매 분류 확정 여부입니다.";
+        if (label.includes("필수자료 충족도")) return "필수 서류/점수/진찰 기록의 충족 수준입니다.";
+      }
+      if (label.includes("전환 위험")) return "2년 내 AD 전환 위험의 운영 참고 지표입니다. 확률 단독으로 단정하지 않습니다.";
+      if (label.includes("재평가 필요도")) return "트리거/가드레일로 감지된 주의 신호 수입니다. 재평가 우선순위에 반영됩니다.";
+      if (label.includes("추적 준수도")) return "최근 추적 실행의 준수 수준입니다. 지연/미응답 누적 여부를 함께 확인하세요.";
+      if (label.includes("정밀관리 플랜")) return "정밀관리 플랜의 진행 상태입니다. 변경/실행은 감사 로그에 기록됩니다.";
+      if (label.includes("데이터 품질")) return "누락/최신성/유효성을 반영한 운영 품질 지표입니다.";
+      return "운영 참고 지표입니다.";
+    };
+
     return (
       <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">2년 AD 전환 위험 추적(운영 참고)</h3>
-            <p className="mt-1 text-[11px] text-gray-600">
-              전환위험 확률 추정치는 운영 우선순위 신호이며 담당자·의료진 확인 전 확정 정보가 아닙니다.
-            </p>
+            <h3 className="group relative inline-flex items-center gap-1 text-sm font-bold text-slate-900">
+              {isStage2OpsMode ? "Stage2 진단검사 운영 지표" : "AD 전환 위험(2년)"}
+              <AlertCircle size={13} className="text-slate-400" />
+              <span className="pointer-events-none absolute left-0 top-[calc(100%+8px)] z-20 w-80 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                {isStage2OpsMode
+                  ? "Stage2 진단검사의 진행/지연 신호를 운영 참고용으로 표시합니다. 예약/의뢰/확정은 담당자 확인 후 진행합니다."
+                  : "감별검사/뇌영상 및 추적 정보를 바탕으로 2년 내 AD 전환 위험을 운영 참고용으로 표시합니다. 최종 조치는 담당자·의료진 확인 후 진행합니다."}
+              </span>
+            </h3>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
-              2년 전환위험 {toPercentValue(stage3Risk.risk2y_now)}%
+            <span className="group relative rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
+              {isStage2OpsMode ? "진단 지연 위험" : "2년 전환위험"} {toPercentValue(stage3Risk.risk2y_now)}%
+              <span className="pointer-events-none absolute left-0 top-[calc(100%+6px)] z-20 w-56 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
+                {isStage2OpsMode ? "진단 지연 위험: 운영 우선순위 참고 지표" : "전환위험: 운영 우선순위 참고 지표"}
+              </span>
             </span>
-            <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
-              신뢰수준 {stage3Risk.risk2y_label}
+            <span className="group relative rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
+              {isStage2OpsMode ? "진행 상태" : "신뢰수준"} {deriveStage3RiskLabel(stage3Risk.risk2y_now)}
+              <span className="pointer-events-none absolute left-0 top-[calc(100%+6px)] z-20 w-52 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
+                {isStage2OpsMode ? "진단 진행 상태와 누락 영향 반영" : "데이터 품질/누락 영향이 반영된 신뢰 수준"}
+              </span>
             </span>
-            <span className={cn("rounded-full border px-2.5 py-1 text-[11px] font-semibold", contactPriority.tone)}>
-              업무 우선도 {contactPriority.label}
+            <span className={cn("group relative rounded-full border px-2.5 py-1 text-[11px] font-semibold", contactPriority.tone)}>
+              {isStage2OpsMode ? "진단 진행 강도" : "업무 우선도"} {contactPriority.label}
+              <span className="pointer-events-none absolute left-0 top-[calc(100%+6px)] z-20 w-52 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
+                {isStage2OpsMode ? "진단 진행 강도: 리마인더/상담/기관재요청 강도" : "업무 우선도: 운영 실행 순서를 나타내는 보조 지표"}
+              </span>
             </span>
           </div>
         </div>
 
         <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
           {scoreSummary.map((item) => (
-            <article key={item.label} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <article
+              key={item.label}
+              className="group relative rounded-xl border border-gray-200 bg-gradient-to-b from-white to-slate-50 p-3 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+            >
               <p className="text-[11px] font-semibold text-gray-500">{item.label}</p>
               <p className="mt-1 text-lg font-bold text-slate-900">
                 {item.value}
@@ -8915,6 +12385,9 @@ export function Stage1ScorePanel({
                   정상
                 </span>
               )}
+              <span className="pointer-events-none absolute left-3 top-[calc(100%+6px)] z-20 w-56 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
+                {scoreTooltipByLabel(item.label)}
+              </span>
             </article>
           ))}
         </div>
@@ -8922,9 +12395,11 @@ export function Stage1ScorePanel({
         <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <p className="text-xs font-semibold text-indigo-900">전환 위험 시계열(6포인트)</p>
+              <p className="text-xs font-semibold text-indigo-900">
+                {isStage2OpsMode ? "진단 진행/지연 시계열" : "전환 위험 시계열(관측 + 2년 예측)"}
+              </p>
               <p className="text-[11px] text-indigo-700">
-                추세 {stage3Risk.trend} · 업데이트 {formatDateTime(stage3Risk.updatedAt)} · 모델 {stage3Risk.modelVersion}
+                {isStage2OpsMode ? "지연 추세" : "추세"} {stage3Risk.trend} · 업데이트 {formatDateTime(stage3Risk.updatedAt)} · 모델 {stage3Risk.modelVersion}
               </p>
             </div>
             <button
@@ -8932,14 +12407,22 @@ export function Stage1ScorePanel({
               onClick={onStage3MarkRiskReviewed}
               className="rounded-md border border-indigo-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
             >
-              {stage3RiskReviewedAt ? "위험 추세 재검토 기록" : "위험 추세 검토 완료"}
+              {stage3RiskReviewedAt
+                ? isStage2OpsMode
+                  ? "진단 진행 재검토 기록"
+                  : "위험 추세 재검토 기록"
+                : isStage2OpsMode
+                  ? "진단 진행 검토 완료"
+                  : "위험 추세 검토 완료"}
             </button>
           </div>
           <div className="mt-2">
-            <RiskTrendChart risk={stage3Risk} stageBadge={stage3DiffPathStatus} />
+            <RiskTrendChart risk={stage3Risk} stageBadge={stage3DiffPathStatus} stage2OpsView={isStage2OpsMode} />
           </div>
           <p className="mt-2 text-[11px] text-indigo-700">
-            {stage3Risk.variabilityNote ?? "운영 참고: 확률 단독으로 단정하지 않고 누락/품질/근거를 함께 확인합니다."}
+            {isStage2OpsMode
+              ? stage3Risk.variabilityNote ?? "운영 참고: 지연/누락/근거를 함께 확인해 예약·의뢰·확정을 진행합니다."
+              : stage3Risk.variabilityNote ?? "운영 참고: 확률 단독으로 단정하지 않고 누락/품질/근거를 함께 확인합니다."}
           </p>
         </div>
 
@@ -9079,20 +12562,23 @@ export function ContactTimeline({
   onFilterChange,
   listClassName,
   mode = "stage1",
+  stage2OpsView = false,
 }: {
   timeline: ContactEvent[];
   filter: TimelineFilter;
   onFilterChange: (next: TimelineFilter) => void;
   listClassName?: string;
   mode?: StageOpsMode;
+  stage2OpsView?: boolean;
 }) {
   const isStage3Mode = mode === "stage3";
+  const isStage2OpsMode = isStage3Mode && stage2OpsView;
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
           <History size={15} className="text-slate-500" />
-          {isStage3Mode ? "전환위험/감별/프로그램/플랜 타임라인" : "연락/발송/상태 타임라인"}
+          {isStage2OpsMode ? "진단검사/결과/분류 타임라인" : isStage3Mode ? "전환위험/감별/프로그램/플랜 타임라인" : "연락/발송/상태 타임라인"}
         </h3>
 
         <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-[11px] font-semibold">
@@ -9119,7 +12605,9 @@ export function ContactTimeline({
       <div className={cn("mt-3 space-y-2", listClassName)}>
         {timeline.length === 0 ? (
           <p className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-            {isStage3Mode
+            {isStage2OpsMode
+              ? "진단검사 기록 없음 — 예약/결과/확정 액션을 실행하면 여기에 누적됩니다."
+              : isStage3Mode
               ? "자동 수행 기록 없음 — 운영자가 수동 실행했거나 아직 제안이 승인되지 않았습니다."
               : "해당 필터의 기록이 없습니다."}
           </p>
@@ -9138,7 +12626,9 @@ export function ContactTimeline({
       </div>
 
       <p className="mt-3 text-[11px] text-gray-500">
-        {isStage3Mode
+        {isStage2OpsMode
+          ? "운영자가 지금 해야 할 행동: 예약/결과수신/분류확정 이벤트를 우선 확인하고 누락을 보완하세요."
+          : isStage3Mode
           ? "운영자가 지금 해야 할 행동: 전환위험/감별/프로그램/플랜 이벤트를 우선 확인하고 보조 연락 기록을 점검"
           : "운영자가 지금 해야 할 행동: 최근 3일 미접촉이면 재시도 계획 생성"}
       </p>
@@ -9879,140 +13369,6 @@ export function OutcomeModal({
             className="rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
           >
             {loading ? "처리 중..." : "저장"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function NoResponsePlanModal({
-  open,
-  draft,
-  saving,
-  errorMessage,
-  note,
-  retryCount,
-  lastContactAt,
-  slaLevel,
-  currentLevel,
-  priorityValue,
-  onClose,
-  onChange,
-  onChangeNote,
-  onConfirm,
-}: {
-  open: boolean;
-  draft: NoResponsePlanDraft;
-  saving: boolean;
-  errorMessage?: string | null;
-  note: string;
-  retryCount: number;
-  lastContactAt?: string;
-  slaLevel: SlaLevel;
-  currentLevel: InterventionLevel;
-  priorityValue: number;
-  onClose: () => void;
-  onChange: (next: NoResponsePlanDraft) => void;
-  onChangeNote: (value: string) => void;
-  onConfirm: () => void | Promise<void>;
-}) {
-  if (!open) return null;
-
-  const recommendL3 = slaLevel !== "OK" || retryCount >= 2 || priorityValue >= 85;
-  const canSubmit = Boolean(draft.strategy && draft.nextContactAt);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-      <div className="w-full max-w-xl rounded-xl border border-gray-200 bg-white p-4 shadow-2xl">
-        <h3 className="text-sm font-bold text-slate-900">무응답 재접촉 계획</h3>
-        <p className="mt-1 text-xs text-gray-500">무응답은 다음 접촉 계획을 반드시 남겨야 누락이 없습니다.</p>
-        {errorMessage ? (
-          <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] font-semibold text-red-700">
-            저장 실패: {errorMessage}
-          </p>
-        ) : null}
-
-        <div className="mt-3 grid grid-cols-2 gap-2 rounded-md border border-gray-200 bg-gray-50 p-3 text-[11px]">
-          <p className="text-gray-600">누적 재시도: <strong className="text-slate-900">{retryCount}회</strong></p>
-          <p className="text-gray-600">현재 SLA: <strong className="text-slate-900">{slaText(slaLevel)}</strong></p>
-          <p className="text-gray-600">최근 접촉: <strong className="text-slate-900">{formatDateTime(lastContactAt)}</strong></p>
-          <p className="text-gray-600">현재 개입 레벨: <strong className="text-slate-900">{currentLevel}</strong></p>
-        </div>
-
-        <div className="mt-3">
-          <p className="text-[11px] font-semibold text-gray-600">재접촉 전략 (필수)</p>
-          <div className="mt-1 grid grid-cols-1 gap-1.5 md:grid-cols-2">
-            {RECONTACT_STRATEGY_OPTIONS.map((option) => (
-              <button
-                key={option.value}
-                onClick={() => onChange({ ...draft, strategy: option.value })}
-                className={cn(
-                  "rounded-md border px-2.5 py-2 text-left",
-                  draft.strategy === option.value
-                    ? "border-blue-300 bg-blue-50 text-blue-700"
-                    : "border-gray-200 bg-gray-50 text-gray-700"
-                )}
-              >
-                <p className="text-xs font-semibold">{option.label}</p>
-                <p className="mt-0.5 text-[10px] text-gray-500">{option.hint}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-3">
-          <label className="text-[11px] font-semibold text-gray-600">다음 접촉 일시 (필수)</label>
-          <input
-            type="datetime-local"
-            value={toDateTimeLocalValue(draft.nextContactAt)}
-            onChange={(event) => {
-              const next = fromDateTimeLocalValue(event.target.value);
-              onChange({ ...draft, nextContactAt: next || draft.nextContactAt });
-            }}
-            className="mt-1 w-full rounded-md border border-gray-200 px-2 py-1.5 text-xs outline-none focus:border-blue-400"
-          />
-          <p className="mt-1 text-[10px] text-gray-500">추천 시간대: 평일 14:00~16:00 (센터 운영 기준)</p>
-        </div>
-
-        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-          <p className="text-[11px] font-semibold text-amber-800">
-            {recommendL3 ? "L3 상향 권고 대상입니다." : "현재는 L3 상향 권고 조건이 낮습니다."}
-          </p>
-          <label className="mt-1 flex items-center gap-2 text-[11px] text-amber-900">
-            <input
-              type="checkbox"
-              checked={draft.applyL3}
-              onChange={(event) => onChange({ ...draft, applyL3: event.target.checked })}
-            />
-            권고대로 L3 적용
-          </label>
-        </div>
-
-        <div className="mt-3">
-          <label className="text-[11px] font-semibold text-gray-600">응답 메모 (선택)</label>
-          <textarea
-            value={note}
-            onChange={(event) => onChangeNote(event.target.value)}
-            className="mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1.5 text-xs outline-none focus:border-blue-400"
-            placeholder="무응답 상황 메모를 입력하세요"
-          />
-        </div>
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-50"
-          >
-            취소
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={!canSubmit || saving}
-            className="rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white disabled:bg-gray-300"
-          >
-            {saving ? "저장 중..." : "저장"}
           </button>
         </div>
       </div>

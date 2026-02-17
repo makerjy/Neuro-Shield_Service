@@ -17,6 +17,7 @@ import type {
   Stage2AuditEvent,
   Stage2AuditLogItem,
   Stage2CaseDetailData,
+  Stage2Diagnosis,
   Stage2ChecklistItem,
   Stage2Class,
   Stage2Decision,
@@ -633,12 +634,73 @@ function calcMissingTotal(steps: Stage2Steps, followUp: FollowUpState, baseCase:
   return total;
 }
 
+function decisionLabelKorean(decision: Stage2Decision): "정상" | "MCI" | "치매" {
+  if (decision.class === "DEMENTIA" || decision.finalClass === "AD_SUSPECT") return "치매";
+  if (decision.class === "MCI" || decision.finalClass === "MCI") return "MCI";
+  return "정상";
+}
+
+function mciStageKorean(subClass: MciSubClass): "양호" | "적정" | "위험" | undefined {
+  if (subClass === "MILD_OK") return "양호";
+  if (subClass === "MODERATE") return "적정";
+  if (subClass === "HIGH_RISK") return "위험";
+  return undefined;
+}
+
+function buildDiagnosisProbs(decision: Stage2Decision): { NORMAL: number; MCI: number; AD: number } {
+  if (decision.class === "DEMENTIA") return { NORMAL: 0.08, MCI: 0.2, AD: 0.72 };
+  if (decision.class === "MCI") {
+    if (decision.mciSubClass === "HIGH_RISK") return { NORMAL: 0.1, MCI: 0.64, AD: 0.26 };
+    if (decision.mciSubClass === "MODERATE") return { NORMAL: 0.18, MCI: 0.66, AD: 0.16 };
+    return { NORMAL: 0.32, MCI: 0.56, AD: 0.12 };
+  }
+  return { NORMAL: 0.78, MCI: 0.17, AD: 0.05 };
+}
+
+function buildStage2Diagnosis(
+  steps: Stage2Steps,
+  decision: Stage2Decision,
+  neuropsychSummary: NeuropsychSummary,
+): Stage2Diagnosis {
+  const mmse = Math.max(10, Math.min(30, neuropsychSummary.cistTotal + 2));
+  const cdr = decision.class === "DEMENTIA" ? 1 : decision.class === "MCI" ? 0.5 : 0;
+  const specialistDone = steps.specialist.status === "DONE";
+  const doneCount =
+    Number(specialistDone) + Number(Number.isFinite(mmse)) + Number(Number.isFinite(cdr)) + Number(Boolean(steps.neuropsych.status === "DONE"));
+  const status: Stage2Diagnosis["status"] =
+    decision.class !== "UNCONFIRMED"
+      ? "COMPLETED"
+      : doneCount === 0
+      ? "NOT_STARTED"
+      : "IN_PROGRESS";
+  const label = decisionLabelKorean(decision);
+  const mciStage = label === "MCI" ? mciStageKorean(decision.mciSubClass) : undefined;
+  const nextStep: Stage2Diagnosis["nextStep"] =
+    label === "정상" ? "FOLLOWUP_2Y" : label === "MCI" ? "STAGE3" : "DIFF_PATH";
+  return {
+    status,
+    tests: {
+      specialist: specialistDone,
+      mmse,
+      cdr,
+      neuroCognitiveType: "SNSB-II",
+    },
+    classification: {
+      label,
+      probs: buildDiagnosisProbs(decision),
+      mciStage,
+    },
+    nextStep,
+  };
+}
+
 export function buildStage2CaseDetailMock(baseCase: Case): Stage2CaseDetailData {
   const steps = buildSteps(baseCase);
   const decision = buildDecision(baseCase, steps);
   const followUp = buildFollowUp(baseCase, decision);
   const neuropsychSummary = buildNeuropsychSummary(baseCase, steps);
   const clinicalSummary = buildClinicalSummary(baseCase, steps);
+  const stage2Diagnosis = buildStage2Diagnosis(steps, decision, neuropsychSummary);
   const branchPlan = buildBranchPlan(baseCase, decision, steps, followUp);
   const linkageStatuses = buildLinkageStatuses(baseCase, followUp);
   const followUpPlan = buildFollowUpPlan(baseCase, branchPlan);
@@ -744,6 +806,7 @@ export function buildStage2CaseDetailMock(baseCase: Case): Stage2CaseDetailData 
     linkageStatuses,
     followUpPlan,
     auditEvents,
+    stage2Diagnosis,
     pii: {
       fullName: baseCase.patientName,
       birthDate: buildBirthDate(baseCase.age, `${baseCase.id}-birth`),

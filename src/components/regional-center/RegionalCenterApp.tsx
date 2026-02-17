@@ -43,8 +43,8 @@ interface RegionalCenterAppProps {
 const DEFAULT_KPI: KpiKey = 'regionalSla';
 
 const navigationItems: NavigationItem[] = [
-  { id: 'overview', label: '광역 운영 대시보드', icon: LayoutDashboard },
-  { id: 'cause', label: '병목·원인 분석', icon: AlertTriangle },
+  { id: 'overview', label: '메인 운영대시보드', icon: LayoutDashboard },
+  { id: 'cause', label: '병목 원인 분석', icon: AlertTriangle },
   { id: 'interventions', label: '개입·조치 관리', icon: ClipboardList },
   { id: 'reports', label: '보고서', icon: FileText },
   { id: 'settings', label: '설정', icon: Settings },
@@ -116,6 +116,15 @@ export function RegionalCenterApp({
     // Overview에서 drill/view는 GeoMap drill 상태 SSOT이므로 유지한다.
     if (nextPage === 'overview') {
       const preserveKeys = ['drill', 'view'] as const;
+      preserveKeys.forEach((key) => {
+        if (!nextUrl.searchParams.has(key) && currentUrl.searchParams.has(key)) {
+          const value = currentUrl.searchParams.get(key);
+          if (value) nextUrl.searchParams.set(key, value);
+        }
+      });
+    }
+    if (nextPage === 'cause') {
+      const preserveKeys = ['stageImpact', 'stage', 'cause', 'area', 'period'] as const;
       preserveKeys.forEach((key) => {
         if (!nextUrl.searchParams.has(key) && currentUrl.searchParams.has(key)) {
           const value = currentUrl.searchParams.get(key);
@@ -213,14 +222,44 @@ export function RegionalCenterApp({
   const handleCreateIntervention = useCallback((draft: InterventionDraft) => {
     setPendingDraft(draft);
     if (draft.source === 'top5') return;
+    const nextSelection: RegionalSelectionState = {
+      selectedKpiKey: draft.kpiKey,
+      selectedRegionSgg: draft.region,
+      selectedRange: draft.range,
+    };
+    const extras: Record<string, string> = {
+      create: '1',
+      source: draft.source ?? 'overview',
+    };
+    if (draft.primaryDriverStage) extras.primaryDriverStage = draft.primaryDriverStage;
+    if (draft.selectedStage) extras.stage = draft.selectedStage;
+    if (draft.selectedCauseKey) extras.cause = draft.selectedCauseKey;
+    if (draft.selectedArea) extras.area = draft.selectedArea;
+
+    if (draft.source === 'cause') {
+      setCurrentPage('interventions');
+      setSelection(nextSelection);
+      const rawUrl = buildRegionalUrl('interventions', nextSelection, extras);
+      const nextUrl = new URL(rawUrl, window.location.origin);
+      nextUrl.pathname = nextUrl.pathname.replace(
+        /\/regional\/(?:actions|interventions)$/i,
+        '/regional/interventions/new',
+      );
+      const currentUrl = new URL(window.location.href);
+      if (
+        nextUrl.pathname !== currentUrl.pathname ||
+        nextUrl.search !== currentUrl.search ||
+        nextUrl.hash !== currentUrl.hash
+      ) {
+        window.history.pushState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+      }
+      return;
+    }
+
     navigatePage(
       'interventions',
-      {
-        selectedKpiKey: draft.kpiKey,
-        selectedRegionSgg: draft.region,
-        selectedRange: draft.range,
-      },
-      { create: '1', source: draft.source ?? 'overview', primaryDriverStage: draft.primaryDriverStage },
+      nextSelection,
+      extras,
     );
   }, [navigatePage]);
 
@@ -236,13 +275,6 @@ export function RegionalCenterApp({
             onSelectedKpiKeyChange={(kpi) => patchSelection({ selectedKpiKey: kpi })}
             onSelectedRegionSggChange={(sgg) => patchSelection({ selectedRegionSgg: sgg })}
             onSelectedRangeChange={(range) => patchSelection({ selectedRange: range })}
-            onNavigateToCause={({ kpi, sgg, range }) =>
-              navigatePage('cause', {
-                selectedKpiKey: kpi,
-                selectedRegionSgg: sgg,
-                selectedRange: range,
-              })
-            }
             onCreateIntervention={({ kpi, sgg, range, source, primaryDriverStage }) =>
               handleCreateIntervention({
                 kpiKey: kpi,
@@ -252,6 +284,7 @@ export function RegionalCenterApp({
                 primaryDriverStage,
               })
             }
+            onNavigateModule={(target) => navigatePage(target)}
           />
         );
       case 'cause':
@@ -287,6 +320,7 @@ export function RegionalCenterApp({
         return (
           <RegionalReportsPage
             region={region}
+            districtOptions={districtOptions}
             selectedKpiKey={selection.selectedKpiKey}
             selectedRegionSgg={selection.selectedRegionSgg}
             selectedRange={selection.selectedRange}
@@ -365,8 +399,9 @@ export function RegionalCenterApp({
                 className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700 hover:text-white'
                 }`}
+                title={!sidebarOpen ? item.label : undefined}
               >
-                <Icon className={`h-5 w-5 ${!sidebarOpen && 'mx-auto'}`} />
+                <Icon className={`h-5 w-5 ${!sidebarOpen ? 'mx-auto' : ''}`} />
                 {sidebarOpen && <span className="text-sm font-medium">{item.label}</span>}
               </button>
             );

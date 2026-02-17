@@ -686,7 +686,15 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
     },
     searchBlob: (row) => {
       const target = row as Stage2Row;
-      return [target.caseId, target.classification, target.confirmation, target.nextPath, target.rationale, target.manager].join(" ");
+      return [
+        target.source.profile.name,
+        target.caseId,
+        target.classification,
+        target.confirmation,
+        target.nextPath,
+        target.rationale,
+        target.manager,
+      ].join(" ");
     },
     summary: (rows) => {
       const stageRows = rows as Stage2Row[];
@@ -738,7 +746,15 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
     },
     searchBlob: (row) => {
       const target = row as Stage3Row;
-      return [target.caseId, target.trackingStatus, target.intensity, target.recentEvent, target.nextEvalDate, target.manager].join(" ");
+      return [
+        target.source.profile.name,
+        target.caseId,
+        target.trackingStatus,
+        target.intensity,
+        target.recentEvent,
+        target.nextEvalDate,
+        target.manager,
+      ].join(" ");
     },
     summary: (rows) => {
       const stageRows = rows as Stage3Row[];
@@ -1145,7 +1161,7 @@ export function CaseDashboard({
                 <input
                   value={searchKeyword}
                   onChange={(e) => setSearchKeyword(e.target.value)}
-                  placeholder="케이스ID/담당/상태/개입 레벨 검색"
+                  placeholder="이름/케이스ID/담당/상태/개입 레벨 검색"
                   className="w-full bg-transparent text-xs text-gray-700 outline-none placeholder:text-gray-400"
                 />
               </div>
@@ -1256,7 +1272,7 @@ export function CaseDashboard({
                 <>
                   <thead className="sticky top-0 bg-white z-20 shadow-sm">
                     <tr className="bg-gray-50/80 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                      <th className="px-4 py-3 border-b border-gray-100">케이스 키</th>
+                      <th className="px-4 py-3 border-b border-gray-100">대상자 이름</th>
                       <th className="px-4 py-3 border-b border-gray-100">분류 결과</th>
                       <th className="px-4 py-3 border-b border-gray-100">분류 근거 요약</th>
                       <th className="px-4 py-3 border-b border-gray-100">분류 확정 여부</th>
@@ -1285,7 +1301,7 @@ export function CaseDashboard({
                           onMouseLeave={() => closeHoverPanel(150)}
                         >
                           <td className="px-4 py-3.5">
-                            <p className="font-mono font-medium text-gray-900">{row.caseId}</p>
+                            <p className="font-medium text-gray-900">{row.source.profile.name}</p>
                             <p className="text-[10px] text-gray-400">담당자 {row.manager}</p>
                           </td>
                           <td className="px-4 py-3.5">
@@ -1315,7 +1331,7 @@ export function CaseDashboard({
                 <>
                   <thead className="sticky top-0 bg-white z-20 shadow-sm">
                     <tr className="bg-gray-50/80 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                      <th className="px-4 py-3 border-b border-gray-100">케이스 키</th>
+                      <th className="px-4 py-3 border-b border-gray-100">대상자 이름</th>
                       <th className="px-4 py-3 border-b border-gray-100">추적 상태</th>
                       <th className="px-4 py-3 border-b border-gray-100">최근 추적 이벤트</th>
                       <th className="px-4 py-3 border-b border-gray-100">다음 평가 예정일</th>
@@ -1344,7 +1360,7 @@ export function CaseDashboard({
                           onMouseLeave={() => closeHoverPanel(150)}
                         >
                           <td className="px-4 py-3.5">
-                            <p className="font-mono font-medium text-gray-900">{row.caseId}</p>
+                            <p className="font-medium text-gray-900">{row.source.profile.name}</p>
                             <p className="text-[10px] text-gray-400">담당자 {row.manager}</p>
                           </td>
                           <td className="px-4 py-3.5">
@@ -1386,7 +1402,9 @@ export function CaseDashboard({
               >
                 <div className="mb-3">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">퀵 액션</p>
-                  <p className="mt-0.5 font-mono text-sm font-bold text-blue-700">{hoveredRow.caseId}</p>
+                  <p className={cn("mt-0.5 text-sm font-bold text-blue-700", hoveredRow.kind === "Stage 1" ? "font-mono" : "font-sans")}>
+                    {hoveredRow.kind === "Stage 1" ? hoveredRow.caseId : hoveredRow.source.profile.name}
+                  </p>
                   <p className="mt-0.5 text-[11px] text-gray-500">담당자 {hoveredRow.manager}</p>
                 </div>
 

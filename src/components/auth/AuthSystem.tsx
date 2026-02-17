@@ -42,12 +42,6 @@ const demoAccounts: DemoAccount[] = [
     name: '이상담',
     organization: '서울시 강남구 치매안심센터',
   },
-  {
-    email: 'citizen@example.com',
-    password: 'demo1234',
-    role: 'citizen',
-    name: '김시민',
-  },
 ];
 
 interface AuthSystemProps {
@@ -69,7 +63,7 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
     {
       id: 'citizen' as UserRole,
       title: '시민',
-      description: '예약 및 상담 서비스',
+      description: '예약 및 상담 서비스 (로그인 없음)',
       icon: User,
       color: 'bg-blue-600',
     },
@@ -97,6 +91,11 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
   ];
 
   const handleRoleSelect = (role: UserRole) => {
+    if (role === 'citizen') {
+      window.location.hash = '#citizen';
+      return;
+    }
+
     setSelectedRole(role);
     setMode('login');
   };
@@ -203,9 +202,9 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
           <div className="space-y-6">
             <Card className="border-2">
               <CardHeader>
-                <CardTitle className="text-center">기관 선택</CardTitle>
+                <CardTitle className="text-center">서비스/기관 선택</CardTitle>
                 <CardDescription className="text-center">
-                  해당하는 기관을 선택하여 로그인하세요
+                  시민 서비스는 로그인 없이 바로 이용할 수 있습니다
                 </CardDescription>
               </CardHeader>
               <CardContent>

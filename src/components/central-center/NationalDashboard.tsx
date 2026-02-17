@@ -34,7 +34,7 @@ import type { TabContext } from '../../lib/useTabContext';
 import { MOCK_POLICY_CHANGES, MOCK_QUALITY_ALERTS } from '../../mocks/mockCentralOps';
 import type { CentralKpiId, CentralTimeWindow, CentralKpiValue, FunnelStage, BottleneckMetric, LinkageMetric, RegionComparisonRow } from '../../lib/kpi.types';
 import { getCentralKpiList, CENTRAL_KPI_COLORS } from '../../lib/centralKpiDictionary';
-import { KPI_THEMES, KPI_ID_TO_KEY, type KpiBundle, type CentralKpiKey } from '../../lib/centralKpiTheme';
+import { KPI_THEMES, KPI_ID_TO_KEY, KPI_KEY_TO_ID, type KpiBundle, type CentralKpiKey } from '../../lib/centralKpiTheme';
 import { AlertTriangle, Users, Clock, Link2, ClipboardList } from 'lucide-react';
 import { WorkflowStrip } from '../workflow/WorkflowStrip';
 import type { WorkflowStep } from '../workflow/types';
@@ -43,7 +43,8 @@ import { LoadingOverlay } from '../ui/LoadingOverlay';
 import { AnimatedNumber } from '../ui/AnimatedNumber';
 import { SIGUNGU_OPTIONS } from '../../mocks/mockGeo';
 import { getChildrenScope } from '../../lib/dashboardChildrenScope';
-import { assertTop5WithinChildren, selectTop5 } from '../../lib/top5Selector';
+import { assertTop5WithinChildren } from '../../lib/top5Selector';
+import { loadCentralSettings } from '../../lib/centralSettings';
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    ResizeObserver 인라인 훅 (새 파일 생성 금지에 따른 인라인 구현)
@@ -337,7 +338,7 @@ function KPIWidget({ kpi, data, statsScopeKey, activeDonutIndex, setActiveDonutI
         <ResponsiveContainer width="100%" height="100%">
           <BarChart 
             data={enhancedBarData} 
-            margin={{ top: 15, right: 10, left: -10, bottom: 25 }}
+            margin={{ top: 15, right: 10, left: 6, bottom: 25 }}
             barCategoryGap="8%"
           >
             <defs>
@@ -361,7 +362,7 @@ function KPIWidget({ kpi, data, statsScopeKey, activeDonutIndex, setActiveDonutI
               tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v}
               axisLine={false}
               tickLine={false}
-              width={38}
+              width={46}
             />
             <Tooltip 
               formatter={(v: number) => [v.toLocaleString() + '건', '건수']}
@@ -518,7 +519,7 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: {
       {/* 라인 차트 - 높이 증가 */}
       <div style={{ height: '90px' }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={dailyData} margin={{ top: 5, right: 5, left: -18, bottom: 2 }}>
+          <ComposedChart data={dailyData} margin={{ top: 5, right: 8, left: 8, bottom: 2 }}>
             <defs>
               <linearGradient id={`kpiGrad-${kpiDef.id}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={lineColor} stopOpacity={0.35} />
@@ -538,7 +539,7 @@ function KPITimeSeriesChart({ kpiDef, data, colorIndex, analyticsPeriod }: {
               tickLine={false}
               axisLine={false}
               domain={['auto', 'auto']}
-              width={30}
+              width={44}
             />
             <Tooltip 
               contentStyle={{ fontSize: '14px', padding: '6px 10px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(0,0,0,0.15)' }}
@@ -742,7 +743,7 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
       {/* ── 차트 ── */}
       <div style={{ height: '320px' }}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={unifiedData} margin={{ top: 8, right: 12, left: -8, bottom: 4 }}>
+          <LineChart data={unifiedData} margin={{ top: 8, right: 12, left: 8, bottom: 4 }}>
             <defs>
               {UNIFIED_KPI_DEFS.map(def => (
                 <linearGradient key={def.key} id={`uniGrad-${def.key}`} x1="0" y1="0" x2="0" y2="1">
@@ -764,7 +765,7 @@ function KPIUnifiedChart({ bulletKPIs, kpiDataMap, analyticsPeriod }: KPIUnified
               tickLine={false}
               axisLine={false}
               domain={yDomain}
-              width={32}
+              width={46}
               tickFormatter={v => viewMode === 'days' ? `${Number(v).toFixed(1)}` : `${v}`}
             />
             <Tooltip
@@ -925,28 +926,211 @@ const CENTRAL_KPI_ICONS: Record<CentralKpiId, React.ReactNode> = {
   GOVERNANCE_SAFETY: <Users className="h-4 w-4" />,
 };
 
-/* ── Sparkline 미니 차트 ── */
-function MiniSparkline({ data, color, width = 80, height = 28 }: { data: number[]; color: string; width?: number; height?: number }) {
-  if (!data || data.length < 2) return null;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
-  const points = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * width;
-    const y = height - ((v - min) / range) * (height - 4) - 2;
-    return `${x},${y}`;
-  }).join(' ');
-  return (
-    <svg width={width} height={height} className="flex-shrink-0">
-      <polyline points={points} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+type HeadlineSeverity = 'ok' | 'warn' | 'risk';
+type MatrixQuadrantKey = 'good' | 'dataRisk' | 'slaRisk' | 'dualRisk';
+const MATRIX_QUADRANT_PRIORITY: MatrixQuadrantKey[] = ['dualRisk', 'dataRisk', 'slaRisk', 'good'];
+
+interface QuadrantThreshold {
+  slaCut: number;
+  dataCut: number;
+}
+
+interface KpiHeadline {
+  kpiKey: CentralKpiKey;
+  actual: number;
+  target: number;
+  deltaPp: number;
+  trendWorseningPp: number;
+  severity: HeadlineSeverity;
+  partialPossible: boolean;
+  score: number;
+}
+
+interface RankedTop5Row {
+  code: string;
+  name: string;
+  value: number;
+  rank: number;
+  targetGapPp: number;
+  gapAbs: number;
+  weeklyDeltaPp: number;
+  worseningPp: number;
+}
+
+interface CauseOwnerItem {
+  orgName: string;
+  regionName: string;
+  count: number;
+  lastOccurredAt: string;
+  ownerRole?: string;
+}
+
+interface PolicyImpactItem {
+  policyId: string;
+  title: string;
+  effectiveAt: string;
+  impactedKpis: Array<{ kpiKey: string; deltaPp: number }>;
+  impactedRegions: number;
+  notes?: string;
+}
+
+type InspectorState =
+  | { type: 'none' }
+  | {
+      type: 'kpi';
+      kpiId: CentralKpiId;
+      severity: HeadlineSeverity;
+      deltaPp: number;
+      trendWorseningPp: number;
+      partialPossible: boolean;
+    }
+  | {
+      type: 'top5';
+      row: RankedTop5Row;
+      owners: CauseOwnerItem[];
+      causeName: string;
+      actionText: string;
+    }
+  | {
+      type: 'cause';
+      causeName: string;
+      owners: CauseOwnerItem[];
+      actionText: string;
+    }
+  | {
+      type: 'matrix';
+      quadrant: MatrixQuadrantKey;
+      selectedRegionName: string;
+      items: Array<{ regionName: string; slaRate: number; dataRate: number; totalCases: number }>;
+    }
+  | {
+      type: 'policy';
+      items: PolicyImpactItem[];
+    };
+
+const KPI_PLAIN_LINE: Record<CentralKpiId, string> = {
+  SIGNAL_QUALITY: '분석에 필요한 입력 신호가 충족된 비율',
+  POLICY_IMPACT: '정책/규칙 변경이 운영 지표에 미치는 영향 범위',
+  BOTTLENECK_RISK: 'SLA 위반·적체·재접촉이 결합된 처리 병목 위험',
+  DATA_READINESS: '일일 집계에 필요한 데이터 수신 완료 비율',
+  GOVERNANCE_SAFETY: '감사·책임 근거가 충족된 처리 건 비율',
+};
+
+const KPI_IMPACT_LINE: Record<CentralKpiId, string> = {
+  SIGNAL_QUALITY: '신호 품질 저하는 대상 분류 정확도에 영향을 줄 수 있습니다.',
+  POLICY_IMPACT: '영향 점수 상승은 운영 지표 변동 폭 확대로 이어질 수 있습니다.',
+  BOTTLENECK_RISK: '위험 상승 시 지역별 적체와 재접촉 누적 가능성이 높아질 수 있습니다.',
+  DATA_READINESS: '준비도 저하는 집계 지연 또는 부분 반영 가능성으로 이어질 수 있습니다.',
+  GOVERNANCE_SAFETY: '안전 지표 저하는 감사 대응 및 책임 추적의 공백 위험을 키울 수 있습니다.',
+};
+
+const KPI_CHECK_LINE: Record<CentralKpiId, string> = {
+  SIGNAL_QUALITY: '중복·철회·무효 신호 비중이 높은 지역/기관을 확인해 주세요.',
+  POLICY_IMPACT: '최근 룰 변경 항목과 영향 지역 수를 함께 확인해 주세요.',
+  BOTTLENECK_RISK: 'SLA 위반, 적체 건수, 재접촉 사유 상위 항목을 확인해 주세요.',
+  DATA_READINESS: '수신 지연 기관과 필수 필드 누락 항목을 우선 확인해 주세요.',
+  GOVERNANCE_SAFETY: '책임자/근거/로그 누락 항목의 반복 여부를 확인해 주세요.',
+};
+
+const KPI_DENOMINATOR_LINE: Record<CentralKpiId, string> = {
+  SIGNAL_QUALITY: '분모: 전체 신호 수(중복·철회 포함 전체 접수)',
+  POLICY_IMPACT: '분모: 영향 점수 최대값(100 기준 정규화)',
+  BOTTLENECK_RISK: '분모: 병목 위험 최대값(100 기준 정규화)',
+  DATA_READINESS: '분모: 일일 집계 대상 전체 케이스 수',
+  GOVERNANCE_SAFETY: '분모: 감사 대상 전체 처리 건수',
+};
+
+const HEADLINE_SEVERITY_LABEL: Record<HeadlineSeverity, string> = {
+  ok: '양호',
+  warn: '주의',
+  risk: '점검 필요',
+};
+
+const HEADLINE_BADGE_CLASS: Record<HeadlineSeverity, string> = {
+  ok: 'bg-green-50 text-green-700 border-green-200',
+  warn: 'bg-amber-50 text-amber-700 border-amber-200',
+  risk: 'bg-red-50 text-red-700 border-red-200',
+};
+
+const MATRIX_QUADRANT_META: Record<
+  MatrixQuadrantKey,
+  { label: string; guideLabel: string; description: string; badgeClass: string; dotClass: string }
+> = {
+  good: {
+    label: '양호',
+    guideLabel: '양호',
+    description: '높은 SLA × 높은 데이터',
+    badgeClass: 'bg-green-50 text-green-700 border-green-200',
+    dotClass: 'bg-green-500',
+  },
+  dataRisk: {
+    label: '데이터 부족 위험',
+    guideLabel: '데이터 부족',
+    description: '높은 SLA × 낮은 데이터',
+    badgeClass: 'bg-amber-50 text-amber-700 border-amber-200',
+    dotClass: 'bg-amber-400',
+  },
+  slaRisk: {
+    label: '처리 지연 위험',
+    guideLabel: '처리 지연',
+    description: '낮은 SLA × 높은 데이터',
+    badgeClass: 'bg-orange-50 text-orange-700 border-orange-200',
+    dotClass: 'bg-orange-500',
+  },
+  dualRisk: {
+    label: '이중 위험 구간',
+    guideLabel: '이중 위험',
+    description: '낮은 SLA × 낮은 데이터',
+    badgeClass: 'bg-red-50 text-red-700 border-red-200',
+    dotClass: 'bg-red-500',
+  },
+};
+
+function getDominantQuadrant(counts: Record<MatrixQuadrantKey, number>): MatrixQuadrantKey {
+  return MATRIX_QUADRANT_PRIORITY.reduce((best, key) => {
+    if (counts[key] > counts[best]) return key;
+    return best;
+  }, MATRIX_QUADRANT_PRIORITY[0]);
+}
+
+function resolveThreshold(rawValue: string | undefined, fallback: number): number {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(99, Math.max(70, parsed));
+}
+
+const OWNER_ROLE_POOL = ['광역 담당자', '센터 운영팀', '데이터 점검자', '연계 담당자'] as const;
+
+function toSignedPp(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}pp`;
+}
+
+function calcTargetGap(def: ReturnType<typeof getCentralKpiList>[number], value: number): number {
+  return Number((value - def.target).toFixed(1));
+}
+
+function calcTrendWorsening(def: ReturnType<typeof getCentralKpiList>[number], delta7d: number): number {
+  const worsening = def.higherBetter ? -delta7d : delta7d;
+  return Number(worsening.toFixed(1));
+}
+
+function resolveHeadlineSeverity(gapRiskPp: number, worseningPp: number, partialPossible: boolean): HeadlineSeverity {
+  const score = gapRiskPp + Math.max(0, worseningPp * 0.8) + (partialPossible ? 2.5 : 0);
+  if (score >= 7) return 'risk';
+  if (score >= 3) return 'warn';
+  return 'ok';
+}
+
+function getMatrixQuadrant(slaRate: number, dataRate: number, slaThreshold: number, dataThreshold: number): MatrixQuadrantKey {
+  const slaOk = slaRate >= slaThreshold;
+  const dataOk = dataRate >= dataThreshold;
+  if (slaOk && dataOk) return 'good';
+  if (slaOk && !dataOk) return 'dataRisk';
+  if (!slaOk && dataOk) return 'slaRisk';
+  return 'dualRisk';
 }
 
 /* ── KPI Hover Tooltip (Portal 기반, 200ms 딜레이, 키보드 접근 가능) ── */
-const WINDOW_LABELS: Record<CentralTimeWindow, string> = {
-  LAST_24H: '24h', LAST_7D: '7일', LAST_30D: '30일', LAST_90D: '90일',
-};
 
 type DashboardPeriodType = 'weekly' | 'monthly' | 'quarterly' | 'yearly_cum';
 
@@ -964,11 +1148,13 @@ const PERIOD_LABELS: Record<DashboardPeriodType, string> = {
   yearly_cum: '연간(누적)',
 };
 
-function KpiTooltip({ lines, color, timeWindow, periodLabel, anchorRef, visible }: {
-  lines: [string, string, string];
+const DRILLDOWN_MIN_HEIGHT = 260;
+const DRILLDOWN_DEFAULT_HEIGHT = 420;
+
+function KpiTooltip({ title, lines, color, anchorRef, visible }: {
+  title: string;
+  lines: string[];
   color: string;
-  timeWindow: CentralTimeWindow;
-  periodLabel?: string;
   anchorRef: React.RefObject<HTMLElement | null>;
   visible: boolean;
 }) {
@@ -978,8 +1164,8 @@ function KpiTooltip({ lines, color, timeWindow, periodLabel, anchorRef, visible 
   useEffect(() => {
     if (!visible || !anchorRef.current) { setPos(null); return; }
     const rect = anchorRef.current.getBoundingClientRect();
-    const tipW = 300;
-    const tipH = 90;
+    const tipW = 340;
+    const tipH = 34 + (lines.length * 19);
     let top = rect.bottom + 6;
     let left = rect.left + rect.width / 2 - tipW / 2;
     // 뷰포트 보정
@@ -987,26 +1173,22 @@ function KpiTooltip({ lines, color, timeWindow, periodLabel, anchorRef, visible 
     if (left + tipW > window.innerWidth - 8) left = window.innerWidth - tipW - 8;
     if (top + tipH > window.innerHeight - 8) top = rect.top - tipH - 6;
     setPos({ top, left });
-  }, [visible, anchorRef]);
+  }, [visible, anchorRef, lines.length]);
 
   if (!visible || !pos) return null;
-  const resolvedLines: [string, string, string] = [
-    lines[0],
-    lines[1].replace('{period}', `선택 기간(${periodLabel ?? WINDOW_LABELS[timeWindow]})`),
-    lines[2],
-  ];
+
   return createPortal(
     <div
       ref={tipRef}
       role="tooltip"
       className="fixed z-[9999] rounded-lg shadow-lg border border-gray-200 bg-white text-left pointer-events-none"
-      style={{ top: pos.top, left: pos.left, maxWidth: 320, minWidth: 260 }}
+      style={{ top: pos.top, left: pos.left, maxWidth: 360, minWidth: 300 }}
     >
-      {/* 색상 상단 액센트 라인 */}
       <div className="h-[3px] rounded-t-lg" style={{ backgroundColor: color }} />
       <div className="px-3 py-2.5 space-y-1">
-        {resolvedLines.map((line, i) => (
-          <p key={i} className={`text-[11px] leading-[1.5] ${i === 0 ? 'font-semibold text-gray-800' : i === 1 ? 'text-gray-500' : 'text-gray-600'}`}>
+        <p className="text-[11px] leading-[1.45] font-semibold text-gray-800">{title}</p>
+        {lines.map((line, i) => (
+          <p key={i} className={`text-[11px] leading-[1.45] ${i === lines.length - 1 ? 'text-gray-500' : 'text-gray-600'}`}>
             {line}
           </p>
         ))}
@@ -1017,15 +1199,28 @@ function KpiTooltip({ lines, color, timeWindow, periodLabel, anchorRef, visible 
 }
 
 /* ── Central KPI Card 단일 카드 ── */
-function CentralKpiCard({ kpi, def, isActive, onClick, tooltipLines, tooltipColor, timeWindow, periodLabel }: {
+function CentralKpiCard({
+  kpi,
+  def,
+  isActive,
+  onClick,
+  plainLine,
+  tooltipTitle,
+  tooltipLines,
+  tooltipColor,
+  severityLabel,
+  severityClass,
+}: {
   kpi: CentralKpiValue;
   def: ReturnType<typeof getCentralKpiList>[number];
   isActive: boolean;
   onClick: () => void;
-  tooltipLines: [string, string, string];
+  plainLine: string;
+  tooltipTitle: string;
+  tooltipLines: string[];
   tooltipColor: string;
-  timeWindow: CentralTimeWindow;
-  periodLabel?: string;
+  severityLabel: string;
+  severityClass: string;
 }) {
   const colors = CENTRAL_KPI_COLORS[def.id];
   const deltaColor = def.higherBetter
@@ -1052,23 +1247,22 @@ function CentralKpiCard({ kpi, def, isActive, onClick, tooltipLines, tooltipColo
       onBlur={hideTip}
       onKeyDown={e => { if (e.key === 'Escape') hideTip(); }}
       aria-describedby={tipOpen ? `kpi-tip-${def.id}` : undefined}
-      className={`relative flex flex-col gap-1.5 px-3 py-2.5 rounded-xl border-2 transition-all min-w-[170px] text-left ${
+      className={`relative flex flex-col gap-2 px-3.5 py-3 rounded-xl border-2 transition-all min-w-[196px] text-left ${
         isActive
           ? `${colors.border} ${colors.bg} shadow-md ring-2 ring-offset-1 ring-${colors.border.replace('border-', '')}/30`
           : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
       }`}
     >
-      {/* top row: icon + name + sparkline */}
       <div className="flex items-center gap-2">
         <span className={`p-1 rounded-md ${isActive ? colors.bg : 'bg-gray-100'} ${isActive ? colors.text : 'text-gray-500'}`}>
           {CENTRAL_KPI_ICONS[def.id]}
         </span>
         <span className={`text-[11px] font-semibold truncate ${isActive ? colors.text : 'text-gray-600'}`}>{def.shortName}</span>
-        <div className="ml-auto">
-          <MiniSparkline data={kpi.sparkline || []} color={isActive ? colors.text.replace('text-', '#').replace('-700', '') : '#9ca3af'} />
-        </div>
       </div>
-      {/* value row */}
+      <p className="text-[10px] text-gray-500 leading-[1.4]">{plainLine}</p>
+      <span className={`inline-flex w-fit items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${severityClass}`}>
+        {severityLabel}
+      </span>
       <div className="flex items-end gap-1.5">
         <span className={`text-lg font-bold tabular-nums ${isActive ? colors.text : 'text-gray-800'}`}>
           <AnimatedNumber value={kpi.value} decimals={def.unit === '%' ? 1 : 0} />
@@ -1078,7 +1272,6 @@ function CentralKpiCard({ kpi, def, isActive, onClick, tooltipLines, tooltipColo
           {kpi.delta7d > 0 ? '+' : ''}{kpi.delta7d}pp
         </span>
       </div>
-      {/* target bar */}
       <div className="flex items-center gap-1.5">
         <div className="flex-1 h-1.5 rounded-full bg-gray-200 overflow-hidden">
           <div
@@ -1088,12 +1281,11 @@ function CentralKpiCard({ kpi, def, isActive, onClick, tooltipLines, tooltipColo
         </div>
         <span className="text-[10px] text-gray-400">목표 {def.target}{def.unit}</span>
       </div>
-      {/* num/den */}
       <div className="text-[10px] text-gray-400">
         {kpi.numerator.toLocaleString()} / {kpi.denominator.toLocaleString()}
       </div>
     </button>
-    <KpiTooltip lines={tooltipLines} color={tooltipColor} timeWindow={timeWindow} periodLabel={periodLabel} anchorRef={btnRef} visible={tipOpen} />
+    <KpiTooltip title={tooltipTitle} lines={tooltipLines} color={tooltipColor} anchorRef={btnRef} visible={tipOpen} />
     </>
   );
 }
@@ -1295,6 +1487,9 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   }, []);
   const [showBreakdownMore, setShowBreakdownMore] = useState(false);
   const [showCauseMore, setShowCauseMore] = useState(false);
+  const [inspectorState, setInspectorState] = useState<InspectorState>({ type: 'none' });
+  const [matrixQuadrantFilter, setMatrixQuadrantFilter] = useState<MatrixQuadrantKey | null>(null);
+  const [matrixHelpOpen, setMatrixHelpOpen] = useState<MatrixQuadrantKey | null>(null);
   const [rightAccordion, setRightAccordion] = useState<{ slaMatrix: boolean; stageDistribution: boolean }>({
     slaMatrix: false,
     stageDistribution: false,
@@ -1319,11 +1514,21 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   /* ── 중앙센터 운영감사형 KPI 상태 ── */
   const [activeCentralKpi, setActiveCentralKpi] = useState<CentralKpiId>('SIGNAL_QUALITY');
   const [showDrilldown, setShowDrilldown] = useState(false);
+  const [drilldownPanelHeight, setDrilldownPanelHeight] = useState(DRILLDOWN_DEFAULT_HEIGHT);
+  const [isResizingDrilldown, setIsResizingDrilldown] = useState(false);
+  const drilldownResizeStartRef = useRef<{ startY: number; startHeight: number }>({
+    startY: 0,
+    startHeight: DRILLDOWN_DEFAULT_HEIGHT,
+  });
   const centralKpiDefs = useMemo(() => getCentralKpiList(), []);
 
   // 현재 선택된 KPI의 테마 & 번들
   const activeKpiKey = useMemo<CentralKpiKey>(() => KPI_ID_TO_KEY[activeCentralKpi], [activeCentralKpi]);
   const activeTheme = useMemo(() => KPI_THEMES[activeKpiKey], [activeKpiKey]);
+  const activeCentralDef = useMemo(
+    () => centralKpiDefs.find((def) => def.id === activeCentralKpi) ?? centralKpiDefs[0],
+    [centralKpiDefs, activeCentralKpi]
+  );
 
   /* ── KPI → MapColorScheme 매핑 ── */
   const kpiColorScheme = useMemo<MapColorScheme>(() => {
@@ -1349,6 +1554,64 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     if (width >= 768) return 'tablet';
     return 'mobile';
   }, [containerSize.width]);
+
+  const drilldownPanelMaxHeight = useMemo(() => {
+    const baseHeight = containerSize.height || (typeof window !== 'undefined' ? window.innerHeight : 900);
+    const ratio = layoutMode === 'mobile' ? 0.55 : 0.72;
+    return Math.max(DRILLDOWN_MIN_HEIGHT + 40, Math.floor(baseHeight * ratio));
+  }, [containerSize.height, layoutMode]);
+
+  const clampDrilldownHeight = useCallback(
+    (height: number) => Math.min(drilldownPanelMaxHeight, Math.max(DRILLDOWN_MIN_HEIGHT, height)),
+    [drilldownPanelMaxHeight]
+  );
+
+  useEffect(() => {
+    setDrilldownPanelHeight((prev) => clampDrilldownHeight(prev));
+  }, [clampDrilldownHeight]);
+
+  const handleDrilldownResizeStart = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (layoutMode === 'mobile') return;
+      event.preventDefault();
+      drilldownResizeStartRef.current = {
+        startY: event.clientY,
+        startHeight: drilldownPanelHeight,
+      };
+      setIsResizingDrilldown(true);
+    },
+    [layoutMode, drilldownPanelHeight]
+  );
+
+  const handleDrilldownResizeReset = useCallback(() => {
+    setDrilldownPanelHeight(clampDrilldownHeight(DRILLDOWN_DEFAULT_HEIGHT));
+  }, [clampDrilldownHeight]);
+
+  useEffect(() => {
+    if (!isResizingDrilldown) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const deltaY = event.clientY - drilldownResizeStartRef.current.startY;
+      const nextHeight = clampDrilldownHeight(drilldownResizeStartRef.current.startHeight + deltaY);
+      setDrilldownPanelHeight(nextHeight);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingDrilldown(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ns-resize';
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+    };
+  }, [isResizingDrilldown, clampDrilldownHeight]);
 
   // 패널 비율: desktop 1.35fr 2.35fr 2.3fr
   const columnFlex = useMemo(() => {
@@ -1460,35 +1723,219 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
 
   const { funnelData, bottleneckData, linkageData, regionData } = drilldownData;
   const currentBundle = useMemo<KpiBundle | null>(() => dashData ? dashData[activeKpiKey] : null, [dashData, activeKpiKey]);
-  const top5MetricByCode = useMemo(
-    () =>
-      (currentBundle?.regions ?? []).reduce<Record<string, number>>((acc, region) => {
-        acc[region.regionCode] = region.value;
-        return acc;
-      }, {}),
-    [currentBundle]
+  const centralSettings = useMemo(() => loadCentralSettings(), []);
+  const priorityHeadlineLimit = useMemo(
+    () => Math.min(5, Math.max(1, centralSettings.headline.maxItems)),
+    [centralSettings.headline.maxItems]
+  );
+  const dataReadinessValue = useMemo(
+    () => centralKpis.find((kpi) => kpi.kpiId === 'DATA_READINESS')?.value ?? null,
+    [centralKpis]
   );
 
-  const top5Rows = useMemo(
+  const kpiHeadlines = useMemo<KpiHeadline[]>(() => {
+    const defMap = new Map(centralKpiDefs.map((def) => [def.id, def]));
+    return centralKpis
+      .map((kpi): KpiHeadline | null => {
+        const def = defMap.get(kpi.kpiId);
+        if (!def) return null;
+        const target = def.target;
+        const deltaPp = calcTargetGap(def, kpi.value);
+        const gapRiskPp = Math.max(0, def.higherBetter ? target - kpi.value : kpi.value - target);
+        const trendWorseningPp = calcTrendWorsening(def, kpi.delta7d);
+        const partialPossible = kpi.kpiId === 'DATA_READINESS'
+          ? kpi.value < Math.max(88, target - 3)
+          : (dataReadinessValue != null && dataReadinessValue < 90);
+        const severity = resolveHeadlineSeverity(gapRiskPp, trendWorseningPp, partialPossible);
+        const score = Number((gapRiskPp + Math.max(0, trendWorseningPp * 0.8) + (partialPossible ? 2.5 : 0)).toFixed(2));
+        return {
+          kpiKey: KPI_ID_TO_KEY[kpi.kpiId],
+          actual: kpi.value,
+          target,
+          deltaPp,
+          trendWorseningPp,
+          severity,
+          partialPossible,
+          score,
+        };
+      })
+      .filter((headline): headline is KpiHeadline => headline != null);
+  }, [centralKpis, centralKpiDefs, dataReadinessValue]);
+
+  const headlineByKpiId = useMemo(
     () =>
-      selectTop5({
-        metricByCode: top5MetricByCode,
-        childrenCodes: childrenScope.childrenCodes,
-        nameMap: childrenScope.childrenNameMap,
-        sortOrder: activeTheme.legend.direction === 'higherWorse' ? 'desc' : 'asc',
-        excludeCodes: selectedRegion?.code ? [selectedRegion.code] : [],
-        onMissingName: (code) => {
-          console.warn(`[Top5] missing nameMap for code: ${code}`);
-        },
+      kpiHeadlines.reduce<Record<CentralKpiId, KpiHeadline | undefined>>((acc, headline) => {
+        acc[KPI_KEY_TO_ID[headline.kpiKey]] = headline;
+        return acc;
+      }, {
+        SIGNAL_QUALITY: undefined,
+        POLICY_IMPACT: undefined,
+        BOTTLENECK_RISK: undefined,
+        DATA_READINESS: undefined,
+        GOVERNANCE_SAFETY: undefined,
       }),
-    [
-      top5MetricByCode,
-      childrenScope.childrenCodes,
-      childrenScope.childrenNameMap,
-      activeTheme.legend.direction,
-      selectedRegion?.code,
-    ]
+    [kpiHeadlines]
   );
+
+  const priorityHeadlines = useMemo(() => {
+    const severityWeight: Record<HeadlineSeverity, number> = { risk: 3, warn: 2, ok: 1 };
+    return [...kpiHeadlines]
+      .filter((headline) => headline.severity !== 'ok' || headline.partialPossible)
+      .sort((a, b) => {
+        const severityDiff = severityWeight[b.severity] - severityWeight[a.severity];
+        if (severityDiff !== 0) return severityDiff;
+        const scoreDiff = b.score - a.score;
+        if (scoreDiff !== 0) return scoreDiff;
+        return b.actual - a.actual;
+      })
+      .slice(0, priorityHeadlineLimit);
+  }, [kpiHeadlines, priorityHeadlineLimit]);
+
+  const policyImpactInspectorItems = useMemo<PolicyImpactItem[]>(
+    () =>
+      [...MOCK_POLICY_CHANGES]
+        .filter((change) => change.status === 'deployed' || change.status === 'reviewing')
+        .sort((a, b) => new Date(b.deployedAt).getTime() - new Date(a.deployedAt).getTime())
+        .slice(0, 3)
+        .map((change) => ({
+          policyId: change.id,
+          title: change.title,
+          effectiveAt: change.deployedAt.slice(0, 10),
+          impactedKpis: change.impactSummary.map((impact) => ({
+            kpiKey: impact.label,
+            deltaPp: impact.changePp,
+          })),
+          impactedRegions: change.affectedRegions.includes('전국')
+            ? Math.max(currentSubRegions.length, 17)
+            : change.affectedRegions.length,
+          notes: `전/후 비교 · SLA ${change.before.slaRate}%→${change.after.slaRate}% · 응답적시율 ${change.before.responseTimeliness}%→${change.after.responseTimeliness}%`,
+        })),
+    [currentSubRegions.length]
+  );
+
+  const buildCauseOwners = useCallback(
+    (causeName: string, regionName?: string): CauseOwnerItem[] => {
+      const baseRegion = regionName || selectedArea?.name || selectedRegion?.name || '전국';
+      return Array.from({ length: 4 }, (_, idx) => {
+        const seq = idx + 1;
+        return {
+          orgName: `${baseRegion.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()} ${seq}센터`,
+          regionName: baseRegion,
+          count: Math.round(seededValue(`${causeName}-${baseRegion}-owner-count-${idx}`, 8, 46)),
+          lastOccurredAt: `2026-02-${String(Math.round(seededValue(`${causeName}-${baseRegion}-owner-day-${idx}`, 4, 12))).padStart(2, '0')}`,
+          ownerRole: OWNER_ROLE_POOL[idx % OWNER_ROLE_POOL.length],
+        };
+      });
+    },
+    [selectedArea?.name, selectedRegion?.name]
+  );
+
+  const buildActionByCause = useCallback((causeName: string) => {
+    if (causeName.includes('서류')) return '해당 센터의 필수 서류 안내 절차 점검이 필요합니다.';
+    if (causeName.includes('거부')) return '기관 연계 기준과 회신 경로 재확인이 필요합니다.';
+    if (causeName.includes('연락')) return '재접촉 시간대와 연락처 최신화 절차 점검이 필요합니다.';
+    if (causeName.includes('중복') || causeName.includes('재등록')) return '중복 식별 규칙 및 본인확인 절차 점검이 필요합니다.';
+    return '해당 원인의 처리 절차와 책임 주체 확인이 필요합니다.';
+  }, []);
+
+  const handleOpenKpiInspector = useCallback((kpiId: CentralKpiId) => {
+    if (kpiId === 'POLICY_IMPACT') {
+      setInspectorState({ type: 'policy', items: policyImpactInspectorItems });
+      return;
+    }
+    const headline = headlineByKpiId[kpiId];
+    if (!headline) return;
+    setInspectorState({
+      type: 'kpi',
+      kpiId,
+      severity: headline.severity,
+      deltaPp: headline.deltaPp,
+      trendWorseningPp: headline.trendWorseningPp,
+      partialPossible: headline.partialPossible,
+    });
+  }, [headlineByKpiId, policyImpactInspectorItems]);
+
+  const top5Rows = useMemo<RankedTop5Row[]>(() => {
+    if (!currentBundle) return [];
+    const regionMap = new Map(currentBundle.regions.map((region) => [region.regionCode, region]));
+    const fallbackTarget = currentBundle.national.target ?? currentBundle.national.value;
+    const target = activeTheme.target ?? fallbackTarget;
+    const excluded = new Set(selectedRegion?.code ? [selectedRegion.code] : []);
+
+    const rows = childrenScope.childrenCodes
+      .filter((code) => !excluded.has(code))
+      .map((code) => {
+        const region = regionMap.get(code);
+        const value = region?.value;
+        if (value == null || !Number.isFinite(value)) return null;
+        const fallbackName = region?.regionName;
+        const resolvedName = childrenScope.childrenNameMap[code] || fallbackName;
+        if (!resolvedName) {
+          console.warn(`[Top5] missing nameMap for code: ${code}`);
+        }
+        const weeklyDeltaPp = Number(seededValue(`${code}-${activeKpiKey}-wdelta`, -3.8, 3.8).toFixed(1));
+        const worseningPp = Number((activeTheme.higherIsWorse ? weeklyDeltaPp : -weeklyDeltaPp).toFixed(1));
+        const targetGapPp = Number((value - target).toFixed(1));
+        return {
+          code,
+          name: resolvedName || `미매핑: ${code}`,
+          value,
+          targetGapPp,
+          gapAbs: Math.abs(targetGapPp),
+          weeklyDeltaPp,
+          worseningPp,
+        };
+      })
+      .filter((row): row is Omit<RankedTop5Row, 'rank'> => row != null)
+      .sort((a, b) => {
+        const gapDiff = b.gapAbs - a.gapAbs;
+        if (gapDiff !== 0) return gapDiff;
+        const worseningDiff = b.worseningPp - a.worseningPp;
+        if (worseningDiff !== 0) return worseningDiff;
+        const valueDiff = b.value - a.value;
+        if (valueDiff !== 0) return valueDiff;
+        return a.name.localeCompare(b.name, 'ko-KR');
+      })
+      .slice(0, 5);
+
+    return rows.map((row, index) => ({
+      ...row,
+      rank: index + 1,
+    }));
+  }, [
+    currentBundle,
+    activeTheme.target,
+    activeTheme.higherIsWorse,
+    activeKpiKey,
+    childrenScope.childrenCodes,
+    childrenScope.childrenNameMap,
+    selectedRegion?.code,
+  ]);
+
+  const focusedCauseData = useMemo(() => {
+    if (!currentBundle) return [];
+    if (!selectedArea?.code) return currentBundle.cause;
+    return currentBundle.cause.map((item, index) => ({
+      ...item,
+      value: Math.max(
+        1,
+        Math.round(item.value + seededValue(`${selectedArea.code}-${activeKpiKey}-cause-${index}`, -12, 14))
+      ),
+    }));
+  }, [currentBundle, selectedArea?.code, activeKpiKey]);
+
+  const top5PrimaryCause = useMemo(() => focusedCauseData[0]?.name ?? '서류 미비', [focusedCauseData]);
+
+  const handleSelectTop5Row = useCallback((row: RankedTop5Row) => {
+    setSelectedArea({ code: row.code, name: row.name });
+    setInspectorState({
+      type: 'top5',
+      row,
+      causeName: top5PrimaryCause,
+      owners: buildCauseOwners(top5PrimaryCause, row.name),
+      actionText: buildActionByCause(top5PrimaryCause),
+    });
+  }, [buildActionByCause, buildCauseOwners, top5PrimaryCause]);
 
   const selectedAreaMetric = useMemo(() => {
     if (!selectedArea || !currentBundle) return null;
@@ -1521,6 +1968,12 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
       parentRegionCode: selectedRegion?.code,
     });
   }, [top5Rows, childrenScope.childrenCodes, selectedRegion?.code]);
+
+  useEffect(() => {
+    if (inspectorState.type !== 'none') return;
+    if (!centralKpis.length) return;
+    handleOpenKpiInspector(activeCentralKpi);
+  }, [inspectorState.type, centralKpis.length, handleOpenKpiInspector, activeCentralKpi]);
 
   /* ─────────────────────────────────────────────────────────────
      트리맵 데이터 (지역별 케이스) - 히트맵 스타일 + 시간필터 연동
@@ -1623,8 +2076,21 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
   /* ─────────────────────────────────────────────────────────────
      SLA × 데이터 충족률 2×2 리스크 매트릭스 데이터
   ───────────────────────────────────────────────────────────── */
-  const SLA_THRESHOLD = 95;
-  const DATA_THRESHOLD = 93;
+  const matrixThreshold = useMemo<QuadrantThreshold>(
+    () => ({
+      slaCut: resolveThreshold(
+        import.meta.env.VITE_MATRIX_SLA_CUT,
+        centralSettings.matrixThresholds.slaCut
+      ),
+      dataCut: resolveThreshold(
+        import.meta.env.VITE_MATRIX_DATA_CUT,
+        centralSettings.matrixThresholds.dataCut
+      ),
+    }),
+    [centralSettings.matrixThresholds.dataCut, centralSettings.matrixThresholds.slaCut]
+  );
+  const SLA_THRESHOLD = matrixThreshold.slaCut;
+  const DATA_THRESHOLD = matrixThreshold.dataCut;
 
   // 시도 → 시군구 매핑 (현재 선택 시도의 하위 행정구역)
   const SIDO_SIGUNGU_MAP: Record<string, { id: string; name: string }[]> = {
@@ -1928,6 +2394,194 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
     });
   }, [currentBundle, drillLevel, getNextDrillLevel, prefetchScope]);
 
+  const partialAggregationPossible = useMemo(
+    () => kpiHeadlines.some((headline) => headline.partialPossible),
+    [kpiHeadlines]
+  );
+
+  const buildKpiTooltipLines = useCallback((
+    def: ReturnType<typeof getCentralKpiList>[number],
+    kpi: CentralKpiValue
+  ) => {
+    const headline = headlineByKpiId[def.id];
+    const statusLabel = HEADLINE_SEVERITY_LABEL[headline?.severity ?? 'ok'];
+    const targetGap = headline?.deltaPp ?? calcTargetGap(def, kpi.value);
+    return [
+      `뜻: ${KPI_PLAIN_LINE[def.id]}`,
+      `영향: ${KPI_IMPACT_LINE[def.id]}`,
+      `현재 상태: ${statusLabel} · 선택 기간(${periodLabel}) ${kpi.value.toFixed(1)}${def.unit} (목표 대비 ${toSignedPp(targetGap)})`,
+      `확인 항목: ${KPI_CHECK_LINE[def.id]}`,
+      `목표/기준: ${def.target}${def.unit} · 전주 대비 ${toSignedPp(kpi.delta7d)}`,
+      `${KPI_DENOMINATOR_LINE[def.id]} · ${kpi.numerator.toLocaleString()} / ${kpi.denominator.toLocaleString()}`,
+    ];
+  }, [headlineByKpiId, periodLabel]);
+
+  const handlePriorityHeadlineClick = useCallback((headline: KpiHeadline) => {
+    const kpiId = KPI_KEY_TO_ID[headline.kpiKey];
+    setActiveCentralKpi(kpiId);
+    handleOpenKpiInspector(kpiId);
+  }, [handleOpenKpiInspector]);
+
+  const matrixQuadrantCounts = useMemo(
+    () =>
+      riskMatrixData.reduce<Record<MatrixQuadrantKey, number>>(
+        (acc, row) => {
+          const quadrant = getMatrixQuadrant(row.slaRate, row.dataRate, SLA_THRESHOLD, DATA_THRESHOLD);
+          acc[quadrant] += 1;
+          return acc;
+        },
+        { good: 0, dataRisk: 0, slaRisk: 0, dualRisk: 0 }
+      ),
+    [riskMatrixData, SLA_THRESHOLD, DATA_THRESHOLD]
+  );
+
+  const matrixRowsByQuadrant = useMemo(() => {
+    const grouped: Record<MatrixQuadrantKey, typeof riskMatrixData> = {
+      good: [],
+      dataRisk: [],
+      slaRisk: [],
+      dualRisk: [],
+    };
+    riskMatrixData.forEach((row) => {
+      const quadrant = getMatrixQuadrant(row.slaRate, row.dataRate, SLA_THRESHOLD, DATA_THRESHOLD);
+      grouped[quadrant].push(row);
+    });
+    (Object.keys(grouped) as MatrixQuadrantKey[]).forEach((quadrant) => {
+      grouped[quadrant].sort((a, b) => b.totalCases - a.totalCases);
+    });
+    return grouped;
+  }, [riskMatrixData, SLA_THRESHOLD, DATA_THRESHOLD]);
+
+  const dominantMatrixQuadrant = useMemo(
+    () => getDominantQuadrant(matrixQuadrantCounts),
+    [matrixQuadrantCounts]
+  );
+
+  const effectiveMatrixQuadrant = matrixQuadrantFilter ?? dominantMatrixQuadrant;
+
+  const matrixInspectorItems = useCallback(
+    (quadrant: MatrixQuadrantKey) =>
+      matrixRowsByQuadrant[quadrant].slice(0, 8).map((row) => ({
+        regionName: row.regionName,
+        slaRate: row.slaRate,
+        dataRate: row.dataRate,
+        totalCases: row.totalCases,
+      })),
+    [matrixRowsByQuadrant]
+  );
+
+  const applyMatrixQuadrantSelection = useCallback(
+    (quadrant: MatrixQuadrantKey, selectedRegionName?: string) => {
+      const items = matrixInspectorItems(quadrant);
+      setInspectorState({
+        type: 'matrix',
+        quadrant,
+        selectedRegionName: selectedRegionName ?? items[0]?.regionName ?? '선택 없음',
+        items,
+      });
+    },
+    [matrixInspectorItems]
+  );
+
+  const handleMatrixQuadrantToggle = useCallback(
+    (quadrant: MatrixQuadrantKey) => {
+      const nextFilter = matrixQuadrantFilter === quadrant ? null : quadrant;
+      setMatrixQuadrantFilter(nextFilter);
+      setMatrixHelpOpen(null);
+      applyMatrixQuadrantSelection(nextFilter ?? dominantMatrixQuadrant);
+    },
+    [matrixQuadrantFilter, dominantMatrixQuadrant, applyMatrixQuadrantSelection]
+  );
+
+  const handleMatrixPointClick = useCallback((entry: any) => {
+    if (!entry?.regionId) return;
+    const quadrant = getMatrixQuadrant(entry.slaRate, entry.dataRate, SLA_THRESHOLD, DATA_THRESHOLD);
+    setSelectedArea({ code: entry.regionId, name: entry.regionName });
+    setMatrixQuadrantFilter(quadrant);
+    setMatrixHelpOpen(null);
+    applyMatrixQuadrantSelection(quadrant, entry.regionName);
+  }, [SLA_THRESHOLD, DATA_THRESHOLD, applyMatrixQuadrantSelection]);
+
+  const matrixDownloadRows = useMemo(() => {
+    if (!matrixQuadrantFilter) return riskMatrixData;
+    return matrixRowsByQuadrant[matrixQuadrantFilter];
+  }, [matrixQuadrantFilter, riskMatrixData, matrixRowsByQuadrant]);
+
+  const matrixOverlayPositions = useMemo(() => {
+    const xCut = Math.min(96, Math.max(4, ((DATA_THRESHOLD - 70) / 30) * 100));
+    const yCut = Math.min(96, Math.max(4, (1 - ((SLA_THRESHOLD - 70) / 30)) * 100));
+    return {
+      good: { left: (xCut + 100) / 2, top: yCut / 2 },
+      dataRisk: { left: xCut / 2, top: yCut / 2 },
+      slaRisk: { left: (xCut + 100) / 2, top: (yCut + 100) / 2 },
+      dualRisk: { left: xCut / 2, top: (yCut + 100) / 2 },
+    } satisfies Record<MatrixQuadrantKey, { left: number; top: number }>;
+  }, [SLA_THRESHOLD, DATA_THRESHOLD]);
+
+  useEffect(() => {
+    if (!rightAccordion.slaMatrix || riskMatrixData.length === 0) return;
+    if (inspectorState.type === 'matrix') return;
+    applyMatrixQuadrantSelection(effectiveMatrixQuadrant);
+  }, [
+    rightAccordion.slaMatrix,
+    riskMatrixData.length,
+    inspectorState.type,
+    effectiveMatrixQuadrant,
+    applyMatrixQuadrantSelection,
+  ]);
+
+  useEffect(() => {
+    if (matrixHelpOpen === null) return;
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest('[data-matrix-help-popover]')) {
+        setMatrixHelpOpen(null);
+      }
+    };
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMatrixHelpOpen(null);
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [matrixHelpOpen]);
+
+  const handleDownloadMatrixCsv = useCallback(() => {
+    if (!matrixDownloadRows.length) return;
+    const rows = matrixDownloadRows.map((row) => {
+      const quadrant = getMatrixQuadrant(row.slaRate, row.dataRate, SLA_THRESHOLD, DATA_THRESHOLD);
+      return [
+        periodLabel,
+        activeTheme.shortLabel,
+        selectedRegion?.name ?? '전국',
+        MATRIX_QUADRANT_META[quadrant].label,
+        matrixQuadrantFilter ? MATRIX_QUADRANT_META[matrixQuadrantFilter].label : '전체',
+        row.regionName,
+        row.slaRate.toFixed(1),
+        row.dataRate.toFixed(1),
+        `${SLA_THRESHOLD.toFixed(1)}%`,
+        `${DATA_THRESHOLD.toFixed(1)}%`,
+        String(row.totalCases),
+      ].join(',');
+    });
+    const header = 'period,kpi,scope,quadrant,quadrantFilter,region,slaRate,dataRate,slaCut,dataCut,totalCases';
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const scopeToken = (selectedRegion?.name ?? '전국').replace(/\s+/g, '');
+    const filterToken = matrixQuadrantFilter ? MATRIX_QUADRANT_META[matrixQuadrantFilter].guideLabel : 'all';
+    link.href = url;
+    link.download = `sla-data-matrix_${periodLabel}_${scopeToken}_${filterToken}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [matrixDownloadRows, periodLabel, activeTheme.shortLabel, selectedRegion?.name, SLA_THRESHOLD, DATA_THRESHOLD, matrixQuadrantFilter]);
+
   const overlayVisible = loadingStage === 'loadingScopeChange' || loadingStage === 'refreshing';
 
   return (
@@ -1943,11 +2597,12 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             {centralKpiDefs.map(def => {
               const kpiVal = centralKpis.find(k => k.kpiId === def.id);
               if (!kpiVal) {
-                // skeleton
                 return (
-                  <div key={def.id} className="min-w-[170px] h-[82px] rounded-xl border border-gray-200 bg-gray-50 animate-pulse" />
+                  <div key={def.id} className="min-w-[196px] h-[124px] rounded-xl border border-gray-200 bg-gray-50 animate-pulse" />
                 );
               }
+              const headlineMeta = headlineByKpiId[def.id];
+              const severity = headlineMeta?.severity ?? 'ok';
               return (
                 <CentralKpiCard
                   key={def.id}
@@ -1956,11 +2611,14 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                   isActive={activeCentralKpi === def.id}
                   onClick={() => {
                     setActiveCentralKpi(def.id);
+                    handleOpenKpiInspector(def.id);
                   }}
-                  tooltipLines={KPI_THEMES[KPI_ID_TO_KEY[def.id]].tooltipLines}
+                  plainLine={KPI_PLAIN_LINE[def.id]}
+                  tooltipTitle={`${def.shortName} · ${HEADLINE_SEVERITY_LABEL[severity]}`}
+                  tooltipLines={buildKpiTooltipLines(def, kpiVal)}
                   tooltipColor={KPI_THEMES[KPI_ID_TO_KEY[def.id]].primaryColor}
-                  timeWindow={centralWindow}
-                  periodLabel={periodLabel}
+                  severityLabel={HEADLINE_SEVERITY_LABEL[severity]}
+                  severityClass={HEADLINE_BADGE_CLASS[severity]}
                 />
               );
             })}
@@ -2036,10 +2694,47 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             <button className="p-1.5 hover:bg-gray-100 rounded" title="다운로드"><Download className="h-4 w-4" /></button>
           </div>
         </div>
+
+        <div className="mt-2 border-t border-gray-100 pt-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
+              이번 주 우선 점검
+            </span>
+            {priorityHeadlines.length > 0 ? (
+              priorityHeadlines.map((headline) => {
+                const kpiId = KPI_KEY_TO_ID[headline.kpiKey];
+                const theme = KPI_THEMES[headline.kpiKey];
+                return (
+                  <button
+                    key={headline.kpiKey}
+                    onClick={() => handlePriorityHeadlineClick(headline)}
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-50"
+                  >
+                    <span className={`inline-flex rounded-full border px-1.5 py-0.5 font-semibold ${HEADLINE_BADGE_CLASS[headline.severity]}`}>
+                      {HEADLINE_SEVERITY_LABEL[headline.severity]}
+                    </span>
+                    <span className="font-semibold">{theme.shortLabel}</span>
+                    <span className="text-slate-500">(목표 대비 {toSignedPp(headline.deltaPp)})</span>
+                    {activeCentralKpi === kpiId && (
+                      <span className="text-blue-600">선택됨</span>
+                    )}
+                  </button>
+                );
+              })
+            ) : (
+              <span className="text-[11px] text-slate-500">현재 지표가 목표 범위에서 유지되는 편입니다.</span>
+            )}
+            {partialAggregationPossible && (
+              <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700">
+                부분 집계 가능성
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ═══════════════════════════════════════════════════════════
-          DRILLDOWN SUBPAGE - 4패널 (Funnel / Bottleneck / Linkage / Regional)
+          DRILLDOWN SUBPAGE - 퍼널 상단 + 기존 통계 패널
       ═══════════════════════════════════════════════════════════ */}
       {showDrilldown && (
         <div className="bg-gradient-to-b from-slate-50 to-white border-b border-gray-200 px-4 py-3 shrink-0">
@@ -2063,12 +2758,30 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
               닫기 ✕
             </button>
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 max-h-[420px] overflow-y-auto">
+          <div className="overflow-y-auto pr-1" style={{ height: `${drilldownPanelHeight}px` }}>
             <FunnelPanel stages={funnelData} />
-            <BottleneckPanel metrics={bottleneckData} />
-            <LinkagePanel metrics={linkageData} />
-            <RegionalComparisonPanel rows={regionData} />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-3">
+              <BottleneckPanel metrics={bottleneckData} />
+              <LinkagePanel metrics={linkageData} />
+              <RegionalComparisonPanel rows={regionData} />
+            </div>
           </div>
+          {layoutMode !== 'mobile' && (
+            <button
+              type="button"
+              onMouseDown={handleDrilldownResizeStart}
+              onDoubleClick={handleDrilldownResizeReset}
+              aria-label="드릴다운 패널 높이 조절"
+              title="드래그로 높이 조절, 더블클릭으로 기본 높이"
+              className={`mt-2 flex w-full cursor-ns-resize items-center justify-center rounded-md border py-1 transition-colors ${
+                isResizingDrilldown
+                  ? 'border-blue-300 bg-blue-50/70'
+                  : 'border-gray-200 bg-white/70 hover:bg-gray-50'
+              }`}
+            >
+              <span className={`h-1.5 w-16 rounded-full ${isResizingDrilldown ? 'bg-blue-400' : 'bg-gray-300'}`} />
+            </button>
+          )}
         </div>
       )}
 
@@ -2113,7 +2826,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
           </div>
           
           {/* ── 1차: 선택 KPI 요약 카드 ── */}
-          <div className="bg-white border border-gray-200 rounded-lg p-3">
+          <div className="bg-slate-50/70 border border-slate-200 rounded-lg p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-semibold text-gray-700">선택 KPI 요약</span>
               <span className="text-[11px] px-1.5 py-0.5 rounded font-medium" 
@@ -2188,14 +2901,14 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                 {activeTheme.shortLabel}
               </span>
             </div>
+            <p className="text-[10px] text-gray-500 mb-1">정렬 기준: 목표 대비 격차 → 전주 대비 악화폭 → 절대값</p>
             <div className="space-y-0.5">
               {(() => {
                 if (!top5Rows.length) return null;
-                const dir = activeTheme.legend.direction;
-                const values = top5Rows.map((row) => row.value);
-                const minV = Math.min(...values);
-                const maxV = Math.max(...values);
-                const range = maxV - minV || 1;
+                const gaps = top5Rows.map((row) => row.gapAbs);
+                const minGap = Math.min(...gaps);
+                const maxGap = Math.max(...gaps);
+                const gapRange = maxGap - minGap || 1;
                 return top5Rows.map((row, idx) => (
                   <div
                     key={row.code}
@@ -2209,34 +2922,40 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                       });
                     }}
                     onClick={() => {
-                      setSelectedArea({ code: row.code, name: row.name });
+                      handleSelectTop5Row(row);
                     }}
                     onKeyDown={e => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        setSelectedArea({ code: row.code, name: row.name });
+                        handleSelectTop5Row(row);
                       }
                     }}
                     className={`w-full flex items-center gap-2 px-2 py-1.5 rounded transition-colors cursor-pointer select-none ${selectedArea?.code === row.code ? 'bg-blue-50 ring-1 ring-blue-200' : 'hover:bg-gray-50'} ${isScopeChangeLoading ? 'animate-pulse' : ''}`}
                   >
-                    {/* 순위 번호 */}
                     <span className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
                       style={{ backgroundColor: idx === 0 ? activeTheme.primaryColor : idx === 1 ? `${activeTheme.primaryColor}cc` : `${activeTheme.primaryColor}88` }}
                     >{row.rank}</span>
-                    {/* 지역명 */}
-                    <span className="text-[12px] text-gray-800 truncate min-w-[52px] shrink-0">
-                      {row.name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()}
-                    </span>
-                    {/* 미니바 (상대 비율 기반) */}
-                    <div className="flex-1 h-[6px] bg-gray-100 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full transition-all" style={{
-                        width: `${Math.max(10, ((dir === 'higherWorse' ? row.value - minV : maxV - row.value) / range) * 100)}%`,
-                        backgroundColor: activeTheme.primaryColor,
-                        opacity: 0.55 + (0.35 * (1 - idx / 5)),
-                      }} />
+                    <div className="min-w-[54px] shrink-0">
+                      <span className="text-[12px] text-gray-800 truncate block">
+                        {row.name.replace(/특별자치도|특별자치시|광역시|특별시/g, '').trim()}
+                      </span>
                     </div>
-                    {/* 값 */}
-                    <span className="text-[12px] font-bold tabular-nums text-right min-w-[42px] shrink-0" style={{ color: activeTheme.primaryColor }}>
+                    <div className="flex-1">
+                      <div className="h-[6px] bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{
+                            width: `${Math.max(10, ((row.gapAbs - minGap) / gapRange) * 100)}%`,
+                            backgroundColor: activeTheme.primaryColor,
+                            opacity: 0.55 + (0.35 * (1 - idx / 5)),
+                          }}
+                        />
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-gray-500 tabular-nums">
+                        목표 {toSignedPp(row.targetGapPp)} · 전주 {toSignedPp(row.weeklyDeltaPp)}
+                      </div>
+                    </div>
+                    <span className="text-[12px] font-bold tabular-nums text-right min-w-[58px] shrink-0" style={{ color: activeTheme.primaryColor }}>
                       {activeTheme.valueFormatter(row.value)}
                     </span>
                   </div>
@@ -2320,10 +3039,10 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                     slaViolation: total > 0 ? Number(((d.slaViolation / total) * 100).toFixed(1)) : 0,
                     recontactNeed: total > 0 ? Number((((d.highRisk + d.caution) / total) * 100).toFixed(1)) : 0,
                   };
-                })} margin={{ top: 8, right: 4, left: -16, bottom: 4 }}>
+                })} margin={{ top: 8, right: 6, left: 6, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                   <XAxis dataKey="age" tick={{ fontSize: 14, fill: '#4b5563' }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 13, fill: '#6b7280' }} tickLine={false} axisLine={false} width={32} tickFormatter={(v) => `${v}%`} />
+                  <YAxis tick={{ fontSize: 13, fill: '#6b7280' }} tickLine={false} axisLine={false} width={44} tickFormatter={(v) => `${v}%`} />
                   <Tooltip content={({ active, payload, label }) => {
                     if (!active || !payload?.length) return null;
                     return (
@@ -2533,6 +3252,122 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             </div>
           </div>
 
+          <div className="bg-white border border-gray-200 rounded-lg px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="text-[12px] font-semibold text-gray-700">조치 인사이트</span>
+              {inspectorState.type === 'kpi' && (
+                <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${HEADLINE_BADGE_CLASS[inspectorState.severity]}`}>
+                  {HEADLINE_SEVERITY_LABEL[inspectorState.severity]}
+                </span>
+              )}
+              {inspectorState.type === 'matrix' && (
+                <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${MATRIX_QUADRANT_META[inspectorState.quadrant].badgeClass}`}>
+                  {MATRIX_QUADRANT_META[inspectorState.quadrant].label}
+                </span>
+              )}
+            </div>
+
+            {inspectorState.type === 'none' && (
+              <p className="text-[11px] text-gray-500">Top5, 원인 분포, 매트릭스에서 항목을 선택하면 조치 대상이 표시됩니다.</p>
+            )}
+
+            {inspectorState.type === 'kpi' && (
+              <div className="space-y-1.5 text-[11px] text-gray-600">
+                <p className="font-semibold text-gray-800">{activeCentralDef.shortName} 상태 해석</p>
+                <p>목표 대비 편차 {toSignedPp(inspectorState.deltaPp)} · 악화 추세 {toSignedPp(inspectorState.trendWorseningPp)}</p>
+                <p>권장 확인: {KPI_CHECK_LINE[inspectorState.kpiId]}</p>
+                {inspectorState.partialPossible && (
+                  <span className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                    부분 집계 가능성
+                  </span>
+                )}
+              </div>
+            )}
+
+            {inspectorState.type === 'top5' && (
+              <div className="space-y-1.5 text-[11px]">
+                <p className="font-semibold text-gray-800">
+                  {inspectorState.row.name} · {activeTheme.valueFormatter(inspectorState.row.value)}
+                </p>
+                <p className="text-gray-600">
+                  목표 대비 {toSignedPp(inspectorState.row.targetGapPp)} · 전주 대비 {toSignedPp(inspectorState.row.weeklyDeltaPp)}
+                </p>
+                <p className="text-gray-600">원인: {inspectorState.causeName}</p>
+                <p className="text-gray-600">{inspectorState.actionText}</p>
+                <div className="space-y-1 pt-1 border-t border-gray-100">
+                  {inspectorState.owners.slice(0, 3).map((owner) => (
+                    <div key={`${owner.orgName}-${owner.lastOccurredAt}`} className="flex items-center justify-between text-[10px]">
+                      <span className="truncate text-gray-600">{owner.orgName}</span>
+                      <span className="font-semibold text-gray-800">{owner.count}건</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {inspectorState.type === 'cause' && (
+              <div className="space-y-1.5 text-[11px]">
+                <p className="font-semibold text-gray-800">원인: {inspectorState.causeName}</p>
+                <p className="text-gray-600">{inspectorState.actionText}</p>
+                <div className="space-y-1 pt-1 border-t border-gray-100">
+                  {inspectorState.owners.slice(0, 4).map((owner) => (
+                    <div key={`${owner.orgName}-${owner.lastOccurredAt}`} className="rounded border border-gray-100 bg-gray-50 px-2 py-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-medium text-gray-700">{owner.orgName}</span>
+                        <span className="text-[10px] font-semibold text-gray-800">{owner.count}건</span>
+                      </div>
+                      <div className="text-[10px] text-gray-500">{owner.regionName} · {owner.lastOccurredAt}</div>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  onClick={() => onNavigate?.('compliance-audit', { region: selectedArea?.code ?? selectedRegion?.code ?? 'KR', kpi: activeCentralKpi })}
+                  className="text-[10px] text-blue-600 hover:text-blue-700 font-semibold"
+                >
+                  규정 준수/감사 탭에서 자세히 보기
+                </button>
+              </div>
+            )}
+
+            {inspectorState.type === 'matrix' && (
+              <div className="space-y-1.5 text-[11px] text-gray-600">
+                <p className="font-semibold text-gray-800">
+                  {inspectorState.selectedRegionName} 선택 · {MATRIX_QUADRANT_META[inspectorState.quadrant].description}
+                </p>
+                <div className="space-y-1 pt-1 border-t border-gray-100 max-h-[120px] overflow-y-auto">
+                  {inspectorState.items.map((item) => (
+                    <div key={`${item.regionName}-${item.slaRate}`} className="flex items-center justify-between text-[10px]">
+                      <span className="truncate">{item.regionName}</span>
+                      <span className="tabular-nums text-gray-800">
+                        SLA {item.slaRate.toFixed(1)}% · 데이터 {item.dataRate.toFixed(1)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {inspectorState.type === 'policy' && (
+              <div className="space-y-1.5 text-[11px] text-gray-600">
+                <p className="font-semibold text-gray-800">최근 정책/룰 변경 Top 3</p>
+                <div className="space-y-1 max-h-[132px] overflow-y-auto">
+                  {inspectorState.items.map((item) => (
+                    <div key={item.policyId} className="rounded border border-gray-100 bg-gray-50 px-2 py-1">
+                      <div className="text-[10px] font-semibold text-gray-800">{item.title}</div>
+                      <div className="text-[10px] text-gray-500">{item.effectiveAt} · 영향 지역 {item.impactedRegions}개</div>
+                      <div className="text-[10px] text-gray-600 mt-0.5">
+                        {item.impactedKpis.map((impact) => `${impact.kpiKey} ${toSignedPp(impact.deltaPp)}`).join(' · ')}
+                      </div>
+                      {item.notes && (
+                        <div className="text-[10px] text-gray-500 mt-0.5">{item.notes}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* ═══ 1차: 구성 분해 + 원인 분포 — 동일 높이 FixedHeightCard ═══ */}
           {currentBundle && (
             <div className="grid grid-cols-2 gap-2">
@@ -2575,10 +3410,10 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                 ) : (
                   <div style={{ height: '160px' }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={currentBundle.breakdown} margin={{ top: 4, right: 6, left: -14, bottom: 4 }}>
+                      <BarChart data={currentBundle.breakdown} margin={{ top: 4, right: 8, left: 6, bottom: 4 }}>
                         <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                         <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#4b5563' }} tickLine={false} />
-                        <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} tickLine={false} axisLine={false} width={30} />
+                        <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} tickLine={false} axisLine={false} width={40} />
                         <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '8px' }} />
                         <Bar dataKey="value" radius={[3, 3, 0, 0]} isAnimationActive animationDuration={460} animationEasing="ease-out">
                           {currentBundle.breakdown.map((entry, idx) => (
@@ -2599,8 +3434,15 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                     </div>
                   ))}
                   {currentBundle.breakdown.length > 3 && (
-                    <button onClick={() => setShowBreakdownMore(!showBreakdownMore)}
-                      className="text-[10px] text-blue-500 hover:text-blue-700 w-full text-center pt-0.5">
+                    <button
+                      onClick={() => setShowBreakdownMore(!showBreakdownMore)}
+                      title={
+                        showBreakdownMore
+                          ? '숨김 항목 접기'
+                          : `숨김 항목: ${currentBundle.breakdown.slice(3, 6).map((item) => item.name).join(', ')}`
+                      }
+                      className="text-[10px] text-blue-500 hover:text-blue-700 w-full text-center pt-0.5"
+                    >
                       {showBreakdownMore ? '접기' : `+${currentBundle.breakdown.length - 3}개 더보기`}
                     </button>
                   )}
@@ -2611,25 +3453,43 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
               <FixedHeightCard title="원인 분포" height={300}>
                 <div style={{ height: '180px' }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={currentBundle.cause.slice(0, showCauseMore ? currentBundle.cause.length : 3)} layout="vertical" margin={{ top: 4, right: 24, left: 4, bottom: 4 }}>
+                    <BarChart data={focusedCauseData.slice(0, showCauseMore ? focusedCauseData.length : 3)} layout="vertical" margin={{ top: 4, right: 24, left: 4, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
                       <XAxis type="number" tick={{ fontSize: 10, fill: '#6b7280' }} />
                       <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#4b5563' }} width={60} />
                       <Tooltip contentStyle={{ fontSize: '11px', borderRadius: '8px' }} />
                       <Bar dataKey="value" radius={[0, 3, 3, 0]} fill={activeTheme.primaryColor}
                         isAnimationActive animationDuration={460} animationEasing="ease-out"
+                        onClick={(data: any) => {
+                          const payload = data?.payload ?? data;
+                          const causeName = payload?.name;
+                          if (!causeName) return;
+                          setInspectorState({
+                            type: 'cause',
+                            causeName,
+                            owners: buildCauseOwners(causeName),
+                            actionText: buildActionByCause(causeName),
+                          });
+                        }}
                         label={{ position: 'right', fontSize: 10, fill: '#374151', formatter: (v: number) => v.toLocaleString() }}>
-                        {currentBundle.cause.slice(0, showCauseMore ? currentBundle.cause.length : 3).map((_, idx) => (
+                        {focusedCauseData.slice(0, showCauseMore ? focusedCauseData.length : 3).map((_, idx) => (
                           <Cell key={idx} fill={activeTheme.palette[Math.min(idx + 1, activeTheme.palette.length - 2)]} />
                         ))}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-                {currentBundle.cause.length > 3 && (
-                  <button onClick={() => setShowCauseMore(!showCauseMore)}
-                    className="text-[10px] text-blue-500 hover:text-blue-700 w-full text-center pt-1">
-                    {showCauseMore ? '접기' : `+${currentBundle.cause.length - 3}개 더보기`}
+                {focusedCauseData.length > 3 && (
+                  <button
+                    onClick={() => setShowCauseMore(!showCauseMore)}
+                    title={
+                      showCauseMore
+                        ? '숨김 항목 접기'
+                        : `숨김 항목: ${focusedCauseData.slice(3, 6).map((item) => item.name).join(', ')}`
+                    }
+                    className="text-[10px] text-blue-500 hover:text-blue-700 w-full text-center pt-1"
+                  >
+                    {showCauseMore ? '접기' : `+${focusedCauseData.length - 3}개 더보기`}
                   </button>
                 )}
               </FixedHeightCard>
@@ -2651,7 +3511,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
               </div>
               <div style={{ height: '160px' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={focusedTrendData} margin={{ top: 6, right: 10, left: -10, bottom: 4 }}>
+                  <ComposedChart data={focusedTrendData} margin={{ top: 6, right: 10, left: 10, bottom: 4 }}>
                     <defs>
                       <linearGradient id="kpiTrendGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={activeTheme.primaryColor} stopOpacity={0.25} />
@@ -2660,7 +3520,7 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
                     <XAxis dataKey="period" tick={{ fontSize: 10, fill: '#6b7280' }} tickLine={false} />
-                    <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={32}
+                    <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickLine={false} axisLine={false} tickMargin={4} width={activeTheme.unit === '%' ? 58 : 46}
                       tickFormatter={(v) => activeTheme.valueFormatter(v)} />
                     <Tooltip
                       contentStyle={{ fontSize: '11px', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}
@@ -2690,20 +3550,47 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
               return `위험 ${danger}개 지역`;
             })()}
           >
-            <div className="flex items-center justify-end gap-2 text-[10px] text-gray-500 mb-1">
-              <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-green-500" />양호</span>
-              <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-amber-400" />주의</span>
-              <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-red-500" />위험</span>
+            <div className="flex items-center justify-between gap-2 text-[10px] text-gray-500 mb-1">
+              <span className="text-[11px] text-gray-500">
+                처리 속도(SLA)와 데이터 충족률을 교차해 위험 구간을 확인
+              </span>
+              <button
+                onClick={handleDownloadMatrixCsv}
+                className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50"
+              >
+                <Download className="h-3 w-3" />
+                다운로드
+              </button>
+            </div>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => handleMatrixQuadrantToggle(dominantMatrixQuadrant)}
+                className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50/70 px-2 py-0.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100/80"
+              >
+                현재 집중 관리 구간:
+                <span>{MATRIX_QUADRANT_META[dominantMatrixQuadrant].guideLabel}</span>
+                <span>({matrixQuadrantCounts[dominantMatrixQuadrant]}개 지역)</span>
+              </button>
+              <div className="flex items-center justify-end gap-2 text-[10px] text-gray-500">
+                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-green-500" />양호</span>
+                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-amber-400" />주의</span>
+                <span className="flex items-center gap-0.5"><span className="w-2 h-2 rounded-full bg-red-500" />위험</span>
+              </div>
+            </div>
+            <div className="mb-1 text-[10px] text-gray-500">
+              사분면 기준: SLA {SLA_THRESHOLD.toFixed(1)}% / 데이터 {DATA_THRESHOLD.toFixed(1)}%
             </div>
             {riskMatrixData.length > 0 ? (
-              <div style={{ height: '220px' }}>
+              <div className="relative" style={{ height: '220px' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart margin={{ top: 8, right: 12, left: -8, bottom: 5 }}>
+                  <ScatterChart margin={{ top: 8, right: 12, left: 8, bottom: 8 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis type="number" dataKey="dataRate" name="데이터 충족률" unit="%"
                       domain={[70, 100]} tick={{ fontSize: 11 }} label={{ value: '데이터 충족률(%)', position: 'insideBottom', offset: -2, fontSize: 11, fill: '#6b7280' }} />
                     <YAxis type="number" dataKey="slaRate" name="SLA 준수율" unit="%"
-                      domain={[70, 100]} tick={{ fontSize: 11 }} label={{ value: 'SLA(%)', angle: -90, position: 'insideLeft', offset: 12, fontSize: 11, fill: '#6b7280' }} />
+                      domain={[70, 100]} tick={{ fontSize: 11 }} width={46}
+                      label={{ value: 'SLA(%)', angle: -90, position: 'insideLeft', offset: 0, fontSize: 11, fill: '#6b7280' }} />
                     <ZAxis type="number" dataKey="totalCases" range={[30, 250]} name="케이스 수" />
                     <ReferenceLine x={DATA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
                     <ReferenceLine y={SLA_THRESHOLD} stroke="#9ca3af" strokeDasharray="4 2" />
@@ -2719,25 +3606,112 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
                         </div>
                       );
                     }} />
-                    <Scatter data={riskMatrixData} isAnimationActive animationDuration={480} animationEasing="ease-out" onClick={(entry: any) => {
-                      if (entry?.regionId) {
-                        const nextLevel = getNextDrillLevel(drillLevel);
-                        setScope({ code: entry.regionId, name: entry.regionName, level: nextLevel }, { replace: true });
-                      }
-                    }}>
+                    <Scatter
+                      data={riskMatrixData}
+                      isAnimationActive
+                      animationDuration={480}
+                      animationEasing="ease-out"
+                      onClick={handleMatrixPointClick}
+                    >
                       {riskMatrixData.map((entry, idx) => {
-                        const slaOk = entry.slaRate >= SLA_THRESHOLD;
-                        const dataOk = entry.dataRate >= DATA_THRESHOLD;
-                        const color = slaOk && dataOk ? '#22c55e' : !slaOk && !dataOk ? '#ef4444' : '#f59e0b';
-                        return <Cell key={idx} fill={color} style={{ cursor: 'pointer' }} />;
+                        const quadrant = getMatrixQuadrant(entry.slaRate, entry.dataRate, SLA_THRESHOLD, DATA_THRESHOLD);
+                        const color = quadrant === 'good' ? '#22c55e' : quadrant === 'dualRisk' ? '#ef4444' : '#f59e0b';
+                        const dimmed = matrixQuadrantFilter !== null && matrixQuadrantFilter !== quadrant;
+                        return (
+                          <Cell
+                            key={idx}
+                            fill={color}
+                            fillOpacity={dimmed ? 0.2 : 0.95}
+                            stroke={dimmed ? '#d1d5db' : color}
+                            strokeWidth={dimmed ? 1 : 1.5}
+                            style={{ cursor: 'pointer' }}
+                          />
+                        );
                       })}
                     </Scatter>
                   </ScatterChart>
                 </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0">
+                  {(['good', 'dataRisk', 'slaRisk', 'dualRisk'] as const).map((quadrantKey) => {
+                    const meta = MATRIX_QUADRANT_META[quadrantKey];
+                    const position = matrixOverlayPositions[quadrantKey];
+                    const isSelected = effectiveMatrixQuadrant === quadrantKey;
+                    return (
+                      <button
+                        key={`overlay-${quadrantKey}`}
+                        type="button"
+                        onClick={() => handleMatrixQuadrantToggle(quadrantKey)}
+                        className={`pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold transition-colors ${
+                          isSelected
+                            ? 'border-blue-200 bg-white/95 text-blue-700 shadow-sm'
+                            : 'border-gray-200 bg-white/70 text-gray-500 hover:bg-white/90'
+                        }`}
+                        style={{ left: `${position.left}%`, top: `${position.top}%` }}
+                      >
+                        {meta.guideLabel} ({matrixQuadrantCounts[quadrantKey]})
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <div className="h-[160px] flex items-center justify-center text-xs text-gray-400">데이터 부족</div>
             )}
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              {(['good', 'dataRisk', 'slaRisk', 'dualRisk'] as const).map((quadrantKey) => {
+                const meta = MATRIX_QUADRANT_META[quadrantKey];
+                const isSelected = matrixQuadrantFilter === quadrantKey;
+                const isFocused = matrixQuadrantFilter === null && dominantMatrixQuadrant === quadrantKey;
+                return (
+                  <div
+                    key={quadrantKey}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={isSelected}
+                    title={meta.description}
+                    onClick={() => handleMatrixQuadrantToggle(quadrantKey)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        handleMatrixQuadrantToggle(quadrantKey);
+                      }
+                    }}
+                    className={`rounded-md border px-2 py-1 text-left transition-colors ${
+                      isSelected
+                        ? 'ring-1 ring-blue-300 border-blue-200 bg-blue-50/70'
+                        : isFocused
+                        ? 'border-indigo-200 bg-indigo-50/60'
+                        : 'border-gray-200 bg-gray-50/70 hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-1">
+                      <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${meta.badgeClass}`}>
+                        {meta.guideLabel}
+                      </span>
+                      <div className="relative" data-matrix-help-popover>
+                        <button
+                          type="button"
+                          aria-label={`${meta.guideLabel} 기준 설명`}
+                          className="inline-flex items-center justify-center rounded text-gray-400 hover:text-gray-600"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMatrixHelpOpen((prev) => (prev === quadrantKey ? null : quadrantKey));
+                          }}
+                        >
+                          <HelpCircle className="h-3 w-3" />
+                        </button>
+                        {matrixHelpOpen === quadrantKey && (
+                          <div className="absolute right-0 top-4 z-20 min-w-[130px] rounded border border-gray-200 bg-white px-2 py-1 text-[10px] text-gray-600 shadow-lg">
+                            {meta.description}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[11px] font-semibold text-gray-700">해당 지역 {matrixQuadrantCounts[quadrantKey]}개</p>
+                  </div>
+                );
+              })}
+            </div>
           </AccordionSection>
 
           {/* ═══ 3차: 처리 단계 분포 (AccordionSection) ═══ */}
@@ -2750,10 +3724,10 @@ export function NationalDashboard({ onNavigate }: NationalDashboardProps) {
             {stageByRegionData.length > 0 ? (
               <div style={{ height: '240px' }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={stageByRegionData} margin={{ top: 5, right: 8, left: -12, bottom: 22 }}>
+                  <BarChart data={stageByRegionData} margin={{ top: 5, right: 8, left: 8, bottom: 22 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                     <XAxis dataKey="regionName" tick={{ fontSize: 11, fill: '#4b5563' }} interval={0} angle={-35} textAnchor="end" />
-                    <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} />
+                    <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} width={46} tickFormatter={(v) => v >= 1000 ? `${(v/1000).toFixed(0)}K` : String(v)} />
                     <Tooltip content={({ active, payload, label }) => {
                       if (!active || !payload?.length) return null;
                       const total = payload.reduce((s, p) => s + (Number(p.value) || 0), 0);

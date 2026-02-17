@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AuthSystem } from './components/auth/AuthSystem';
 import { CitizenMobileApp } from './components/citizen/CitizenMobileApp';
+import { PublicSmsLanding } from './components/citizen/PublicSmsLanding';
 import { LocalCenterApp } from './components/local-center/LocalCenterApp';
 import { RegionalCenterApp } from './components/regional-center/RegionalCenterApp';
 import { CentralCenterApp } from './components/central-center/CentralCenterApp';
@@ -13,6 +14,22 @@ interface User {
   role: UserRole;
   name: string;
   organization?: string;
+}
+
+function normalizeBasePath(path: string) {
+  if (!path || !path.trim()) return '/neuro-shield/';
+  let normalized = path.trim();
+  if (!normalized.startsWith('/')) normalized = `/${normalized}`;
+  if (!normalized.endsWith('/')) normalized = `${normalized}/`;
+  return normalized;
+}
+
+function isPublicSmsPathname(pathname: string): boolean {
+  if (pathname === '/p/sms' || pathname === '/p/sms/') return true;
+  const basePath = normalizeBasePath(import.meta.env.VITE_BASE_PATH || '/neuro-shield/');
+  if (!pathname.startsWith(basePath)) return false;
+  const stripped = pathname.slice(basePath.length - 1);
+  return stripped === '/p/sms' || stripped === '/p/sms/';
 }
 
 /** URL 해시가 #citizen 이면 로그인 없이 시민 화면 직접 접근 */
@@ -28,9 +45,27 @@ function useCitizenDirectAccess() {
   return isCitizen;
 }
 
+/** URL 경로가 /p/sms 이면 공개 링크 랜딩 화면 접근 */
+function usePublicSmsLandingAccess() {
+  const [isLanding, setIsLanding] = useState(() => isPublicSmsPathname(window.location.pathname));
+
+  useEffect(() => {
+    const onRouteChange = () => setIsLanding(isPublicSmsPathname(window.location.pathname));
+    window.addEventListener('popstate', onRouteChange);
+    window.addEventListener('hashchange', onRouteChange);
+    return () => {
+      window.removeEventListener('popstate', onRouteChange);
+      window.removeEventListener('hashchange', onRouteChange);
+    };
+  }, []);
+
+  return isLanding;
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const isCitizenDirect = useCitizenDirectAccess();
+  const isPublicSmsLanding = usePublicSmsLandingAccess();
 
   const handleLogin = (userData: User) => {
     setUser(userData);
@@ -54,6 +89,16 @@ export default function App() {
       history.replaceState(null, '', window.location.pathname);
     }
   };
+
+  // 문자 링크 공개 랜딩 (/p/sms?t=:token)
+  if (isPublicSmsLanding) {
+    return (
+      <>
+        <Toaster />
+        <PublicSmsLanding />
+      </>
+    );
+  }
 
   // 시민 직접 접근 (로그인 불필요)
   if (isCitizenDirect) {

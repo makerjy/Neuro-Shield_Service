@@ -1,7 +1,5 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect, startTransition } from 'react';
 import {
-  Download,
-  HelpCircle,
   ChevronLeft,
   AlertTriangle,
   BarChart3,
@@ -14,12 +12,7 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronRight,
-  MoreHorizontal,
 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  Treemap,
-} from 'recharts';
 import { GeoMapPanel, type MapColorScheme } from '../geomap/GeoMapPanel';
 import { COLOR_PALETTES } from '../../lib/choroplethScale';
 import type { RegionalScope } from '../geomap/regions';
@@ -62,22 +55,34 @@ import {
   StageContribution,
   TopNHorizontalBar,
 } from '../chart-kit/ChartKit';
+import { MetricLabel } from './MetricLabel';
+import { getMetricHelp, type MetricActionTab, type MetricHelpKey } from './MetricDictionary';
+import { toUserCopy, getCopyTerm } from './copyDictionary';
 import type {
   AdTransitionSignal,
   AlertSummary,
   DifferentialDelay,
   MapLayer,
-  OperationalTopItem,
   RegionalKpiBlock,
   StageConversionRate,
-  WorkQueueItem,
-  WorkStatus,
 } from './opsContracts';
+import type { RegionalPageId } from './regionalRouting';
 
 type AnalyticsPeriod = 'week' | 'month' | 'quarter';
 type RangePreset = '24h' | '7d' | '30d' | '90d';
 
 type NamedValue = { name: string; value: number };
+type SparkPoint = { t: string; v: number };
+type SparkSeriesKey = 'slaRisk' | 'bottleneck' | 'overdueFollowup';
+type SparkSeries = {
+  key: SparkSeriesKey;
+  label: string;
+  unit: '곳' | '일' | '건';
+  points: SparkPoint[];
+  value: number;
+  delta: number;
+};
+type ActionEngineId = 'STAFFING' | 'EXAM_SLOT' | 'FOLLOWUP_AUTOMATION' | 'HOSPITAL_LINK';
 
 type RecontactSlot = {
   slot: string;
@@ -100,10 +105,7 @@ type StageImpact = {
 };
 
 type AlertLevel = 'normal' | 'attention' | 'warning';
-type RightEvidenceTab = 'drivers' | 'data' | 'trend';
 type LoadingPhase = 'Initial' | 'RegionChange' | 'PartialData' | 'Empty' | 'Error' | 'Ready';
-
-type RegionalTaskType = WorkQueueItem['taskType'];
 
 type DistrictOpsData = {
   regionId: string;
@@ -160,33 +162,26 @@ const PRIMARY_KPI_BY_LAYER: Record<MapLayer, RegionalKpiKey> = {
   LOAD: 'regionalQueueRisk',
 };
 
-const ISSUE_BY_KPI: Record<RegionalKpiKey, OperationalTopItem['issueType']> = {
-  regionalSla: 'SLA',
-  regionalQueueRisk: 'QUEUE',
-  regionalRecontact: 'QUEUE',
-  regionalDataReadiness: 'DATA_GAP',
-  regionalGovernance: 'LOAD',
-  regionalAdTransitionHotspot: 'CONVERSION_GAP',
-  regionalDxDelayHotspot: 'EXAM_DELAY',
-  regionalScreenToDxRate: 'CONVERSION_GAP',
+const USER_LABEL_BY_KPI: Record<RegionalKpiKey, string> = {
+  regionalSla: '기한 준수(처리 기한)',
+  regionalQueueRisk: '미처리 업무(대기 건수)',
+  regionalRecontact: '후속 연락 지연',
+  regionalDataReadiness: '운영 데이터 준비',
+  regionalGovernance: '기록 완전성',
+  regionalAdTransitionHotspot: '전환 위험 집중',
+  regionalDxDelayHotspot: '검사 연결 지연(병목)',
+  regionalScreenToDxRate: '지역 간 전환 격차',
 };
 
-const TASK_BY_ISSUE: Record<OperationalTopItem['issueType'], RegionalTaskType> = {
-  SLA: 'STAFF_SUPPORT',
-  EXAM_DELAY: 'EXAM_SLOT',
-  QUEUE: 'FOLLOWUP',
-  CONVERSION_GAP: 'HOSPITAL_LINK',
-  LOAD: 'STAFF_SUPPORT',
-  DATA_GAP: 'DATA_FIX',
-};
-
-const ACTION_LABEL_BY_ISSUE: Record<OperationalTopItem['issueType'], string> = {
-  SLA: '배치 조정',
-  EXAM_DELAY: '연계 요청',
-  QUEUE: '작업 큐에 추가',
-  CONVERSION_GAP: '작업 큐에 추가',
-  LOAD: '배치 조정',
-  DATA_GAP: '작업 큐에 추가',
+const HELP_KEY_BY_KPI: Record<RegionalKpiKey, MetricHelpKey> = {
+  regionalSla: 'slaRisk',
+  regionalQueueRisk: 'unprocessedWork',
+  regionalRecontact: 'followupDelay',
+  regionalDataReadiness: 'unprocessedWork',
+  regionalGovernance: 'unprocessedWork',
+  regionalAdTransitionHotspot: 'slaRisk',
+  regionalDxDelayHotspot: 'examDelay',
+  regionalScreenToDxRate: 'conversionGap',
 };
 
 interface RegionalDashboardProps {
@@ -197,7 +192,6 @@ interface RegionalDashboardProps {
   onSelectedKpiKeyChange?: (kpi: RegionalKpiKey) => void;
   onSelectedRegionSggChange?: (sgg: string | null) => void;
   onSelectedRangeChange?: (range: AnalyticsPeriod) => void;
-  onNavigateToCause?: (params: { kpi: RegionalKpiKey; sgg: string | null; range: AnalyticsPeriod }) => void;
   onCreateIntervention?: (params: {
     kpi: RegionalKpiKey;
     sgg: string | null;
@@ -205,6 +199,7 @@ interface RegionalDashboardProps {
     source: 'overview' | 'top5' | 'map';
     primaryDriverStage?: string;
   }) => void;
+  onNavigateModule?: (target: Exclude<RegionalPageId, 'overview'>) => void;
 }
 
 function useResizeObserver<T extends HTMLElement>(): [React.RefObject<T | null>, { width: number; height: number }] {
@@ -786,6 +781,32 @@ function formatDeltaValue(kpiKey: RegionalKpiKey, delta: number): string {
   return `${delta > 0 ? '+' : ''}${delta.toFixed(1)}%p`;
 }
 
+function formatSparkValue(value: number, unit: SparkSeries['unit']): string {
+  if (unit === '곳') return `${Math.round(value).toLocaleString()}곳`;
+  if (unit === '일') return `${Math.round(value)}일`;
+  return `${Math.round(value).toLocaleString()}건`;
+}
+
+function formatSparkDelta(value: number, unit: SparkSeries['unit']): string {
+  const prefix = value > 0 ? '+' : '';
+  if (unit === '곳') return `${prefix}${Math.round(value)}곳`;
+  if (unit === '일') return `${prefix}${Math.round(value)}일`;
+  return `${prefix}${Math.round(value)}건`;
+}
+
+function buildSparkCoords(values: number[], width: number, height: number): Array<{ x: number; y: number }> {
+  if (!values.length) return [];
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = Math.max(1, values.length - 1);
+  return values.map((value, index) => {
+    const x = (index / span) * width;
+    const ratio = max === min ? 0.5 : (value - min) / (max - min);
+    const y = height - ratio * (height - 6) - 3;
+    return { x, y };
+  });
+}
+
 function getAlertLevel(kpiKey: RegionalKpiKey, value: number, target?: number): AlertLevel {
   if (!target) return 'normal';
   const direction = determineDirection(kpiKey);
@@ -811,8 +832,8 @@ export function RegionalDashboard({
   onSelectedKpiKeyChange,
   onSelectedRegionSggChange,
   onSelectedRangeChange,
-  onNavigateToCause,
   onCreateIntervention,
+  onNavigateModule,
 }: RegionalDashboardProps) {
   const [analyticsPeriodState, setAnalyticsPeriodState] = useState<AnalyticsPeriod>('week');
   const [rangePresetState, setRangePresetState] = useState<RangePreset>('7d');
@@ -821,40 +842,16 @@ export function RegionalDashboard({
   const [containerRef, containerSize] = useResizeObserver<HTMLDivElement>();
   const [selectedDistrictNameState, setSelectedDistrictNameState] = useState<string | null>(null);
   const [selectedRegionIdState, setSelectedRegionIdState] = useState<string | null>(null);
-  const [tooltipTarget, setTooltipTarget] = useState<string | null>(null);
   const [mapDrillLevel, setMapDrillLevel] = useState<'ctprvn' | 'sig' | 'emd' | undefined>(undefined);
   const [mapDrillCode, setMapDrillCode] = useState<string | undefined>(undefined);
   const [mapSubRegionsByScope, setMapSubRegionsByScope] = useState<Record<string, MapChildRegion[]>>({});
+  const [showHeaderMetricsDetail, setShowHeaderMetricsDetail] = useState(false);
   const [stageImpactOpen, setStageImpactOpen] = useState(false);
-  const [showLeftDetails, setShowLeftDetails] = useState(false);
-  const [showBottomTable, setShowBottomTable] = useState(false);
   const [selectedCauseName, setSelectedCauseName] = useState<string | null>(null);
-  const [rightEvidenceTab, setRightEvidenceTab] = useState<RightEvidenceTab>('drivers');
-  const [top5MenuRegionId, setTop5MenuRegionId] = useState<string | null>(null);
+  const [showCauseDetail, setShowCauseDetail] = useState(false);
+  const [selectedActionId, setSelectedActionId] = useState<ActionEngineId>('STAFFING');
   const [showExtendedTopN, setShowExtendedTopN] = useState(false);
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>('Initial');
-  const [workQueue, setWorkQueue] = useState<WorkQueueItem[]>(() => [
-    {
-      id: 'rq-1',
-      priority: 1,
-      regionName: '영등포구',
-      taskType: 'EXAM_SLOT',
-      status: 'IN_PROGRESS',
-      assignee: '광역 운영 A',
-      dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-      id: 'rq-2',
-      priority: 2,
-      regionName: '동작구',
-      taskType: 'STAFF_SUPPORT',
-      status: 'TODO',
-      assignee: '광역 운영 B',
-      dueAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
-      createdAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-    },
-  ]);
   const lastFilterSignatureRef = useRef<string>('');
   const filterSyncTimerRef = useRef<number | null>(null);
   const lastLoadingTransitionRef = useRef<string>('');
@@ -986,7 +983,7 @@ export function RegionalDashboard({
     setMapSubRegionsByScope({});
     subRegionSignatureByScopeRef.current = {};
     setStageImpactOpen(false);
-    setRightEvidenceTab('drivers');
+    setShowCauseDetail(false);
   }, [region.id, updateSelectedRegionId]);
 
   useEffect(() => {
@@ -999,9 +996,8 @@ export function RegionalDashboard({
   }, [selectedKpiKey, selectedDistrictName]);
 
   useEffect(() => {
-    setRightEvidenceTab('drivers');
     setShowExtendedTopN(false);
-    setTop5MenuRegionId(null);
+    setShowCauseDetail(false);
   }, [selectedDistrictName, selectedKpiKey]);
 
   useEffect(() => {
@@ -1497,7 +1493,37 @@ export function RegionalDashboard({
       ? region.label
       : drillCurrent.label;
 
-  const mapHeaderTitle = `${RANGE_PRESET_LABEL[rangePreset]} · ${region.label} · ${selectedKpiDef.shortLabel} · 시군구`;
+  const navigateMetricAction = useCallback(
+    (tab: MetricActionTab) => {
+      if (!onNavigateModule) return;
+      if (tab === 'bottleneck') onNavigateModule('cause');
+      if (tab === 'actions') onNavigateModule('interventions');
+      if (tab === 'reports') onNavigateModule('reports');
+      if (tab === 'settings') onNavigateModule('settings');
+    },
+    [onNavigateModule],
+  );
+
+  const renderMetricLabel = useCallback(
+    (label: string, key: MetricHelpKey, className?: string) => {
+      const help = getMetricHelp(key, {
+        scopeLabel: currentDrillLabel,
+        rangeLabel: RANGE_PRESET_LABEL[rangePreset],
+        longWaitDays: settings.thresholds.longWaitDays,
+      });
+      return (
+        <MetricLabel
+          label={label}
+          help={help}
+          className={className}
+          onActionClick={() => navigateMetricAction(help.actionTab)}
+        />
+      );
+    },
+    [currentDrillLabel, navigateMetricAction, rangePreset, settings.thresholds.longWaitDays],
+  );
+
+  const mapHeaderTitle = `${RANGE_PRESET_LABEL[rangePreset]} · ${region.label} · ${toUserCopy(selectedKpiDef.shortLabel)} · 시군구`;
 
   const mapValueList = useMemo(
     () => rankingRowsSource.map((row) => row.mapMetric[selectedKpiKey]),
@@ -1746,6 +1772,101 @@ export function RegionalDashboard({
   }, [top5, totalVolume]);
 
   const top5ConcentrationLabel = top5Concentration == null ? '—' : `${top5Concentration.toFixed(1)}%`;
+  const top2RegionLabel = useMemo(() => {
+    const names = top5.slice(0, 2).map((item) => item.name);
+    return names.length ? names.join('/') : `${region.label} 상위`;
+  }, [region.label, top5]);
+  const userKpiLabel = USER_LABEL_BY_KPI[selectedKpiKey] ?? toUserCopy(selectedKpiDef.shortLabel);
+
+  const insightHeadline = useMemo(() => {
+    const layerLabel = mapLayerOptions.find((item) => item.key === activeMapLayer)?.label ?? activeMapLayer;
+    const statusToken =
+      selectedKpiDef.direction === 'higherWorse'
+        ? `${userKpiLabel} 압력↑`
+        : `${userKpiLabel} 흐름 변동`;
+    return safeOpsText(
+      `${RANGE_PRESET_LABEL[rangePreset]} 기준 ${layerLabel} · ${statusToken} · 우선 개입: ${top2RegionLabel}`,
+    );
+  }, [
+    activeMapLayer,
+    mapLayerOptions,
+    rangePreset,
+    selectedKpiDef.direction,
+    userKpiLabel,
+    top2RegionLabel,
+  ]);
+
+  const miniSparkSeries = useMemo<SparkSeries[]>(() => {
+    const pointLabels = rangePreset === '7d' ? ['D-6', 'D-5', 'D-4', 'D-3', 'D-2', 'D-1', 'D0'] : ['T-7', 'T-6', 'T-5', 'T-4', 'T-3', 'T-2', 'T-1', 'T0'];
+    const slaRiskRegions = rankingRowsSource.filter((row) => row.kpi.regionalRecontact >= 10).length;
+    const overdueFollowups = rankingRowsSource.reduce(
+      (sum, row) => sum + (row.recontactReasons.find((item) => item.name === '미응답')?.value ?? 0),
+      0,
+    );
+    const bottleneckValue =
+      rankingRowsSource.length > 0
+        ? Number(
+            (
+              rankingRowsSource.reduce((sum, row) => sum + row.differentialDelay.avgWaitDays, 0) /
+              rankingRowsSource.length
+            ).toFixed(1),
+          )
+        : 0;
+
+    const buildSeries = (key: SparkSeriesKey, label: string, unit: SparkSeries['unit'], currentValue: number) => {
+      const drift = sv(`${region.id}-${key}-${rangePreset}-drift`, -1.2, 1.2);
+      const noiseSpan = unit === '건' ? Math.max(6, currentValue * 0.08) : unit === '곳' ? 1.5 : 1.0;
+      const points = pointLabels.map((t, idx) => {
+        const offset = idx - (pointLabels.length - 1);
+        const raw = currentValue + offset * drift + sv(`${region.id}-${key}-${rangePreset}-${t}`, -noiseSpan, noiseSpan);
+        const value = Math.max(0, unit === '일' ? Number(raw.toFixed(1)) : Math.round(raw));
+        return { t, v: value };
+      });
+
+      if (points.length) {
+        points[points.length - 1] = {
+          ...points[points.length - 1],
+          v: unit === '일' ? Number(currentValue.toFixed(1)) : Math.round(currentValue),
+        };
+      }
+      const last = points[points.length - 1]?.v ?? 0;
+      const prev = points[Math.max(0, points.length - 2)]?.v ?? last;
+
+      return {
+        key,
+        label,
+        unit,
+        points,
+        value: last,
+        delta: Number((last - prev).toFixed(1)),
+      } satisfies SparkSeries;
+    };
+
+    return [
+      buildSeries('slaRisk', 'SLA 위험 구역', '곳', slaRiskRegions),
+      buildSeries('bottleneck', '병목 지연', '일', bottleneckValue),
+      buildSeries('overdueFollowup', '재접촉 지연', '건', overdueFollowups),
+    ];
+  }, [rangePreset, rankingRowsSource, region.id]);
+
+  const baselineBadges = useMemo(() => {
+    const dxDelayThreshold = Math.round(REGIONAL_DASHBOARD_KPI_MAP.regionalDxDelayHotspot.target ?? 24);
+    const recontactThreshold = Math.round(REGIONAL_DASHBOARD_KPI_MAP.regionalRecontact.target ?? 12);
+    return [
+      {
+        label: `SLA 위험 기준 ${settings.thresholds.longWaitDays}일 초과`,
+        tooltip: `SLA 위험 기준: ${settings.thresholds.longWaitDays}일 초과 케이스를 위험으로 집계`,
+      },
+      {
+        label: `검사 지연 임계 ${dxDelayThreshold}일`,
+        tooltip: `감별검사 평균 대기일 임계값: ${dxDelayThreshold}일`,
+      },
+      {
+        label: `재접촉 경고 ${recontactThreshold}%`,
+        tooltip: `재접촉 필요율 경고 기준: ${recontactThreshold}%`,
+      },
+    ];
+  }, [settings.thresholds.longWaitDays]);
 
   const alertSummary = useMemo<AlertSummary>(() => {
     const slaAtRiskRegions = rankingRowsSource.filter((row) => row.kpi.regionalRecontact >= 10).length;
@@ -1839,72 +1960,33 @@ export function RegionalDashboard({
     },
     [alertSummary, rankingRowsSource, settings.thresholds.longWaitDays],
   );
-
-  const operationalTopItems = useMemo<OperationalTopItem[]>(
-    () =>
-      top5.map((item) => {
-        const regionCode = parseRegionIdCode(item.regionId) ?? item.code;
-        const row = rankingRowsSource.find((candidate) => String(candidate.regionId) === regionCode);
-        const issueType = ISSUE_BY_KPI[selectedKpiKey];
-        const primaryCause =
-          selectedKpiKey === 'regionalAdTransitionHotspot'
-            ? row?.adTransitionDrivers[0]?.name ?? '고위험 밀집'
-            : selectedKpiKey === 'regionalDxDelayHotspot'
-              ? row?.dxDelayDrivers[0]?.name ?? '평균 대기일'
-              : selectedKpiKey === 'regionalScreenToDxRate'
-                ? row?.screenToDxDrivers[0]?.name ?? '전환율 역격차'
-                : selectedKpiKey === 'regionalQueueRisk'
-                  ? row?.queueCauseTop[0]?.name ?? '연락 실패'
-                  : selectedKpiKey === 'regionalDataReadiness'
-                    ? row?.missingFields[0]?.name ?? '결측 필드 누락'
-                    : selectedKpiKey === 'regionalGovernance'
-                      ? row?.governanceMissingTypes[0]?.name ?? '로그 누락'
-                      : row?.queueTypeBacklog[0]?.name ?? '처리 대기 누적';
-        const recommendedAction =
-          issueType === 'EXAM_DELAY'
-            ? safeOpsText('검사 슬롯 확보 요청 생성')
-            : issueType === 'CONVERSION_GAP'
-              ? safeOpsText('저전환 구역 예약 동선 조정 요청')
-              : issueType === 'DATA_GAP'
-                ? safeOpsText('필수 필드 보완 요청 작업 생성')
-                : issueType === 'LOAD'
-                  ? safeOpsText('센터 부하 분산 배치 요청')
-                  : safeOpsText('우선 개입 작업을 큐에 추가');
-        return {
-          regionId: item.regionId,
-          regionName: item.name,
-          issueType,
-          severity: Math.max(0, Math.min(100, Math.round(item.priorityScore * 100))),
-          primaryCause,
-          recommendedAction,
-          ctaLabel: ACTION_LABEL_BY_ISSUE[issueType],
-        };
-      }),
-    [rankingRowsSource, selectedKpiKey, top5],
-  );
-
-  const addWorkQueueItem = useCallback(
-    (issueType: OperationalTopItem['issueType'], regionName: string, priority: 1 | 2 | 3 | 4 | 5) => {
-      const status: WorkStatus = priority <= 2 ? 'TODO' : 'IN_PROGRESS';
-      const dueOffsetHours = priority <= 2 ? 24 : 48;
-      const next: WorkQueueItem = {
-        id: `rq-${Date.now()}`,
-        priority,
-        regionName,
-        taskType: TASK_BY_ISSUE[issueType],
-        status,
-        assignee: '광역 운영',
-        dueAt: new Date(Date.now() + dueOffsetHours * 60 * 60 * 1000).toISOString(),
-        createdAt: new Date().toISOString(),
-      };
-      setWorkQueue((prev) => [next, ...prev].slice(0, 20));
-    },
-    [],
-  );
-
-  const updateWorkQueueStatus = useCallback((id: string, status: WorkStatus) => {
-    setWorkQueue((prev) => prev.map((item) => (item.id === id ? { ...item, status } : item)));
-  }, []);
+  const compactHeaderKpis = useMemo(() => {
+    const bottleneck = opsKpiBlocks.find((block) => block.id === 'bottleneck');
+    const gap = opsKpiBlocks.find((block) => block.id === 'gap');
+    return [
+      {
+        id: 'sla-risk',
+        label: `${getCopyTerm('sla').user} 위험 구역`,
+        helpKey: 'slaRisk' as const,
+        value: `${alertSummary.slaAtRiskRegions.toLocaleString()}곳`,
+        tone: alertSummary.slaAtRiskRegions > 3 ? 'text-red-700 bg-red-50 border-red-100' : 'text-emerald-700 bg-emerald-50 border-emerald-100',
+      },
+      {
+        id: 'bottleneck',
+        label: getCopyTerm('examDelay').user,
+        helpKey: 'examDelay' as const,
+        value: `${Math.round(bottleneck?.value ?? 0)}일`,
+        tone: (bottleneck?.severity ?? 'normal') === 'critical' ? 'text-red-700 bg-red-50 border-red-100' : 'text-amber-700 bg-amber-50 border-amber-100',
+      },
+      {
+        id: 'gap',
+        label: getCopyTerm('conversionGap').user,
+        helpKey: 'conversionGap' as const,
+        value: `${(gap?.value ?? 0).toFixed(1)}%p`,
+        tone: (gap?.severity ?? 'normal') === 'critical' ? 'text-red-700 bg-red-50 border-red-100' : 'text-indigo-700 bg-indigo-50 border-indigo-100',
+      },
+    ];
+  }, [alertSummary.slaAtRiskRegions, opsKpiBlocks]);
 
   const selectedDistrictDelta = useMemo(() => {
     if (!selectedDistrictData) return null;
@@ -1998,7 +2080,6 @@ export function RegionalDashboard({
           });
         updateSelectedRegionId(nextRegionId);
         updateSelectedDistrict(sigungu);
-        setRightEvidenceTab('drivers');
         startTransition(() => {
           pushDrill({
             level: 'SIGUNGU',
@@ -2024,7 +2105,6 @@ export function RegionalDashboard({
             name: emdLabel,
           });
         updateSelectedRegionId(nextRegionId);
-        setRightEvidenceTab('drivers');
         startTransition(() => {
           pushDrill({
             level: 'EUPMYEONDONG',
@@ -2118,13 +2198,18 @@ export function RegionalDashboard({
 
   const handleTop5Click = useCallback(
     (areaCode: string, areaName: string, areaRegionId?: string) => {
-      setRightEvidenceTab('drivers');
-      setTop5MenuRegionId(null);
       const normalizedCode =
         normalizeRegionCode(areaCode) ||
         normalizeRegionCode(parseRegionIdCode(areaRegionId));
       if (!normalizedCode) return;
-      const targetLevel = drillCurrent.level === 'REGION' ? 'SIGUNGU' : 'EUPMYEONDONG';
+      const targetLevel =
+        areaRegionId?.startsWith('EUPMYEONDONG:')
+          ? 'EUPMYEONDONG'
+          : areaRegionId?.startsWith('SIGUNGU:')
+            ? 'SIGUNGU'
+            : drillCurrent.level === 'REGION'
+              ? 'SIGUNGU'
+              : 'EUPMYEONDONG';
       const nextRegionId = makeRegionId({
         level: targetLevel,
         code: normalizedCode,
@@ -2352,6 +2437,26 @@ export function RegionalDashboard({
     if (selectedKpiKey === 'regionalScreenToDxRate') return focusData.screenToDxDrivers.slice(0, 3);
     return focusData.governanceMissingTypes.slice(0, 3);
   }, [focusData, selectedKpiKey]);
+  const formatCauseMetricValue = useCallback(
+    (item: NamedValue): string => {
+      if (selectedKpiKey === 'regionalRecontact') return `${item.value.toFixed(1)}%`;
+      if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+        if (item.name.includes('편차')) return `${item.value.toFixed(1)}점`;
+        return `${Math.round(item.value).toLocaleString()}건`;
+      }
+      if (selectedKpiKey === 'regionalDxDelayHotspot') {
+        if (item.name.includes('비율')) return `${item.value.toFixed(1)}%`;
+        if (item.name.includes('대기일')) return `${Math.round(item.value)}일`;
+        return `${Math.round(item.value).toLocaleString()}건`;
+      }
+      if (selectedKpiKey === 'regionalScreenToDxRate') {
+        if (item.name.includes('격차')) return `${item.value.toFixed(1)}%p`;
+        return `${item.value.toFixed(1)}점`;
+      }
+      return `${Math.round(item.value).toLocaleString()}건`;
+    },
+    [selectedKpiKey],
+  );
 
   const normalizedMissingFields = useMemo(
     () => mergeNamed([focusData.missingFields]),
@@ -2476,20 +2581,20 @@ export function RegionalDashboard({
   const summaryLineCurrent = useMemo(
     () =>
       safeOpsText(
-        `${region.label}(광역) ${selectedKpiDef.label} ${formatKpiValue(selectedKpiKey, regionalValue)} (지도 평균 ${formatKpiValue(
+        `${region.label}(광역) ${userKpiLabel} ${formatKpiValue(selectedKpiKey, regionalValue)} (지도 평균 ${formatKpiValue(
           selectedKpiKey,
           mapAvg,
         )}, Δ ${formatDeltaValue(selectedKpiKey, Number((regionalValue - mapAvg).toFixed(1)))})`,
       ),
-    [mapAvg, region.label, regionalValue, selectedKpiDef.label, selectedKpiKey],
+    [mapAvg, region.label, regionalValue, selectedKpiKey, userKpiLabel],
   );
 
   const summaryLineRisk = useMemo(
     () =>
       safeOpsText(
-        `장기대기 기준 ${settings.thresholds.longWaitDays}일 · 위험 구역 집중도: Top5가 전체의 ${top5ConcentrationLabel}`,
+        `기한 초과 대기 기준 ${settings.thresholds.longWaitDays}일 · 위험 구역 모니터링`,
       ),
-    [settings.thresholds.longWaitDays, top5ConcentrationLabel],
+    [settings.thresholds.longWaitDays],
   );
 
   const summaryLineAction = useMemo(() => {
@@ -2517,6 +2622,119 @@ export function RegionalDashboard({
     return safeOpsText(`이번 주 권장 개입: ${topTwoDistrictLabel}에 초기 처리 인력 우선 배치`);
   }, [selectedKpiKey, topTwoDistrictLabel]);
 
+  const todoItems = useMemo(
+    () => [
+      {
+        id: 'risk',
+        text: safeOpsText(
+          `${getCopyTerm('sla').user} 위험 구역 ${alertSummary.slaAtRiskRegions}곳 확인 → 상위 2곳 우선 개입`,
+        ),
+        onClick: () => updateSelectedKpiKey('regionalSla'),
+      },
+      {
+        id: 'bottleneck',
+        text: safeOpsText(
+          `${getCopyTerm('examDelay').user} 평균 ${Math.round(focusData.differentialDelay.avgWaitDays)}일 → 병목 상세 분석 필요`,
+        ),
+        onClick: () => onNavigateModule?.('cause'),
+      },
+      {
+        id: 'followup',
+        text: safeOpsText(
+          `${getCopyTerm('followupDelay').user} ${alertSummary.overdueFollowups.toLocaleString()}건 → 자동화 확대 검토`,
+        ),
+        onClick: () => onNavigateModule?.('interventions'),
+      },
+    ],
+    [
+      alertSummary.overdueFollowups,
+      alertSummary.slaAtRiskRegions,
+      focusData.differentialDelay.avgWaitDays,
+      onNavigateModule,
+      updateSelectedKpiKey,
+    ],
+  );
+
+  const diagnosisMetrics = useMemo(() => {
+    const queueBacklog = focusData.queueTypeBacklog.reduce((sum, item) => sum + item.value, 0);
+    const totalRecontactFailures = focusData.recontactReasons.reduce((sum, item) => sum + item.value, 0);
+    const effectiveThroughput = Math.max(0, Math.round(focusData.volume - queueBacklog));
+    return [
+      {
+        label: 'Stage 적체 구조',
+        value: `${primaryDriver.stage} · ${primaryDriver.valueLabel}`,
+      },
+      {
+        label: '검사 지연 분포',
+        value: `평균 ${Math.round(focusData.differentialDelay.avgWaitDays)}일 · 지연 ${(focusData.differentialDelay.delayedRatio * 100).toFixed(1)}%`,
+      },
+      {
+        label: '재접촉 실패 규모',
+        value: `${Math.round(totalRecontactFailures).toLocaleString()}건`,
+      },
+      {
+        label: '인력 대비 처리량',
+        value: `${effectiveThroughput.toLocaleString()}건`,
+      },
+    ];
+  }, [
+    focusData.differentialDelay.avgWaitDays,
+    focusData.differentialDelay.delayedRatio,
+    focusData.queueTypeBacklog,
+    focusData.recontactReasons,
+    focusData.volume,
+    primaryDriver.stage,
+    primaryDriver.valueLabel,
+  ]);
+
+  const actionEngineItems = useMemo(() => {
+    const scopeLabel = selectedDistrictData?.name ?? `${region.label} 관할`;
+    const concentration = top5Concentration ?? 20;
+    const base = Math.max(0.8, Math.min(5.8, concentration / 8));
+
+    return [
+      {
+        id: 'STAFFING' as const,
+        title: '인력 재배치 제안 생성',
+        detail: safeOpsText(`${scopeLabel} 접촉/재접촉 구간에 담당 인력 재배치`),
+        expected: `SLA 개선 추정 +${(base * 1.05).toFixed(1)}%p`,
+        stage: '접촉',
+      },
+      {
+        id: 'EXAM_SLOT' as const,
+        title: '검사 슬롯 증설 요청',
+        detail: safeOpsText(`${scopeLabel} 장기대기 구간 검사 연계 슬롯 확대`),
+        expected: `SLA 개선 추정 +${(base * 0.85).toFixed(1)}%p`,
+        stage: '2차',
+      },
+      {
+        id: 'FOLLOWUP_AUTOMATION' as const,
+        title: '재접촉 자동화 확대',
+        detail: safeOpsText(`${scopeLabel} 미응답/시간대 불일치 구간 자동화 강화`),
+        expected: `SLA 개선 추정 +${(base * 0.72).toFixed(1)}%p`,
+        stage: '재접촉',
+      },
+      {
+        id: 'HOSPITAL_LINK' as const,
+        title: '병원 연계 요청',
+        detail: safeOpsText(`${scopeLabel} 검사 지연 상위 구간 병원 연계 우선 요청`),
+        expected: `SLA 개선 추정 +${(base * 0.66).toFixed(1)}%p`,
+        stage: '3차',
+      },
+    ];
+  }, [region.label, selectedDistrictData?.name, top5Concentration]);
+
+  const selectedActionEngineItem = useMemo(
+    () => actionEngineItems.find((item) => item.id === selectedActionId) ?? actionEngineItems[0] ?? null,
+    [actionEngineItems, selectedActionId],
+  );
+
+  useEffect(() => {
+    if (!selectedActionEngineItem) return;
+    if (selectedActionEngineItem.id === selectedActionId) return;
+    setSelectedActionId(selectedActionEngineItem.id);
+  }, [selectedActionEngineItem, selectedActionId]);
+
   const selectedPrimaryCause = useMemo(() => {
     if (!selectedDistrictData) return null;
     if (selectedKpiKey === 'regionalSla') return selectedDistrictData.queueTypeBacklog[0]?.name ?? '신규 유입';
@@ -2535,8 +2753,8 @@ export function RegionalDashboard({
         `${selectedDistrictData.name}: 평균 대비 Δ ${formatDeltaValue(selectedKpiKey, selectedDistrictDelta)} · 원인 1순위: ${selectedPrimaryCause ?? '—'}`,
       );
     }
-    return safeOpsText(`Top5 구역이 전체 위험 규모의 ${top5ConcentrationLabel} 차지 (집중 개입 권장)`);
-  }, [selectedDistrictData, selectedDistrictDelta, selectedKpiKey, selectedPrimaryCause, top5ConcentrationLabel]);
+    return safeOpsText('지도에서 문제 구역을 선택해 원인과 조치 대상을 확인');
+  }, [selectedDistrictData, selectedDistrictDelta, selectedKpiKey, selectedPrimaryCause]);
 
   const interventionScenarios = useMemo(() => {
     const targetScope = selectedDistrictData ? selectedDistrictData.name : `${region.label} 전체`;
@@ -3188,129 +3406,43 @@ export function RegionalDashboard({
   return (
     <div ref={containerRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-gray-50">
       <div className="bg-white border-b border-gray-200 px-4 py-2 shrink-0">
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 overflow-x-auto flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 flex-1 min-w-0">
+            {compactHeaderKpis.map((item) => (
+              <div key={item.id} role="status" className={`rounded-md border px-2.5 py-2 ${item.tone}`}>
+                {renderMetricLabel(item.label, item.helpKey, 'text-[10px] font-semibold')}
+                <div className="text-[14px] font-bold mt-0.5">{item.value}</div>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => setShowHeaderMetricsDetail((prev) => !prev)}
+            className="h-8 px-2.5 rounded-md border border-gray-200 text-xs text-gray-600 hover:bg-gray-50 shrink-0"
+          >
+            상세 지표 {showHeaderMetricsDetail ? '접기' : '보기'}
+          </button>
+        </div>
+        {showHeaderMetricsDetail && (
+          <div className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-1.5">
             {topCards.map((card) => {
               const isActive = selectedKpiKey === card.key;
-              const activeSurfaceColor = `${card.color}14`;
-              const activeRingColor = `${card.color}33`;
-              const alertTone =
-                uiEmphasis.alertLevel === 'warning'
-                  ? 'bg-red-100 text-red-700 border-red-200'
-                  : uiEmphasis.alertLevel === 'attention'
-                    ? 'bg-amber-100 text-amber-700 border-amber-200'
-                    : 'bg-emerald-100 text-emerald-700 border-emerald-200';
-              const alertLabel =
-                uiEmphasis.alertLevel === 'warning'
-                  ? '경고'
-                  : uiEmphasis.alertLevel === 'attention'
-                    ? '주의'
-                    : '정상';
               return (
-                <button
+                <div
                   key={card.key}
-                  onClick={() => updateSelectedKpiKey(card.key)}
-                  onMouseEnter={() => setTooltipTarget(card.key)}
-                  onMouseLeave={() => setTooltipTarget(null)}
-                  className={`relative flex items-start gap-2 px-3 py-2 rounded-lg border transition-all text-left ${
-                    isActive
-                      ? 'min-w-[260px] shadow-sm'
-                      : 'min-w-[152px] border-gray-200 bg-gray-50/70 hover:border-gray-300 hover:bg-gray-100/80 opacity-75'
-                  }`}
-                  style={
-                    isActive
-                      ? {
-                          borderColor: card.color,
-                          backgroundColor: activeSurfaceColor,
-                          boxShadow: `0 0 0 2px ${activeRingColor}`,
-                        }
-                      : undefined
-                  }
+                  className={`rounded-md border px-2.5 py-2 ${isActive ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}
                 >
-                  <div className={`p-1.5 rounded-md ${card.iconBg}`}>{KPI_ICON[card.key]}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <div
-                        className={`text-[12px] font-medium truncate ${isActive ? '' : 'text-gray-600'}`}
-                        style={isActive ? { color: card.color } : undefined}
-                      >
-                        {card.shortLabel}
-                      </div>
-                      {isActive && (
-                        <span
-                          className="text-[10px] px-1.5 py-0.5 rounded border bg-white"
-                          style={{ borderColor: `${card.color}66`, color: card.color }}
-                        >
-                          이번 주 우선
-                        </span>
-                      )}
-                      {isActive && (
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${alertTone}`}>{alertLabel}</span>
-                      )}
-                    </div>
-                    <div
-                      className={`text-sm font-bold ${isActive ? '' : 'text-gray-800'}`}
-                      style={isActive ? { color: card.color } : undefined}
-                    >
-                      {formatKpiValue(card.key, card.value)}
-                    </div>
-                    {isActive && (
-                      <div className="text-[11px] mt-1 leading-tight" style={{ color: card.color }}>
-                        {activeKpiNarrative}
-                      </div>
-                    )}
+                  <div className="flex items-center gap-1.5 text-[10px] font-semibold text-gray-600">
+                    <span className={`p-1 rounded ${card.iconBg}`}>{KPI_ICON[card.key]}</span>
+                    <span className="truncate">{toUserCopy(card.shortLabel)}</span>
                   </div>
-                  {tooltipTarget === card.key && (
-                    <div className="absolute z-50 left-0 top-full mt-1 bg-gray-900 text-white text-[12px] rounded-lg p-2.5 shadow-xl max-w-[300px] leading-relaxed whitespace-pre-line">
-                      {card.tooltipLines.join('\n')}
-                    </div>
-                  )}
-                </button>
+                  <div className="text-[13px] font-bold text-gray-800 mt-1">
+                    {formatKpiValue(card.key, card.value)}
+                  </div>
+                </div>
               );
             })}
           </div>
-
-          <div className="w-px h-8 bg-gray-200 shrink-0" />
-
-          <div className="flex items-center gap-1 text-gray-500 shrink-0">
-            <button className="p-1.5 hover:bg-gray-100 rounded" title="도움말">
-              <HelpCircle className="h-4 w-4" />
-            </button>
-            <button className="p-1.5 hover:bg-gray-100 rounded" title="다운로드">
-              <Download className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-2 grid grid-cols-2 lg:grid-cols-4 gap-1.5">
-          {opsKpiBlocks.map((block) => (
-            <button
-              key={block.id}
-              onClick={() => updateSelectedKpiKey(PRIMARY_KPI_BY_LAYER[block.bindLayer])}
-              className={`rounded-md border px-2.5 py-1.5 text-left transition-colors ${
-                activeMapLayer === block.bindLayer
-                  ? 'border-slate-400 bg-slate-50'
-                  : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
-              }`}
-            >
-              <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
-                {block.title}
-              </div>
-              <div className="text-[13px] font-bold text-gray-800 mt-0.5">
-                {block.unit === '건'
-                  ? `${Math.round(block.value).toLocaleString()}${block.unit}`
-                  : `${Number(block.value).toFixed(block.unit === '%p' ? 1 : 1)}${block.unit ?? ''}`}
-              </div>
-              {block.delta && (
-                <div className="text-[10px] text-gray-500 mt-0.5">
-                  Δ {block.delta.value > 0 ? '+' : ''}
-                  {block.delta.value}
-                  {block.delta.unit}
-                </div>
-              )}
-            </button>
-          ))}
-        </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-hidden min-h-0">
@@ -3327,14 +3459,38 @@ export function RegionalDashboard({
               <span className="text-xs text-indigo-700 font-medium">
                 {selectedDistrictName ? `📍 ${selectedDistrictName}` : `🏢 ${region.label}`}
               </span>
-              <span className="ml-2 text-[12px] text-indigo-500">스코프: 광역 관할 · {RANGE_PRESET_LABEL[rangePreset]}</span>
+              <span className="ml-2 text-[12px] text-indigo-500">광역 관할 · {RANGE_PRESET_LABEL[rangePreset]}</span>
             </div>
 
             <div className="bg-white border border-gray-200 rounded-lg p-3">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-gray-700">선택 KPI 요약</span>
-                <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">{selectedKpiDef.shortLabel}</span>
+                <span className="text-sm font-semibold text-gray-700">오늘의 운영 To-Do</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700">
+                  3개
+                </span>
               </div>
+              <div className="space-y-1.5">
+                {todoItems.map((item, index) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={item.onClick}
+                    className="w-full text-left rounded border border-gray-100 bg-gray-50 px-2 py-1.5 text-[11px] text-gray-700 hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    {index + 1}. {item.text}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-gray-700">1. 현황 확인(문제 구역 찾기)</span>
+                <span className="text-[11px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
+                  {renderMetricLabel(userKpiLabel, HELP_KEY_BY_KPI[selectedKpiKey])}
+                </span>
+              </div>
+              <div className="mb-2 text-[11px] text-gray-500">지도를 클릭해 문제 구역을 선택</div>
               <div className="space-y-1.5 text-[12px] leading-relaxed">
                 <div className="p-2 rounded border border-gray-100 bg-gray-50 text-gray-800">{summaryLineCurrent}</div>
                 <div className="p-2 rounded border border-amber-100 bg-amber-50 text-amber-900">{summaryLineRisk}</div>
@@ -3342,232 +3498,44 @@ export function RegionalDashboard({
               </div>
             </div>
 
-            <div className="bg-white border border-gray-200 rounded-lg p-3">
+            <div className="bg-white border border-gray-200 rounded-lg p-3 min-h-0 overflow-hidden flex flex-col">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-gray-700">오늘의 운영 경고</span>
+                {renderMetricLabel('Top 집중 구역', 'top5Share', 'text-sm font-semibold text-gray-700')}
                 <span className="text-[11px] px-1.5 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200">
-                  Layer: {activeMapLayer}
+                  후보 5
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <div className="rounded border border-red-100 bg-red-50 px-2 py-1.5 text-red-800">
-                  SLA 위험 구역 <span className="font-semibold">{alertSummary.slaAtRiskRegions}곳</span>
-                </div>
-                <div className="rounded border border-orange-100 bg-orange-50 px-2 py-1.5 text-orange-800">
-                  검사 지연 임계 초과 <span className="font-semibold">{alertSummary.examDelayRegions}곳</span>
-                </div>
-                <div className="rounded border border-amber-100 bg-amber-50 px-2 py-1.5 text-amber-800">
-                  재접촉 지연 <span className="font-semibold">{alertSummary.overdueFollowups.toLocaleString()}건</span>
-                </div>
-                <div className="rounded border border-violet-100 bg-violet-50 px-2 py-1.5 text-violet-800">
-                  전주 대비 급증 <span className="font-semibold">{alertSummary.surgeRegions}곳</span>
-                </div>
-              </div>
-            </div>
-
-            {selectedDistrictData && (
-              <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                <button
-                  onClick={() => setStageImpactOpen((prev) => !prev)}
-                  className="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50"
-                >
-                  <span className="text-sm font-semibold text-gray-700">Stage 영향 (운영 큐 연동)</span>
-                  {stageImpactOpen ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
-                </button>
-                {stageImpactOpen && (
-                  <div className="px-3 pb-3 border-t border-gray-100 space-y-2">
-                    {stageImpactRows.map((item) => (
-                      <div key={item.stage} className="p-2 rounded border border-gray-100 bg-gray-50">
-                        <div className="text-[13px] font-medium text-gray-800">{item.stage}</div>
-                        <div className="text-[12px] text-gray-600 mt-0.5">
-                          보조 신호 {item.signal > 0 ? '증가' : '감소'} ({item.signal > 0 ? '+' : ''}{item.signal}%) · 큐 변화 {item.queue > 0 ? '+' : ''}{item.queue}건
-                        </div>
-                        <div className="text-[11px] text-gray-500 mt-0.5">{item.desc}</div>
-                      </div>
-                    ))}
-                  </div>
+              <div className="mb-2 rounded border border-blue-100 bg-blue-50 px-2 py-1.5 text-[11px] text-blue-800">
+                {renderMetricLabel(
+                  `Top5가 전체 ${userKpiLabel} 규모의 ${top5ConcentrationLabel} 차지`,
+                  'top5Share',
+                  'text-[11px] text-blue-800',
                 )}
               </div>
-            )}
-
-            <div className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1.5">
-                  <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
-                  <span className="text-sm font-semibold text-gray-700">관할 우선 처리 Top 5</span>
-                </div>
-                <span className="text-[11px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-medium">값 + 건수</span>
-              </div>
-              <div
-                className="text-[11px] text-gray-400 mb-1.5"
-                title="KPI 수준과 물량을 함께 반영한 운영 우선순위 (score = 0.6×KPI 정규화 + 0.4×규모 정규화)"
-              >
-                KPI 수준과 물량을 함께 반영한 운영 우선순위
-              </div>
-              <div className="space-y-1">
-                {top5.map((item, idx) => {
-                  return (
-                  <div
+              <div className="space-y-1.5 overflow-y-auto pr-1">
+                {top5.map((item, idx) => (
+                  <button
                     key={item.regionId}
-                    role="button"
-                    tabIndex={0}
                     onClick={() => handleTop5Click(item.code, item.name, item.regionId)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        handleTop5Click(item.code, item.name, item.regionId);
-                      }
-                    }}
-                    className={`w-full text-left p-1.5 rounded-lg border transition-colors ${
-                      selectedRegionId === item.regionId ? 'border-red-300 bg-red-50' : 'border-gray-100 hover:bg-gray-50'
-                    }`}
+                    className={`w-full rounded-md border px-2 py-2 text-left ${selectedRegionId === item.regionId ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
                   >
-                    <div className="space-y-1">
-                      <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-center">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className={`w-5 h-5 flex items-center justify-center text-[12px] font-bold rounded-full ${idx === 0 ? 'bg-red-500 text-white' : idx < 3 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600'}`}>
-                            {idx + 1}
-                          </span>
-                          <span className="text-xs font-medium text-gray-800 truncate">{item.name}</span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${idx < 2 ? 'bg-red-100 text-red-700 border-red-200' : idx < 4 ? 'bg-amber-100 text-amber-700 border-amber-200' : 'bg-gray-100 text-gray-700 border-gray-200'}`}>
-                            {idx < 2 ? '경고' : idx < 4 ? '주의' : '관찰'}
-                          </span>
-                        </div>
-                        <span className="text-[11px] font-semibold text-gray-700 min-w-[72px] text-right">{formatKpiValue(selectedKpiKey, item.kpiValue)}</span>
-                        <span className="text-[11px] font-semibold text-blue-700 min-w-[64px] text-right">{item.volume.toLocaleString()}건</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="w-5 h-5 shrink-0 rounded-full bg-gray-100 text-gray-700 text-[11px] font-semibold flex items-center justify-center">
+                          {idx + 1}
+                        </span>
+                        <span className="text-[12px] font-medium text-gray-800 truncate">{item.name}</span>
                       </div>
-                      <div className="flex items-center justify-between gap-2 pl-6">
-                        <div className="text-[11px] text-gray-500">
-                          {(() => {
-                            const op = operationalTopItems.find((row) => row.regionId === item.regionId);
-                            const issueLabel = op?.issueType ?? ISSUE_BY_KPI[selectedKpiKey];
-                            const cause = op?.primaryCause ?? '원인 분석 필요';
-                            return `${issueLabel} · ${cause} · ${selectedKpiDef.shortLabel} ${formatKpiValue(selectedKpiKey, item.kpiValue)} · ${item.volume.toLocaleString()}건 · 평균 대비 Δ ${formatDeltaValue(selectedKpiKey, Number((item.kpiValue - regionalValue).toFixed(1)))}`;
-                          })()}
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0 relative">
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              const op = operationalTopItems.find((row) => row.regionId === item.regionId);
-                              addWorkQueueItem(op?.issueType ?? ISSUE_BY_KPI[selectedKpiKey], item.name, idx < 2 ? 1 : idx < 4 ? 2 : 3);
-                            }}
-                            className="h-5 px-1.5 inline-flex items-center justify-center rounded border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 text-[10px] font-medium"
-                            title="작업 큐에 추가"
-                          >
-                            {operationalTopItems.find((row) => row.regionId === item.regionId)?.ctaLabel ?? '작업 큐에 추가'}
-                          </button>
-                          <button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setTop5MenuRegionId((prev) => (prev === item.regionId ? null : item.regionId));
-                            }}
-                            className="h-5 px-1.5 inline-flex items-center justify-center rounded border border-gray-200 text-gray-700 bg-white hover:bg-gray-50 text-[10px] font-medium"
-                            title="추가 작업"
-                            aria-label={`${item.name} 추가 작업`}
-                          >
-                            <MoreHorizontal className="h-3 w-3" />
-                          </button>
-                          {top5MenuRegionId === item.regionId && (
-                            <div className="absolute right-0 top-6 z-30 min-w-[140px] rounded-md border border-gray-200 bg-white shadow-lg p-1">
-                              <button
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setTop5MenuRegionId(null);
-                                  onCreateIntervention?.({
-                                    kpi: selectedKpiKey,
-                                    sgg: item.name,
-                                    range: analyticsPeriod,
-                                    source: 'overview',
-                                    primaryDriverStage: '할당/재할당',
-                                  });
-                                }}
-                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
-                              >
-                                할당/재할당
-                              </button>
-                              <button
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setTop5MenuRegionId(null);
-                                  onCreateIntervention?.({
-                                    kpi: 'regionalDataReadiness',
-                                    sgg: item.name,
-                                    range: analyticsPeriod,
-                                    source: 'overview',
-                                    primaryDriverStage: '재접촉 배정',
-                                  });
-                                }}
-                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
-                              >
-                                재접촉 배정
-                              </button>
-                              <button
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setTop5MenuRegionId(null);
-                                  onCreateIntervention?.({
-                                    kpi: 'regionalGovernance',
-                                    sgg: item.name,
-                                    range: analyticsPeriod,
-                                    source: 'overview',
-                                    primaryDriverStage: '센터 지원 요청',
-                                  });
-                                }}
-                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
-                              >
-                                센터 지원 요청
-                              </button>
-                              <button
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setTop5MenuRegionId(null);
-                                  handleTop5Click(item.code, item.name, item.regionId);
-                                }}
-                                className="w-full text-left px-2 py-1.5 rounded text-[11px] text-gray-700 hover:bg-gray-50"
-                              >
-                                상세 보기
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      <span className="text-[12px] font-semibold text-gray-900">{formatKpiValue(selectedKpiKey, item.kpiValue)}</span>
                     </div>
-                  </div>
-                );
-                })}
+                  </button>
+                ))}
                 {top5.length === 0 && (
-                  <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-2 py-3 text-[11px] text-gray-500">
+                  <div className="rounded border border-dashed border-gray-200 bg-gray-50 px-2 py-3 text-[11px] text-gray-500">
                     현재 단계 하위 행정구역 데이터 준비중
                   </div>
                 )}
               </div>
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-              <button
-                onClick={() => setShowLeftDetails((prev) => !prev)}
-                className="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50"
-              >
-                <span className="text-[12px] font-medium text-gray-700">개입 현황 보기</span>
-                {showLeftDetails ? <ChevronUp className="h-3.5 w-3.5 text-gray-400" /> : <ChevronDown className="h-3.5 w-3.5 text-gray-400" />}
-              </button>
-              {showLeftDetails && (
-                <div className="px-3 pb-3 border-t border-gray-100 text-[12px] text-gray-600 space-y-2">
-                  <div>현재 선택: {selectedDistrictData ? `${selectedDistrictData.name} 시군구` : `${region.label} 광역 관할`}</div>
-                  <div>지도 값 평균: {formatKpiValue(selectedKpiKey, mapAvg)}</div>
-                  <div>
-                    범례 범위:{' '}
-                    {selectedKpiDef.unit === '건'
-                      ? `${Math.round(mapMin)}건 ~ ${Math.round(mapMax)}건`
-                      : selectedKpiDef.unit === '점'
-                        ? `${Math.round(mapMin)}점 ~ ${Math.round(mapMax)}점`
-                        : selectedKpiDef.unit === '일'
-                          ? `${Math.round(mapMin)}일 ~ ${Math.round(mapMax)}일`
-                        : `${mapMin.toFixed(1)}% ~ ${mapMax.toFixed(1)}%`}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
@@ -3598,23 +3566,8 @@ export function RegionalDashboard({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <div className="flex rounded-md border border-gray-200 overflow-hidden">
-                      <button
-                        onClick={() => setVisualizationMode('geomap')}
-                        className={`px-3 py-1.5 text-xs font-medium transition ${
-                          visualizationMode === 'geomap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
-                        }`}
-                      >
-                        지오맵
-                      </button>
-                      <button
-                        onClick={() => setVisualizationMode('heatmap')}
-                        className={`px-3 py-1.5 text-xs font-medium transition border-l border-gray-200 ${
-                          visualizationMode === 'heatmap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-100'
-                        }`}
-                      >
-                        히트맵
-                      </button>
+                    <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">
+                      지오맵
                     </div>
                     <div className="flex rounded-md border border-gray-200 overflow-hidden">
                       {mapLayerOptions.map((layer) => (
@@ -3633,7 +3586,7 @@ export function RegionalDashboard({
                       ))}
                     </div>
                     <div className="flex items-center gap-0.5">
-                      {(['24h', '7d', '30d', '90d'] as const).map((preset) => (
+                      {(['7d', '30d', '90d'] as const).map((preset) => (
                         <button
                           key={preset}
                           onClick={() => handleRangePresetChange(preset)}
@@ -3647,9 +3600,6 @@ export function RegionalDashboard({
                         </button>
                       ))}
                     </div>
-                    <button className="h-7 w-7 flex items-center justify-center hover:bg-gray-100 rounded-lg transition-colors">
-                      <Download className="h-3.5 w-3.5 text-gray-500" />
-                    </button>
                   </div>
                 </div>
               </div>
@@ -3674,72 +3624,80 @@ export function RegionalDashboard({
                 </div>
               </div>
 
+              <div className="px-4 py-2 border-b border-gray-100 bg-white">
+                <div className="text-[12px] font-medium text-gray-700 truncate">
+                  {renderMetricLabel(insightHeadline, 'insightHeadline')}
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {baselineBadges.map((badge) => (
+                    <span
+                      key={badge.label}
+                      title={badge.tooltip}
+                      className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] text-gray-600"
+                    >
+                      {badge.label}
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+                  {miniSparkSeries.map((series) => {
+                    const coords = buildSparkCoords(series.points.map((point) => point.v), 124, 28);
+                    const path = coords.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+                    const last = coords[coords.length - 1];
+                    const deltaTone = series.delta > 0 ? 'text-red-600' : series.delta < 0 ? 'text-blue-600' : 'text-gray-500';
+
+                    return (
+                      <div key={series.key} className="rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-gray-500">{series.label}</span>
+                          <span className={`text-[10px] font-semibold ${deltaTone}`}>
+                            {formatSparkDelta(series.delta, series.unit)}
+                          </span>
+                        </div>
+                        <div className="flex items-end justify-between gap-2 mt-0.5">
+                          <span className="text-[12px] font-semibold text-gray-800">
+                            {formatSparkValue(series.value, series.unit)}
+                          </span>
+                          <svg viewBox="0 0 124 28" className="h-7 w-[124px] shrink-0">
+                            <path d={path} fill="none" stroke={selectedKpiDef.color} strokeWidth="1.8" strokeLinecap="round" />
+                            {last ? (
+                              <circle cx={last.x} cy={last.y} r="2.5" fill={selectedKpiDef.color} />
+                            ) : null}
+                          </svg>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               <div className="relative p-2 min-h-0">
                 <div className="absolute left-4 top-4 z-20 w-[min(420px,calc(100%-2rem))] rounded-lg border border-blue-200 bg-white/95 backdrop-blur px-3 py-2 shadow-sm">
                   <div className="text-[12px] font-semibold text-blue-800">상황 오버레이</div>
                   <div className="text-[12px] text-gray-700 mt-1 leading-relaxed">{mapOverlayMessage}</div>
                 </div>
-                {visualizationMode === 'geomap' ? (
-                  <GeoMapPanel
-                    title=""
-                    indicatorId={mapIndicatorId}
-                    year={2026}
-                    scope={{ mode: 'regional', ctprvnCodes: [region.ctprvnCode], label: region.label }}
-                    variant="portal"
-                    mapHeight={centerMapHeight}
-                    hideBreadcrumb
-                    onRegionSelect={handleRegionSelect}
-                    externalColorScheme={mapColorScheme}
-                    hideLegendPanel
-                    externalLevel={mapDrillLevel}
-                    externalSelectedCode={mapDrillCode}
-                    onSubRegionsChange={handleSubRegionsChange}
-                    getTooltipExtraLines={geoTooltipExtraLines}
-                  />
-                ) : (
-                  <div className="w-full" style={{ height: centerMapHeight }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <Treemap
-                        data={heatmapData}
-                        dataKey="size"
-                        isAnimationActive={false}
-                        content={(props: any) => {
-                          const { x, y, width, height, name, fill } = props;
-                          if (!name || width < 28 || height < 18) return null;
-                          return (
-                            <g>
-                              <rect x={x} y={y} width={width} height={height} fill={fill} stroke="#fff" strokeWidth={1.2} rx={2} />
-                              {width > 40 && height > 22 && (
-                                <text
-                                  x={x + width / 2}
-                                  y={y + height / 2}
-                                  textAnchor="middle"
-                                  dominantBaseline="middle"
-                                  fill="#fff"
-                                  fontSize={11}
-                                  fontWeight={700}
-                                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}
-                                >
-                                  {String(name).length > 5 ? String(name).slice(0, 4) : name}
-                                </text>
-                              )}
-                            </g>
-                          );
-                        }}
-                        onClick={(node: any) => {
-                          if (!node?.code || !node?.name) return;
-                          handleTop5Click(String(node.code), String(node.name), String(node.regionId));
-                        }}
-                      />
-                    </ResponsiveContainer>
-                  </div>
-                )}
+                <GeoMapPanel
+                  title=""
+                  indicatorId={mapIndicatorId}
+                  year={2026}
+                  scope={{ mode: 'regional', ctprvnCodes: [region.ctprvnCode], label: region.label }}
+                  variant="portal"
+                  mapHeight={centerMapHeight}
+                  hideBreadcrumb
+                  onRegionSelect={handleRegionSelect}
+                  externalColorScheme={mapColorScheme}
+                  hideLegendPanel
+                  externalLevel={mapDrillLevel}
+                  externalSelectedCode={mapDrillCode}
+                  onSubRegionsChange={handleSubRegionsChange}
+                  getTooltipExtraLines={geoTooltipExtraLines}
+                />
               </div>
 
               <div className="mx-2 mb-2 px-3 py-2 rounded-lg bg-gradient-to-r from-gray-50 to-gray-100/80 border border-gray-200/60 shrink-0">
                 <div className="flex items-center gap-2 mb-1.5">
                   <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: selectedKpiDef.color }} />
-                  <span className="text-[12px] font-bold text-gray-600 tracking-wide">{selectedKpiDef.shortLabel} 지도 범례</span>
+                  <span className="text-[12px] font-bold text-gray-600 tracking-wide">{userKpiLabel} 지도 범례</span>
                   <span className="text-[11px] text-gray-400">스코프: 광역 관할</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -3774,93 +3732,27 @@ export function RegionalDashboard({
           <div className={`${layoutMode === 'desktop' ? 'min-w-0 min-h-0 overflow-hidden' : layoutMode === 'tablet' ? 'hidden' : 'w-full shrink-0'} flex flex-col gap-2 ${panelFadeClass}`}>
             <div className="bg-white border border-gray-200 rounded-lg p-3 shrink-0">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-semibold text-gray-700">우측 분석 · 조치 중심</span>
+                <span className="text-sm font-semibold text-gray-700">2. 원인 파악(왜 막히는지)</span>
                 <span className="text-[11px] px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200">
                   {currentDrillLabel}
                 </span>
               </div>
+              <div className="text-[11px] text-gray-500 mb-1">선택 구역의 병목/원인 상위 3개 확인</div>
               <div className="text-[12px] text-gray-500">
-                선택 KPI: <span className="font-medium text-gray-700">{selectedKpiDef.label}</span> · 스코프: 광역 관할
+                선택 지표: <span className="font-medium text-gray-700">{userKpiLabel}</span> · 스코프: 광역 관할
               </div>
+              {onNavigateModule ? (
+                <button
+                  type="button"
+                  onClick={() => onNavigateModule('cause')}
+                  className="mt-2 text-[11px] text-blue-700 hover:text-blue-800 underline underline-offset-2"
+                >
+                  병목 원인 분석 탭에서 상세 보기
+                </button>
+              ) : null}
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1 space-y-2">
-              <div className="sticky top-0 z-20 bg-gray-50 pt-0.5 pb-2">
-                {/* 다음 행동이 항상 먼저 보이도록 우측 상단 Action Stack을 고정한다. */}
-                <ChartCard
-                  title="이번 주 권장 조치"
-                  subtitle={activeKpiNarrative}
-                  action={(
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() =>
-                          onCreateIntervention?.({
-                            kpi: selectedKpiKey,
-                            sgg: selectedDistrictName,
-                            range: analyticsPeriod,
-                            source: 'overview',
-                            primaryDriverStage: uiEmphasis.primaryDriverStage,
-                          })
-                        }
-                        className="px-2.5 py-1.5 rounded-md text-[11px] font-medium text-white bg-blue-600 hover:bg-blue-700"
-                      >
-                        개입 만들기
-                      </button>
-                      <button
-                        onClick={() =>
-                          onNavigateToCause?.({
-                            kpi: selectedKpiKey,
-                            sgg: selectedDistrictName,
-                            range: analyticsPeriod,
-                          })
-                        }
-                        className="px-2.5 py-1.5 rounded-md text-[11px] font-medium border border-orange-300 text-orange-700 bg-orange-50 hover:bg-orange-100"
-                      >
-                        원인 분석으로 이동
-                      </button>
-                    </div>
-                  )}
-                >
-                  <div className="space-y-2">
-                    {interventionScenarios.slice(0, 2).map((scenario, idx) => (
-                      <div key={scenario.id} className="rounded-lg border border-blue-100 bg-blue-50/70 p-2.5">
-                        <div className="flex items-center justify-between">
-                          <div className="text-[12px] font-semibold text-blue-900">
-                            {idx === 0 ? 'Primary' : 'Secondary'} · {scenario.target}
-                          </div>
-                          <div className="text-[11px] text-blue-700">{scenario.effect}</div>
-                        </div>
-                        <div className="text-[12px] text-gray-800 mt-1">{scenario.action}</div>
-                        <div className="text-[11px] text-gray-600 mt-1">리스크: {scenario.risk}</div>
-                        <div className="text-[11px] text-gray-500 mt-1">상단 CTA에서 즉시 실행 가능</div>
-                      </div>
-                    ))}
-                  </div>
-                </ChartCard>
-              </div>
-
-              <div className="bg-white border border-gray-200 rounded-lg p-2">
-                <div className="grid grid-cols-3 gap-1">
-                  {([
-                    { key: 'drivers', label: 'Drivers' },
-                    { key: 'data', label: 'Data' },
-                    { key: 'trend', label: 'Trend' },
-                  ] as const).map((tab) => (
-                    <button
-                      key={tab.key}
-                      onClick={() => setRightEvidenceTab(tab.key)}
-                      className={`px-2 py-1.5 rounded text-xs font-medium transition ${
-                        rightEvidenceTab === tab.key
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               {isVizLoading ? (
                 <div className="space-y-2">
                   <ChartSkeleton height={176} />
@@ -3868,179 +3760,75 @@ export function RegionalDashboard({
                 </div>
               ) : (
                 <>
-                  {rightEvidenceTab === 'drivers' && (
-                    <>
-                      <ChartCard title="Primary Driver" subtitle={primaryDriver.basis}>
-                        <div className="flex items-center justify-between">
-                          <div className="text-[12px] text-gray-700">{uiEmphasis.primaryDriverStage} 단계</div>
-                          <div className="text-[12px] font-semibold text-red-700">{primaryDriver.valueLabel}</div>
+                  <div className="bg-white border border-gray-200 rounded-lg p-3">
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {diagnosisMetrics.map((item) => (
+                        <div key={item.label} className="rounded border border-gray-100 bg-gray-50 px-2 py-1.5">
+                          <div className="text-[10px] text-gray-500">{item.label}</div>
+                          <div className="text-[12px] font-medium text-gray-800 mt-0.5">{item.value}</div>
                         </div>
-                      </ChartCard>
-
-                      {renderRightPanel()}
-
-                      <ChartCard title="참고 · 원인 TopN" subtitle="항목 클릭 시 액션 권고 표시">
-                        <div className="space-y-1.5">
-                          {causeTopNPreview.map((item, idx) => (
-                            <button
-                              key={`${item.name}-${idx}`}
-                              onClick={() => setSelectedCauseName(item.name)}
-                              className={`w-full flex items-center justify-between text-[12px] px-1.5 py-1 rounded transition-colors ${
-                                selectedCauseName === item.name
-                                  ? 'bg-blue-50 border border-blue-200 text-blue-900'
-                                  : 'hover:bg-gray-50'
-                              }`}
-                            >
-                              <span className="text-left">
-                                {idx + 1}. {item.name}
-                              </span>
-                              <span className="font-medium">
-                                {selectedKpiDef.unit === '건'
-                                  ? `${Math.round(item.value)}건`
-                                  : selectedKpiDef.unit === '점'
-                                    ? `${Math.round(item.value)}점`
-                                    : selectedKpiDef.unit === '일'
-                                      ? `${Math.round(item.value)}일`
-                                    : `${item.value.toFixed(1)}%`}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                        {selectedCauseName && (
-                          <div className="mt-2 p-2 rounded border border-orange-200 bg-orange-50">
-                            <div className="text-[12px] font-semibold text-orange-800">액션 권고</div>
-                            <div className="text-[11px] text-orange-900 mt-1 leading-relaxed">
-                              {safeOpsText(`${selectedCauseName} 비중이 높아 담당자 확인 후 우선 개입 생성이 필요함`)}
-                            </div>
+                      ))}
+                    </div>
+                    <div className="mt-2 rounded border border-gray-100 bg-gray-50 px-2 py-2">
+                      <div className="text-[11px] font-semibold text-gray-700 mb-1">원인 Top3</div>
+                      <div className="space-y-1">
+                        {causeTopNPreview.slice(0, 3).map((item, idx) => (
+                          <div key={`${item.name}-${idx}`} className="flex items-center justify-between text-[11px]">
+                            <span className="text-gray-700">{idx + 1}. {item.name}</span>
+                            <span className="font-semibold text-gray-900">{formatCauseMetricValue(item)}</span>
                           </div>
-                        )}
-                      </ChartCard>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
 
-                      <ChartCard title="권장 조치" subtitle="선택 구역 기준으로 작업 큐에 즉시 등록">
-                        <div className="space-y-2">
-                          {operationalTopItems.slice(0, 3).map((item, idx) => (
-                            <div key={`${item.regionId}-${item.issueType}`} className="rounded-md border border-gray-100 bg-gray-50 px-2.5 py-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-[12px] font-semibold text-gray-800">
-                                  {item.regionName} · {item.issueType}
-                                </div>
-                                <span className="text-[11px] text-red-600 font-medium">{item.severity}점</span>
-                              </div>
-                              <div className="text-[11px] text-gray-600 mt-1">{item.recommendedAction}</div>
-                              <div className="mt-1.5 flex items-center gap-1.5">
-                                <button
-                                  onClick={() => addWorkQueueItem(item.issueType, item.regionName, idx === 0 ? 1 : 2)}
-                                  className="px-2 py-1 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 text-[11px] font-medium hover:bg-emerald-100"
-                                >
-                                  {item.ctaLabel}
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </ChartCard>
-
-                      <ChartCard title="운영 작업 큐" subtitle="대기/진행/완료 상태 추적">
-                        <div className="space-y-1.5">
-                          {workQueue.slice(0, 6).map((item) => (
-                            <div key={item.id} className="rounded border border-gray-100 px-2 py-1.5 bg-white">
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-[12px] font-medium text-gray-800">
-                                  P{item.priority} · {item.regionName}
-                                </div>
-                                <select
-                                  value={item.status}
-                                  onChange={(event) => updateWorkQueueStatus(item.id, event.target.value as WorkStatus)}
-                                  className="h-6 rounded border border-gray-200 bg-gray-50 px-1.5 text-[11px] text-gray-700"
-                                >
-                                  <option value="TODO">대기</option>
-                                  <option value="IN_PROGRESS">진행</option>
-                                  <option value="DONE">완료</option>
-                                  <option value="REJECTED">반려</option>
-                                </select>
-                              </div>
-                              <div className="mt-1 text-[11px] text-gray-600">
-                                {item.taskType} · 마감{' '}
-                                {item.dueAt ? new Date(item.dueAt).toLocaleDateString('ko-KR') : '-'}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </ChartCard>
-                    </>
-                  )}
-
-                  {rightEvidenceTab === 'data' && renderDataEvidencePanel()}
-                  {rightEvidenceTab === 'trend' && renderTrendEvidencePanel()}
+                  <div className="bg-white border border-gray-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-semibold text-gray-700">3. 조치 실행(개입 만들기)</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700">
+                        조치 선택
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-gray-500 mb-1.5">권장 조치를 선택하고 개입을 생성</div>
+                    {onNavigateModule ? (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateModule('interventions')}
+                        className="mb-2 text-[11px] text-blue-700 hover:text-blue-800 underline underline-offset-2"
+                      >
+                        개입/조치 관리 탭으로 이동
+                      </button>
+                    ) : null}
+                    <div className="space-y-1.5">
+                      {actionEngineItems.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => setSelectedActionId(item.id)}
+                          className={`w-full rounded border px-2 py-2 text-left ${selectedActionId === item.id ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white hover:bg-gray-50'}`}
+                        >
+                          <div className="text-[12px] font-medium text-gray-800">{item.title}</div>
+                          <div className="text-[11px] text-gray-600 mt-0.5">{item.detail}</div>
+                          <div className="text-[11px] text-blue-700 mt-1">{item.expected}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() =>
+                        onCreateIntervention?.({
+                          kpi: selectedKpiKey,
+                          sgg: selectedDistrictName,
+                          range: analyticsPeriod,
+                          source: 'overview',
+                          primaryDriverStage: selectedActionEngineItem?.stage ?? uiEmphasis.primaryDriverStage,
+                        })
+                      }
+                      className="mt-2.5 w-full h-9 rounded-md text-[12px] font-semibold text-white bg-blue-600 hover:bg-blue-700"
+                    >
+                      개입 만들기
+                    </button>
+                  </div>
                 </>
               )}
-
-              <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                <button
-                  onClick={() => setShowBottomTable((prev) => !prev)}
-                  className="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50"
-                >
-                  <span className="text-sm font-semibold text-gray-700">운영 우선순위 테이블</span>
-                  {showBottomTable ? (
-                    <ChevronUp className="h-4 w-4 text-gray-400" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
-                  )}
-                </button>
-
-                {showBottomTable && (
-                  <div className="px-3 pb-3 border-t border-gray-100 overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-gray-50 border-b border-gray-200">
-                          {OPS_TABLE_COLUMNS.map((col) => (
-                            <th
-                              key={col.key}
-                              className={`px-2 py-1.5 font-medium text-gray-600 whitespace-nowrap ${
-                                col.align === 'right' ? 'text-right' : 'text-left'
-                              }`}
-                            >
-                              {col.label}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {priorityRows.slice(0, 12).map((row) => (
-                          <tr
-                            key={row.code}
-                            onClick={() => handleTop5Click(row.code, row.name, row.regionId)}
-                            className={`border-b border-gray-100 cursor-pointer transition-colors ${
-                              selectedRegionId === row.regionId ? 'bg-blue-50' : 'hover:bg-gray-50'
-                            }`}
-                          >
-                            <td className="px-2 py-1.5 font-medium text-gray-800">{row.name}</td>
-                            <td className="px-2 py-1.5 text-right">{formatKpiValue(selectedKpiKey, row.kpiValue)}</td>
-                            <td className="px-2 py-1.5 text-right">{row.volume.toLocaleString()}건</td>
-                            <td className="px-2 py-1.5 text-right font-medium text-orange-700">
-                              {row.priorityScore.toFixed(3)}
-                            </td>
-                            <td
-                              className={`px-2 py-1.5 text-right font-medium ${
-                                row.nationalDelta >= 0 ? 'text-blue-600' : 'text-red-600'
-                              }`}
-                            >
-                              {row.nationalDelta > 0 ? '+' : ''}
-                              {selectedKpiDef.unit === '건'
-                                ? `${Math.round(row.nationalDelta)}건`
-                                : selectedKpiDef.unit === '점'
-                                  ? `${Math.round(row.nationalDelta)}점`
-                                  : selectedKpiDef.unit === '일'
-                                    ? `${Math.round(row.nationalDelta)}일`
-                                  : `${row.nationalDelta.toFixed(1)}%p`}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </div>

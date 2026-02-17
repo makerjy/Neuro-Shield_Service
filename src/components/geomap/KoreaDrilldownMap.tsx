@@ -64,14 +64,13 @@ export function KoreaDrilldownMap({
   const { ref, width, height } = useResizeObserver<HTMLDivElement>();
   const [tooltip, setTooltip] = useState<{ x: number; y: number; name: string; value: number; code: string } | null>(null);
   const [hoveredCode, setHoveredCode] = useState<string | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const gRef = useRef<SVGGElement | null>(null);
   const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const [zoomState, setZoomState] = useState(d3.zoomIdentity);
   const TOOLTIP_OFFSET = 12;
   const TOOLTIP_MARGIN = 8;
-  const TOOLTIP_ESTIMATED_WIDTH = 260;
-  const TOOLTIP_ESTIMATED_HEIGHT = 140;
 
   const statsMap = useMemo(() => new Map(stats.map((s) => [s.code, s.value])), [stats]);
 
@@ -201,16 +200,24 @@ export function KoreaDrilldownMap({
                   onMouseMove={(event) => {
                     const containerRect = ref.current?.getBoundingClientRect();
                     if (!containerRect) return;
-                    const rawX = event.clientX - containerRect.left + TOOLTIP_OFFSET;
-                    const rawY = event.clientY - containerRect.top + TOOLTIP_OFFSET;
-                    const x = Math.min(
-                      Math.max(TOOLTIP_MARGIN, rawX),
-                      Math.max(TOOLTIP_MARGIN, width - TOOLTIP_ESTIMATED_WIDTH - TOOLTIP_MARGIN),
-                    );
-                    const y = Math.min(
-                      Math.max(TOOLTIP_MARGIN, rawY),
-                      Math.max(TOOLTIP_MARGIN, height - TOOLTIP_ESTIMATED_HEIGHT - TOOLTIP_MARGIN),
-                    );
+                    const pointerX = event.clientX - containerRect.left;
+                    const pointerY = event.clientY - containerRect.top;
+                    const tooltipWidth = tooltipRef.current?.offsetWidth ?? 240;
+                    const tooltipHeight = tooltipRef.current?.offsetHeight ?? 120;
+
+                    let x = pointerX + TOOLTIP_OFFSET;
+                    let y = pointerY + TOOLTIP_OFFSET;
+
+                    if (x + tooltipWidth + TOOLTIP_MARGIN > width) {
+                      x = pointerX - tooltipWidth - TOOLTIP_OFFSET;
+                    }
+                    if (y + tooltipHeight + TOOLTIP_MARGIN > height) {
+                      y = pointerY - tooltipHeight - TOOLTIP_OFFSET;
+                    }
+
+                    if (x < TOOLTIP_MARGIN) x = TOOLTIP_MARGIN;
+                    if (y < TOOLTIP_MARGIN) y = TOOLTIP_MARGIN;
+
                     setTooltip({
                       x,
                       y,
@@ -248,6 +255,7 @@ export function KoreaDrilldownMap({
 
       {tooltip && (
         <div
+          ref={tooltipRef}
           className="pointer-events-none absolute z-[80] max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-2xl"
           style={{ left: tooltip.x, top: tooltip.y }}
         >

@@ -49,9 +49,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-local}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://dbuser:dbpass@db:5432/neuro}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dbuser:dbpass@db:5432/neuro}
       BACKEND_ENTRY: ${BACKEND_ENTRY:-server_fastapi.app:app}
       USE_MODEL: ${USE_MODEL:-false}
       MODEL_PATH: ${MODEL_PATH:-./models/model.pkl}
@@ -60,6 +64,18 @@ services:
       DEMO_MODE: ${DEMO_MODE:-false}
       DEMO_RISK_SCALE: ${DEMO_RISK_SCALE:-1.0}
       DEMO_RISK_MAX: ${DEMO_RISK_MAX:-100}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-neuro-shield-artifacts}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
+      INGEST_SHARED_SECRET: ${INGEST_SHARED_SECRET:-change-me}
+      KPI_REFRESH_CRON: ${KPI_REFRESH_CRON:-*/5 * * * *}
+      REPORT_CRON: ${REPORT_CRON:-0 3 * * *}
     ports:
       - "${API_PORT:-8000}:8000"
     healthcheck:
@@ -68,6 +84,65 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks:
+      default:
+        aliases:
+          - api
+          - central-api
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/api/Dockerfile
+    container_name: ${SERVICE_NAME:-neuro-shield}-worker
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dbuser:dbpass@db:5432/neuro}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-neuro-shield-artifacts}
+      INGEST_SHARED_SECRET: ${INGEST_SHARED_SECRET:-change-me}
+    command: ["celery", "-A", "server_fastapi.app.tasks.celery_app.celery_app", "worker", "--loglevel=INFO"]
+    restart: unless-stopped
+
+  beat:
+    build:
+      context: .
+      dockerfile: deploy/api/Dockerfile
+    container_name: ${SERVICE_NAME:-neuro-shield}-beat
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://dbuser:dbpass@db:5432/neuro}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-neuro-shield-artifacts}
+      KPI_REFRESH_CRON: ${KPI_REFRESH_CRON:-*/5 * * * *}
+      REPORT_CRON: ${REPORT_CRON:-0 3 * * *}
+      INGEST_SHARED_SECRET: ${INGEST_SHARED_SECRET:-change-me}
+    command: ["celery", "-A", "server_fastapi.app.tasks.celery_app.celery_app", "beat", "--loglevel=INFO"]
     restart: unless-stopped
 
   db:
@@ -88,8 +163,49 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      default:
+        aliases:
+          - db
+          - postgres
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: ${SERVICE_NAME:-neuro-shield}-redis
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    container_name: ${SERVICE_NAME:-neuro-shield}-minio
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.1
+    container_name: ${SERVICE_NAME:-neuro-shield}-clickhouse
+    profiles: ["analytics"]
+    ports:
+      - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${CLICKHOUSE_TCP_PORT:-9009}:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
     restart: unless-stopped
 
 volumes:
   postgres_data:
     name: ${SERVICE_NAME:-neuro-shield}-postgres-data
+  minio_data:
+    name: ${SERVICE_NAME:-neuro-shield}-minio-data
+  clickhouse_data:
+    name: ${SERVICE_NAME:-neuro-shield}-clickhouse-data

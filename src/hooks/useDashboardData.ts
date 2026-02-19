@@ -18,7 +18,7 @@ import {
   fetchCentralKpis,
   fetchCentralLinkage,
   fetchCentralRegions,
-} from '../mocks/mockCentralOps';
+} from '../lib/centralApi';
 
 export type DashboardScope = {
   level: DrillLevel;

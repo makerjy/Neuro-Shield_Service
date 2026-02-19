@@ -124,6 +124,17 @@ import {
   hasVulnerableTrigger,
 } from "./stage1ContactEngine";
 import type { Stage2Diagnosis } from "../../../stage2/stage2Types";
+import {
+  buildStage2ValidationErrors,
+  countStage2MissingByPlan,
+  computeStage2RequiredChecks,
+  deriveStage2ModelRecommendation,
+  deriveStage2ModelStatus,
+  type Stage2FieldErrorKey,
+  type Stage2FieldErrors,
+  type Stage2PlanRequiredDraft,
+  type Stage2PlanRoute,
+} from "./stage2ModalLogic";
 
 type TimelineFilter = "ALL" | "CALL" | "SMS" | "STATUS";
 type CallTarget = "citizen" | "guardian";
@@ -287,6 +298,7 @@ type FollowUpDecisionDraft = {
 type Stage3ReviewDraft = {
   diffNeeded: boolean;
   diffDecisionSet: boolean;
+  diffDecisionReason: string;
   priority: "HIGH" | "MID" | "LOW";
   caregiverNeeded: boolean;
   sensitiveHistory: boolean;
@@ -313,8 +325,89 @@ type Stage3DiffDraft = {
   resultSummary: string;
   resultLabel: "양성 신호" | "음성 신호" | "불확실";
   riskReady: boolean;
+  resultPerformedAt?: string;
+  biomarkerResultText?: string;
+  imagingResultText?: string;
   abeta?: string;
   tau?: string;
+};
+
+type Stage3TaskFieldKey =
+  | "step1DiffDecision"
+  | "step1Consent"
+  | "step1StrategyMemo"
+  | "step1DiffReason"
+  | "step2CallRecord"
+  | "step2Hospital"
+  | "step2BookingAt"
+  | "step2TestSelection"
+  | "step2BiomarkerResult"
+  | "step2ImagingResult"
+  | "step2ResultSummary"
+  | "step2PerformedAt";
+
+type Stage3TaskFieldErrors = Partial<Record<Stage3TaskFieldKey, string>>;
+
+type Stage2PlanItemId =
+  | "MMSE"
+  | "CDR_GDS"
+  | "NEURO"
+  | "SPECIALIST"
+  | "GDS_K"
+  | "ADL"
+  | "BPSD";
+
+type Stage2PlanItemRequiredLevel = "REQUIRED" | "RECOMMENDED" | "OPTIONAL";
+type Stage2PlanItemStatus =
+  | "PENDING"
+  | "REFERRED"
+  | "SCHEDULED"
+  | "DONE"
+  | "RECEIVED"
+  | "NEEDS_REVIEW"
+  | "MISSING"
+  | "EXCEPTION";
+type Stage2PlanItemSource = "AUTO" | "MANUAL" | "OVERRIDE" | null;
+type Stage2PlanStatus = "PAUSED" | "IN_PROGRESS" | "READY" | "BLOCKED";
+
+type Stage2PlanItemAction = {
+  key: "OPEN_PIPELINE" | "REQUEST_RESULT" | "VIEW_RESULT" | "MANUAL_EXCEPTION" | "MARK_REVIEWED";
+  label: string;
+  enabled: boolean;
+  intent?: "default" | "warning" | "danger" | "success";
+};
+
+type Stage2PlanItem = {
+  id: Stage2PlanItemId;
+  label: string;
+  fullName: string;
+  description: string;
+  requiredLevel: Stage2PlanItemRequiredLevel;
+  status: Stage2PlanItemStatus;
+  source: Stage2PlanItemSource;
+  orgName?: string;
+  dueAt?: string;
+  updatedAt?: string;
+  missingReason?: string;
+  actions: Stage2PlanItemAction[];
+};
+
+type Stage2PlanRouteState = {
+  routeType: Stage2PlanRoute;
+  orgName?: string;
+  dueAt?: string;
+  lastSyncAt?: string;
+  needsReasonOnChange?: boolean;
+};
+
+type Stage2PlanSummary = {
+  status: Stage2PlanStatus;
+  completionRate: number;
+  requiredSatisfaction: number;
+  missingCount: number;
+  qualityScore: number;
+  step1Reviewed: boolean;
+  locks: { step2: boolean; step3: boolean; step4: boolean };
 };
 
 type Stage3Step2FlowState = {
@@ -2949,6 +3042,7 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode, stage2OpsView =
       const riskReviewed = Boolean(stage3Data?.riskReviewedAt);
       const diffPathStatus: Stage3DiffPathStatus = stage3Data?.diffPathStatus ?? "NONE";
       const diffPathReady = diffPathStatus === "SCHEDULED" || diffPathStatus === "COMPLETED";
+      const diffResultReady = diffPathStatus === "COMPLETED";
       const hasProgramExecution =
         stage3Data?.programs.some((program) => {
           const status = program.execution?.status;
@@ -3082,6 +3176,16 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode, stage2OpsView =
               isCurrent: false,
             };
           }
+          if (!diffResultReady) {
+            return {
+              ...config,
+              status: "PENDING" as const,
+              reason: "예약은 생성되었지만 검사결과 입력/반영이 아직 완료되지 않았습니다.",
+              nextActionHint: "STEP2에서 결과 수집/입력 반영을 완료해 주세요.",
+              metricLabel: `감별경로 ${diffPathStatus} · 결과 반영 대기 · ${relatedSummary}`,
+              isCurrent: false,
+            };
+          }
           return {
             ...config,
             status: "COMPLETED" as const,
@@ -3123,12 +3227,12 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode, stage2OpsView =
               isCurrent: false,
             };
           }
-          if (!diffPathReady || pendingApprovals > 0) {
+          if (!diffResultReady || pendingApprovals > 0) {
             return {
               ...config,
               status: "BLOCKED" as const,
-              reason: "감별경로가 예약/완료 상태가 아니거나 승인 대기 권고가 남아 정밀관리 제공이 잠금됩니다.",
-              nextActionHint: "STEP2에서 승인 처리 후 감별경로를 예약 또는 완료 상태로 전환하세요.",
+              reason: "감별경로 결과 반영이 완료되지 않았거나 승인 대기 권고가 남아 정밀관리 제공이 잠금됩니다.",
+              nextActionHint: "STEP2에서 승인 처리 후 결과 수집/반영까지 완료하세요.",
               metricLabel: `정밀관리 잠금 · ${relatedSummary}`,
               isCurrent: false,
             };
@@ -3650,6 +3754,7 @@ export function Stage1OpsDetail({
   const [stage3ReviewDraft, setStage3ReviewDraft] = useState<Stage3ReviewDraft>({
     diffNeeded: true,
     diffDecisionSet: false,
+    diffDecisionReason: "",
     priority: "HIGH",
     caregiverNeeded: false,
     sensitiveHistory: false,
@@ -3675,6 +3780,9 @@ export function Stage1OpsDetail({
     resultSummary: "",
     resultLabel: "불확실",
     riskReady: false,
+    resultPerformedAt: "",
+    biomarkerResultText: "",
+    imagingResultText: "",
     abeta: "",
     tau: "",
   });
@@ -3698,6 +3806,12 @@ export function Stage1OpsDetail({
     retryCount: 2,
   });
   const [stage3LatestRiskReview, setStage3LatestRiskReview] = useState<Stage3RiskReviewSnapshot | null>(null);
+  const [stage3AdditionalInfoOpen, setStage3AdditionalInfoOpen] = useState(false);
+  const [stage3ShowResultCollection, setStage3ShowResultCollection] = useState(false);
+  const [stage3FieldErrorsByStep, setStage3FieldErrorsByStep] = useState<
+    Partial<Record<Stage1FlowCardId, Stage3TaskFieldErrors>>
+  >({});
+  const stage3FieldRefs = useRef<Partial<Record<Stage3TaskFieldKey, HTMLElement | null>>>({});
   const [rejectReasonDraft, setRejectReasonDraft] = useState<RejectReasonDraft>({
     code: null,
     level: "TEMP",
@@ -3729,6 +3843,8 @@ export function Stage1OpsDetail({
   });
   const [stage2Diagnosis, setStage2Diagnosis] = useState<Stage2Diagnosis>(() => buildInitialStage2Diagnosis(caseRecord));
   const [stage2ClassificationDraft, setStage2ClassificationDraft] = useState<Stage2ClassLabel>(() => inferStage2Label(caseRecord));
+  const [stage2ClassificationOverrideReason, setStage2ClassificationOverrideReason] = useState("");
+  const [stage2ClassificationEdited, setStage2ClassificationEdited] = useState(false);
   const [stage2RationaleDraft, setStage2RationaleDraft] = useState("");
   const [stage2HospitalDraft, setStage2HospitalDraft] = useState("강남구 협력병원");
   const [stage2ScheduleDraft, setStage2ScheduleDraft] = useState(withHoursFromNow(72));
@@ -3746,9 +3862,201 @@ export function Stage1OpsDetail({
     adl: false,
     bpsd: false,
   });
+  const [stage2ManualEditEnabled, setStage2ManualEditEnabled] = useState(false);
+  const [stage2ManualEditReason, setStage2ManualEditReason] = useState("");
+  const [stage2FieldErrors, setStage2FieldErrors] = useState<Stage2FieldErrors>({});
+  const stage2FieldRefs = useRef<Partial<Record<Stage2FieldErrorKey, HTMLElement | null>>>({});
+  const stage2PlanItemRefs = useRef<Partial<Record<Stage2PlanItemId, HTMLDivElement | null>>>({});
+  const [stage2IntegrationState, setStage2IntegrationState] = useState<{
+    receivedAt?: string;
+    lastSyncedAt?: string;
+    sourceOrg?: string;
+  }>({
+    sourceOrg: "강남구 협력병원",
+  });
+  const [stage2ModelRunState, setStage2ModelRunState] = useState<{
+    status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+    updatedAt?: string;
+    recommendedLabel?: Stage2ClassLabel;
+  }>({ status: "PENDING" });
+  const [stage2ReceiveHistoryOpen, setStage2ReceiveHistoryOpen] = useState(false);
+  const stage2ModelTimerRef = useRef<number | null>(null);
   const [stage2EnteredAt] = useState(() => caseRecord?.created ?? withHoursFromNow(-96));
   const [stage2TargetAt] = useState(() => withHoursFromNow(24 * 10));
   const [stage2ConfirmedAt, setStage2ConfirmedAt] = useState<string | undefined>(undefined);
+
+  const stage2ErrorOrder: Stage2FieldErrorKey[] = [
+    "step1Consent",
+    "step1Plan",
+    "step1StrategyMemo",
+    "manualEditReason",
+    "mmse",
+    "cdr",
+    "neuro",
+    "specialist",
+    "classification",
+    "rationale",
+    "overrideReason",
+    "nextStep",
+  ];
+
+  const registerStage2FieldRef = useCallback(
+    (key: Stage2FieldErrorKey) => (element: HTMLElement | null) => {
+      stage2FieldRefs.current[key] = element;
+    },
+    [],
+  );
+
+  const applyStage2ValidationErrors = useCallback(
+    (errors: Stage2FieldErrors) => {
+      setStage2FieldErrors(errors);
+      const first = stage2ErrorOrder.find((key) => Boolean(errors[key]));
+      if (!first) return false;
+      const target = stage2FieldRefs.current[first];
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        if ("focus" in target && typeof target.focus === "function") {
+          target.focus();
+        }
+      }
+      return true;
+    },
+    [stage2ErrorOrder],
+  );
+
+  const clearStage2FieldError = useCallback((key: Stage2FieldErrorKey) => {
+    setStage2FieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const focusStage2ErrorField = useCallback((key: Stage2FieldErrorKey) => {
+    const target = stage2FieldRefs.current[key];
+    if (!target) {
+      if (
+        key === "mmse" ||
+        key === "cdr" ||
+        key === "neuro" ||
+        key === "specialist" ||
+        key === "manualEditReason"
+      ) {
+        setStage3TaskModalStep("CONTACT_EXECUTION");
+      }
+      return;
+    }
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    if ("focus" in target && typeof target.focus === "function") {
+      target.focus();
+    }
+  }, []);
+
+  const stage2ErrorSummaryEntries = useMemo(
+    () =>
+      stage2ErrorOrder
+        .filter((key) => Boolean(stage2FieldErrors[key]))
+        .map((key) => ({
+          key,
+          message: stage2FieldErrors[key] as string,
+        })),
+    [stage2ErrorOrder, stage2FieldErrors],
+  );
+
+  const stage2FieldClass = useCallback(
+    (key: Stage2FieldErrorKey, base: string) =>
+      cn(
+        base,
+        stage2FieldErrors[key]
+          ? "border-rose-400 bg-rose-50 text-rose-900 placeholder:text-rose-400 focus:border-rose-500"
+          : "",
+      ),
+    [stage2FieldErrors],
+  );
+
+  const registerStage2PlanItemRef = useCallback(
+    (id: Stage2PlanItemId) => (element: HTMLDivElement | null) => {
+      stage2PlanItemRefs.current[id] = element;
+    },
+    [],
+  );
+
+  const stage3ErrorOrderByStep: Record<Stage1FlowCardId, Stage3TaskFieldKey[]> = {
+    PRECHECK: ["step1DiffDecision", "step1Consent", "step1DiffReason", "step1StrategyMemo"],
+    CONTACT_EXECUTION: [
+      "step2CallRecord",
+      "step2Hospital",
+      "step2TestSelection",
+      "step2BookingAt",
+      "step2PerformedAt",
+      "step2BiomarkerResult",
+      "step2ImagingResult",
+      "step2ResultSummary",
+    ],
+    RESPONSE_HANDLING: [],
+    FOLLOW_UP: [],
+  };
+
+  const registerStage3FieldRef = useCallback(
+    (key: Stage3TaskFieldKey) => (element: HTMLElement | null) => {
+      stage3FieldRefs.current[key] = element;
+    },
+    [],
+  );
+
+  const clearStage3FieldError = useCallback((step: Stage1FlowCardId, key: Stage3TaskFieldKey) => {
+    setStage3FieldErrorsByStep((prev) => {
+      const current = prev[step];
+      if (!current?.[key]) return prev;
+      const nextStepErrors = { ...current };
+      delete nextStepErrors[key];
+      return {
+        ...prev,
+        [step]: nextStepErrors,
+      };
+    });
+  }, []);
+
+  const stage3FieldClass = useCallback(
+    (step: Stage1FlowCardId, key: Stage3TaskFieldKey, base: string) =>
+      cn(
+        base,
+        stage3FieldErrorsByStep[step]?.[key]
+          ? "border-rose-400 bg-rose-50 text-rose-900 placeholder:text-rose-400 focus:border-rose-500"
+          : "",
+      ),
+    [stage3FieldErrorsByStep],
+  );
+
+  const applyStage3ValidationErrors = useCallback(
+    (step: Stage1FlowCardId, errors: Stage3TaskFieldErrors) => {
+      setStage3FieldErrorsByStep((prev) => ({
+        ...prev,
+        [step]: errors,
+      }));
+      const first = stage3ErrorOrderByStep[step].find((key) => Boolean(errors[key]));
+      if (!first) return false;
+      const target = stage3FieldRefs.current[first];
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        if ("focus" in target && typeof target.focus === "function") {
+          target.focus();
+        }
+      }
+      return true;
+    },
+    [stage3ErrorOrderByStep],
+  );
+
+  const focusStage3ErrorField = useCallback((key: Stage3TaskFieldKey) => {
+    const target = stage3FieldRefs.current[key];
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    if ("focus" in target && typeof target.focus === "function") {
+      target.focus();
+    }
+  }, []);
 
   /* ── 인수인계 메모 ── */
   const [handoffMemoOpen, setHandoffMemoOpen] = useState(false);
@@ -3807,6 +4115,7 @@ export function Stage1OpsDetail({
     setStage3ReviewDraft({
       diffNeeded: true,
       diffDecisionSet: false,
+      diffDecisionReason: "",
       priority: caseRecord?.risk === "고" ? "HIGH" : caseRecord?.risk === "중" ? "MID" : "LOW",
       caregiverNeeded: Boolean(caseRecord?.profile.guardianPhone),
       sensitiveHistory: Boolean(caseRecord?.alertTags.includes("이탈 위험")),
@@ -3832,6 +4141,9 @@ export function Stage1OpsDetail({
       resultSummary: "",
       resultLabel: "불확실",
       riskReady: false,
+      resultPerformedAt: "",
+      biomarkerResultText: "",
+      imagingResultText: "",
       abeta: "",
       tau: "",
     });
@@ -3855,6 +4167,9 @@ export function Stage1OpsDetail({
       retryCount: 2,
     });
     setStage3LatestRiskReview(null);
+    setStage3AdditionalInfoOpen(false);
+    setStage3ShowResultCollection(false);
+    setStage3FieldErrorsByStep({});
     setSelectedOutcomeCode(null);
     setOutcomeNote("");
     setRejectReasonDraft({
@@ -3889,6 +4204,8 @@ export function Stage1OpsDetail({
     const initialStage2 = buildInitialStage2Diagnosis(caseRecord);
     setStage2Diagnosis(initialStage2);
     setStage2ClassificationDraft(initialStage2.classification?.label ?? inferStage2Label(caseRecord));
+    setStage2ClassificationOverrideReason("");
+    setStage2ClassificationEdited(false);
     setStage2RationaleDraft("");
     setStage2HospitalDraft("강남구 협력병원");
     setStage2ScheduleDraft(withHoursFromNow(72));
@@ -3904,6 +4221,14 @@ export function Stage1OpsDetail({
       adl: false,
       bpsd: false,
     });
+    setStage2ManualEditEnabled(false);
+    setStage2ManualEditReason("");
+    setStage2FieldErrors({});
+    setStage2IntegrationState({
+      sourceOrg: "강남구 협력병원",
+    });
+    setStage2ModelRunState({ status: "PENDING" });
+    setStage2ReceiveHistoryOpen(false);
     setStage2ConfirmedAt(undefined);
     setAgentJob({
       status: "IDLE",
@@ -3915,6 +4240,14 @@ export function Stage1OpsDetail({
     prevAgentAutoModeRef.current = false;
     clearSubmitError();
   }, [caseRecord?.id, clearSubmitError, defaultSmsTemplateId, isStage2OpsView, mode]);
+
+  useEffect(() => {
+    return () => {
+      if (stage2ModelTimerRef.current != null) {
+        window.clearTimeout(stage2ModelTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const ticker = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -4065,11 +4398,36 @@ export function Stage1OpsDetail({
   };
 
   const saveStage2TestInputs = () => {
+    const validationErrors = buildStage2ValidationErrors(
+      stage2Diagnosis.tests,
+      stage2PlanRouteDraft as Stage2PlanRoute,
+      stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+    );
+    if (stage2ManualEditEnabled && stage2ManualEditReason.trim().length < 5) {
+      validationErrors.manualEditReason = "수동 수정 사유를 5자 이상 입력하세요.";
+    }
+    if (applyStage2ValidationErrors(validationErrors)) {
+      toast.error("필수 입력/오류 항목을 먼저 보완해 주세요.");
+      return;
+    }
+    setStage2FieldErrors({});
+
     const hasClassification = Boolean(stage2Diagnosis.classification?.label);
     const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, hasClassification, stage2Route);
+    const missingKeys = computeStage2MissingFields(
+      stage2Diagnosis.tests,
+      stage2PlanRouteDraft as Stage2PlanRoute,
+      stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+    );
     setStage2Diagnosis((prev) => ({
       ...prev,
       status: nextStatus,
+    }));
+    setStage2IntegrationState((prev) => ({
+      ...prev,
+      receivedAt: missingKeys.length === 0 ? nowIso() : prev.receivedAt,
+      lastSyncedAt: nowIso(),
+      sourceOrg: stage2HospitalDraft || prev.sourceOrg,
     }));
 
     if (caseRecord?.id) {
@@ -4088,6 +4446,36 @@ export function Stage1OpsDetail({
       );
     }
 
+    if (missingKeys.length === 0) {
+      setStage2ModelRunState({
+        status: "RUNNING",
+        updatedAt: nowIso(),
+      });
+      if (stage2ModelTimerRef.current != null) {
+        window.clearTimeout(stage2ModelTimerRef.current);
+      }
+      stage2ModelTimerRef.current = window.setTimeout(() => {
+        const recommended = deriveStage2ModelRecommendation(stage2Diagnosis.tests);
+        setStage2ModelRunState({
+          status: "DONE",
+          updatedAt: nowIso(),
+          recommendedLabel: recommended,
+        });
+        appendTimeline({
+          type: "STAGE2_RESULTS_RECORDED",
+          at: nowIso(),
+          by: detail.header.assigneeName,
+          summary: `모델 산출 완료: 추천 ${recommended} (운영 참고)`,
+        });
+        appendAuditLog(`Stage2 모델 산출 완료: 추천 ${recommended}`);
+      }, 700);
+    } else {
+      setStage2ModelRunState({
+        status: "PENDING",
+        updatedAt: nowIso(),
+      });
+    }
+
     appendTimeline({
       type: "STATUS_CHANGE",
       at: nowIso(),
@@ -4096,11 +4484,29 @@ export function Stage1OpsDetail({
       reason: `Stage2 검사 입력 반영 (${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount})`,
       by: detail.header.assigneeName,
     });
+    if (stage2ManualEditEnabled && stage2ManualEditReason.trim()) {
+      appendAuditLog(`Stage2 수동 수정: ${stage2ManualEditReason.trim()}`);
+    }
     appendAuditLog(`Stage2 검사 결과 입력 반영: ${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount}`);
     toast.success("검사 결과 입력이 반영되었습니다.");
   };
 
   const confirmStage2Classification = () => {
+    const validationErrors = buildStage2ValidationErrors(
+      stage2Diagnosis.tests,
+      stage2PlanRouteDraft as Stage2PlanRoute,
+      stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+      {
+        rationale: stage2RationaleDraft,
+        recommendedLabel: stage2ModelRecommendedLabel,
+        selectedLabel: stage2ClassificationDraft,
+        overrideReason: stage2ClassificationOverrideReason,
+      },
+    );
+    if (applyStage2ValidationErrors(validationErrors)) {
+      toast.error("분류 확정 전에 누락 항목을 확인해 주세요.");
+      return;
+    }
     if (!stage2CanConfirm) {
       toast.error("분류 확정 요건이 부족합니다.");
       return;
@@ -4124,11 +4530,17 @@ export function Stage1OpsDetail({
       nextStep,
     }));
     setStage2ConfirmedAt(now);
+    setStage2ClassificationEdited(false);
+    setStage2FieldErrors({});
 
     if (caseRecord?.id) {
       confirmCaseStage2Model(caseRecord.id, label, {
         mciBand: mciStage === "적정" ? "중간" : mciStage,
-        rationale: stage2RationaleDraft.trim(),
+        rationale: `${stage2RationaleDraft.trim()}${
+          stage2ClassificationIsOverride && stage2ClassificationOverrideReason.trim()
+            ? ` (override: ${stage2ClassificationOverrideReason.trim()})`
+            : ""
+        }`,
         actorId: detail.header.assigneeName,
       });
     }
@@ -4601,6 +5013,13 @@ export function Stage1OpsDetail({
   const handleStage3DiffPathAction = (action: Stage3DiffPathAction) => {
     if (!isStage3Mode) return;
     const now = nowIso();
+    if (action === "APPLY_RESULT") {
+      setStage3DiffDraft((prev) => ({
+        ...prev,
+        riskReady: true,
+        resultPerformedAt: prev.resultPerformedAt || now,
+      }));
+    }
     setDetail((prev) => {
       if (!prev.stage3) return prev;
       let nextStatus: Stage3DiffPathStatus = prev.stage3.diffPathStatus;
@@ -4943,10 +5362,25 @@ export function Stage1OpsDetail({
 
   const runStage3BookingBundle = useCallback(() => {
     if (!isStage3Mode) return;
+    const stepErrors: Stage3TaskFieldErrors = {};
+    if (!callMemo.trim() && !stage3Step2Flow.consultStarted) {
+      stepErrors.step2CallRecord = "전화 상담 기록(메모 또는 상담 시작)이 필요합니다.";
+    }
+    if (!stage3DiffDraft.preferredHospital.trim()) {
+      stepErrors.step2Hospital = "연계 기관/병원을 입력하세요.";
+    }
+    if (!stage3DiffDraft.testBiomarker && !stage3DiffDraft.testBrainImaging && !stage3DiffDraft.testOther) {
+      stepErrors.step2TestSelection = "검사 항목을 최소 1개 선택하세요.";
+    }
     if (!stage3DiffDraft.bookingAt) {
-      toast.error("예약 일시를 먼저 입력해 주세요.");
+      stepErrors.step2BookingAt = "예약 일시를 먼저 입력해 주세요.";
+    }
+    if (Object.keys(stepErrors).length > 0) {
+      applyStage3ValidationErrors("CONTACT_EXECUTION", stepErrors);
+      toast.error("예약 확정 전에 누락 항목을 확인해 주세요.");
       return;
     }
+    setStage3FieldErrorsByStep((prev) => ({ ...prev, CONTACT_EXECUTION: {} }));
 
     const now = nowIso();
     handleStage3DiffPathAction("SCHEDULE");
@@ -4998,8 +5432,10 @@ export function Stage1OpsDetail({
     );
     toast.success("예약/문자/캘린더 패키지가 기록되었습니다.");
   }, [
+    applyStage3ValidationErrors,
     appendAuditLog,
     caseRecord?.id,
+    callMemo,
     detail.header.assigneeName,
     detail.header.caseId,
     handleStage3DiffPathAction,
@@ -5007,6 +5443,10 @@ export function Stage1OpsDetail({
     stage3DiffDraft.bookingAt,
     stage3DiffDraft.orgName,
     stage3DiffDraft.preferredHospital,
+    stage3DiffDraft.testBiomarker,
+    stage3DiffDraft.testBrainImaging,
+    stage3DiffDraft.testOther,
+    stage3Step2Flow.consultStarted,
   ]);
 
   const toggleStage3ProgramSelection = (programId: string, forceSelected?: boolean) => {
@@ -5984,8 +6424,16 @@ export function Stage1OpsDetail({
     () => detail.stage3?.recommendedActions.filter((action) => action.requiresApproval && action.decision === "PENDING").length ?? 0,
     [detail.stage3?.recommendedActions],
   );
-  const stage3DiffReadyForRisk =
-    stage3ModelAvailable && (detail.stage3?.diffPathStatus === "SCHEDULED" || detail.stage3?.diffPathStatus === "COMPLETED");
+  const stage3DiffStatusReady = detail.stage3?.diffPathStatus === "SCHEDULED" || detail.stage3?.diffPathStatus === "COMPLETED";
+  const stage3ResultEvidenceReady =
+    Boolean(stage3Evidence?.completed) ||
+    Boolean(
+      stage3DiffDraft.resultPerformedAt &&
+        stage3DiffDraft.resultSummary.trim() &&
+        stage3DiffDraft.biomarkerResultText?.trim() &&
+        stage3DiffDraft.imagingResultText?.trim(),
+    );
+  const stage3DiffReadyForRisk = stage3DiffStatusReady && stage3ResultEvidenceReady;
   const activeProgramDraft = useMemo(
     () => stage3Programs.find((program) => program.id === stage3ProgramDrawerId) ?? null,
     [stage3ProgramDrawerId, stage3Programs]
@@ -6004,6 +6452,230 @@ export function Stage1OpsDetail({
   const agentMaxRetries = detail.contactPlan?.maxRetryPolicy.maxRetries ?? 2;
   const agentTemplateVersion = detail.contactPlan?.templateId ?? (isStage2Mode ? "S2_CONTACT_BASE" : isStage3Mode ? "S3_CONTACT_BASE" : "S1_CONTACT_BASE");
   const stage2Route = ssotCase?.stage2Route ?? (stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "HOSPITAL" : "CENTER");
+  const stage2PlanItems = usePlanItems({
+    routeType: stage2PlanRouteDraft as Stage2PlanRoute,
+    hospitalName: stage2HospitalDraft,
+    dueAt: stage2ScheduleDraft,
+    tests: stage2Diagnosis.tests,
+    optionalTests: stage2OptionalTestsDraft,
+    integrationReceivedAt: stage2IntegrationState.receivedAt,
+    integrationUpdatedAt: stage2IntegrationState.lastSyncedAt,
+    manualEditEnabled: stage2ManualEditEnabled,
+  });
+  const stage2Step1Reviewed = Boolean(detail.stage3?.riskReviewedAt);
+  const stage2RequiredBlockingPlanItems = useMemo(
+    () =>
+      stage2PlanItems.filter(
+        (item) =>
+          item.requiredLevel === "REQUIRED" &&
+          (item.status === "MISSING" || item.status === "NEEDS_REVIEW" || item.status === "PENDING"),
+      ),
+    [stage2PlanItems],
+  );
+  const stage2PlanCompletionRate = useMemo(() => {
+    const completed = stage2PlanItems.filter((item) => item.status === "DONE" || item.status === "RECEIVED").length;
+    return stage2PlanItems.length ? Math.round((completed / stage2PlanItems.length) * 100) : 0;
+  }, [stage2PlanItems]);
+  const stage2RequiredSatisfaction = useMemo(() => {
+    const requiredItems = stage2PlanItems.filter((item) => item.requiredLevel === "REQUIRED");
+    const satisfied = requiredItems.filter((item) => STAGE2_STEP2_READY_STATUSES.has(item.status)).length;
+    return requiredItems.length ? Math.round((satisfied / requiredItems.length) * 100) : 0;
+  }, [stage2PlanItems]);
+  const stage2PlanRouteChangeNeedsReason = useMemo(
+    () =>
+      detail.timeline.some((event) => event.type === "DIFF_REFER_CREATED" || event.type === "DIFF_SCHEDULED" || event.type === "LINKAGE_CREATED"),
+    [detail.timeline],
+  );
+  const stage2PlanRouteState: Stage2PlanRouteState = useMemo(
+    () => ({
+      routeType: stage2PlanRouteDraft as Stage2PlanRoute,
+      orgName: stage2HospitalDraft,
+      dueAt: stage2ScheduleDraft,
+      lastSyncAt: stage2IntegrationState.lastSyncedAt ?? stage2IntegrationState.receivedAt ?? detail.stage3?.riskReviewedAt,
+      needsReasonOnChange: stage2PlanRouteChangeNeedsReason,
+    }),
+    [
+      detail.stage3?.riskReviewedAt,
+      stage2HospitalDraft,
+      stage2IntegrationState.lastSyncedAt,
+      stage2IntegrationState.receivedAt,
+      stage2PlanRouteChangeNeedsReason,
+      stage2PlanRouteDraft,
+      stage2ScheduleDraft,
+    ],
+  );
+  const stage2PlanSummary: Stage2PlanSummary = useMemo(() => {
+    const hasRequiredInProgress = stage2PlanItems.some(
+      (item) =>
+        item.requiredLevel === "REQUIRED" &&
+        (item.status === "REFERRED" || item.status === "SCHEDULED" || item.status === "DONE" || item.status === "RECEIVED"),
+    );
+    const status: Stage2PlanStatus =
+      stage2RequiredBlockingPlanItems.length > 0
+        ? "BLOCKED"
+        : stage2Step1Reviewed
+          ? "READY"
+          : hasRequiredInProgress
+            ? "IN_PROGRESS"
+            : "PAUSED";
+    return {
+      status,
+      completionRate: stage2PlanCompletionRate,
+      requiredSatisfaction: stage2RequiredSatisfaction,
+      missingCount: stage2RequiredBlockingPlanItems.length,
+      qualityScore: detail.header.dataQuality.score,
+      step1Reviewed: stage2Step1Reviewed,
+      locks: {
+        step2: stage1FlowCards.find((card) => card.id === "CONTACT_EXECUTION")?.status === "BLOCKED",
+        step3: stage1FlowCards.find((card) => card.id === "RESPONSE_HANDLING")?.status === "BLOCKED",
+        step4: stage1FlowCards.find((card) => card.id === "FOLLOW_UP")?.status === "BLOCKED",
+      },
+    };
+  }, [
+    detail.header.dataQuality.score,
+    stage1FlowCards,
+    stage2PlanCompletionRate,
+    stage2PlanItems,
+    stage2RequiredBlockingPlanItems.length,
+    stage2RequiredSatisfaction,
+    stage2Step1Reviewed,
+  ]);
+  const handleStage2PlanRouteSelect = useCallback(
+    (nextRoute: Stage2PlanRoute) => {
+      if (nextRoute === stage2PlanRouteDraft) return;
+      let reason = "";
+      if (stage2PlanRouteChangeNeedsReason && typeof window !== "undefined") {
+        reason = window.prompt("기존 의뢰/예약 이력이 있습니다. 경로 변경 사유를 입력하세요.")?.trim() ?? "";
+        if (!reason) {
+          toast.error("경로 변경 사유를 입력해야 합니다.");
+          return;
+        }
+      }
+      const prevLabel = stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "협력병원 의뢰" : "센터 직접 수행";
+      const nextLabel = nextRoute === "HOSPITAL_REFERRAL" ? "협력병원 의뢰" : "센터 직접 수행";
+      setStage2PlanRouteDraft(nextRoute);
+      clearStage2FieldError("step1Plan");
+      appendTimeline({
+        type: "STATUS_CHANGE",
+        at: nowIso(),
+        from: prevLabel,
+        to: nextLabel,
+        reason: reason || "Stage2 수행 경로 변경",
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog(`Stage2 수행 경로 변경: ${prevLabel} → ${nextLabel}${reason ? ` (${reason})` : ""}`);
+    },
+    [
+      appendAuditLog,
+      clearStage2FieldError,
+      detail.header.assigneeName,
+      stage2PlanRouteChangeNeedsReason,
+      stage2PlanRouteDraft,
+    ],
+  );
+  const handleStage2PlanPrimaryAction = useCallback(() => {
+    const now = nowIso();
+    if (stage2PlanRouteDraft === "HOSPITAL_REFERRAL") {
+      appendTimeline({
+        type: "DIFF_REFER_CREATED",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: `의뢰 생성/재전송: ${stage2HospitalDraft || "협력병원"} · 목표 ${formatDateTime(stage2ScheduleDraft)}`,
+      });
+      appendAuditLog(`Stage2 의뢰 생성/재전송: ${stage2HospitalDraft || "협력병원"}`);
+      setDetail((prev) =>
+        prev.stage3
+          ? {
+              ...prev,
+              stage3: {
+                ...prev.stage3,
+                diffPathStatus: prev.stage3.diffPathStatus === "NONE" ? "REFERRED" : prev.stage3.diffPathStatus,
+              },
+            }
+          : prev,
+      );
+      toast.success("의뢰 생성/재전송이 기록되었습니다.");
+      return;
+    }
+    appendTimeline({
+      type: "DIFF_SCHEDULED",
+      at: now,
+      by: detail.header.assigneeName,
+      summary: `센터 일정 생성: ${formatDateTime(stage2ScheduleDraft)}`,
+    });
+    appendAuditLog(`Stage2 센터 일정 생성: ${formatDateTime(stage2ScheduleDraft)}`);
+    setDetail((prev) =>
+      prev.stage3
+        ? {
+            ...prev,
+            stage3: {
+              ...prev.stage3,
+              diffPathStatus: prev.stage3.diffPathStatus === "NONE" ? "SCHEDULED" : prev.stage3.diffPathStatus,
+            },
+          }
+        : prev,
+    );
+    toast.success("센터 일정 생성이 기록되었습니다.");
+  }, [
+    appendAuditLog,
+    detail.header.assigneeName,
+    stage2HospitalDraft,
+    stage2PlanRouteDraft,
+    stage2ScheduleDraft,
+  ]);
+  const handleStage2PlanItemAction = useCallback(
+    (item: Stage2PlanItem, action: Stage2PlanItemAction) => {
+      const now = nowIso();
+      if (action.key === "OPEN_PIPELINE") {
+        setStage3TaskModalStep("CONTACT_EXECUTION");
+        return;
+      }
+      if (action.key === "VIEW_RESULT") {
+        setStage3TaskModalStep("CONTACT_EXECUTION");
+        if (typeof window !== "undefined") {
+          window.setTimeout(() => {
+            const target =
+              document.getElementById("stage2-modal-step2-input") ??
+              document.getElementById("stage2-step2-input");
+            target?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 20);
+        }
+        return;
+      }
+      if (action.key === "REQUEST_RESULT") {
+        appendTimeline({
+          type: "MESSAGE_SENT",
+          at: now,
+          by: detail.header.assigneeName,
+          summary: `${item.label} 결과 재요청`,
+        });
+        appendAuditLog(`Stage2 결과 재요청: ${item.label}`);
+        toast.success(`${item.label} 결과 재요청이 기록되었습니다.`);
+        return;
+      }
+      if (action.key === "MANUAL_EXCEPTION") {
+        setStage2ManualEditEnabled(true);
+        setStage3TaskModalStep("CONTACT_EXECUTION");
+        appendAuditLog(`Stage2 수기 입력(예외) 전환: ${item.label}`);
+        toast("STEP2에서 수기 입력 사유를 함께 기록해 주세요.");
+        return;
+      }
+      appendTimeline({
+        type: "STAGE2_RESULTS_RECORDED",
+        at: now,
+        by: detail.header.assigneeName,
+        summary: `${item.label} 검증 완료`,
+      });
+      appendAuditLog(`Stage2 검증 완료: ${item.label}`);
+      toast.success(`${item.label} 검증 완료를 기록했습니다.`);
+    },
+    [appendAuditLog, detail.header.assigneeName],
+  );
+  const stage2PlanRequiredChecks = useMemo(
+    () =>
+      computeStage2RequiredChecks(stage2PlanRouteDraft as Stage2PlanRoute, stage2PlanRequiredDraft as Stage2PlanRequiredDraft),
+    [stage2PlanRequiredDraft, stage2PlanRouteDraft],
+  );
   const stage2RequiredTestCount = stage2Route === "HOSPITAL" ? 4 : 3;
   const stage2CompletedCount = stage2Evidence ? stage2RequiredTestCount - stage2Evidence.missing.length : countStage2CompletedTests(stage2Diagnosis.tests);
   const stage2CompletionPct = Math.round((Math.max(0, stage2CompletedCount) / stage2RequiredTestCount) * 100);
@@ -6019,11 +6691,24 @@ export function Stage1OpsDetail({
     0,
     Math.floor((Date.now() - new Date(stage2TargetAt).getTime()) / (1000 * 60 * 60 * 24)),
   );
+  const stage2InputMissingCount = countStage2MissingByPlan(
+    stage2Diagnosis.tests,
+    stage2PlanRouteDraft as Stage2PlanRoute,
+    stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+  );
   const stage2MissingRequirements = [
+    ...(stage2PlanRequiredChecks.mmse && !(typeof stage2Diagnosis.tests.mmse === "number" && Number.isFinite(stage2Diagnosis.tests.mmse))
+      ? ["MMSE 점수 미입력"]
+      : []),
+    ...(stage2PlanRequiredChecks.cdrOrGds && !(typeof stage2Diagnosis.tests.cdr === "number" && Number.isFinite(stage2Diagnosis.tests.cdr))
+      ? ["CDR/GDS 점수 미입력"]
+      : []),
+    ...(stage2PlanRequiredChecks.neuroCognitive && !stage2Diagnosis.tests.neuroCognitiveType ? ["신경인지검사 유형 미선택"] : []),
+    ...(stage2PlanRequiredChecks.specialist && !stage2Diagnosis.tests.specialist ? ["전문의 소견 미확인"] : []),
     ...stage2GateMissing,
     stage2RationaleDraft.trim().length > 0 ? null : "확정 근거 1줄 미입력",
   ].filter(Boolean) as string[];
-  const stage2ResultMissingCount = stage2GateMissing.length;
+  const stage2ResultMissingCount = Math.max(stage2InputMissingCount, stage2GateMissing.length);
   const stage2BookingWaitingCount =
     Number(detail.linkageStatus !== "BOOKING_DONE") + Number(stage2Diagnosis.status !== "COMPLETED");
   const stage2ClassificationConfirmed = Boolean(
@@ -6032,8 +6717,24 @@ export function Stage1OpsDetail({
       ssotCase?.status === "NEXT_STEP_SET" ||
       ssotCase?.stage === 3,
   );
-  const stage2CanConfirm = stage2ModelAvailable && stage2MissingRequirements.length === 0;
+  const stage2ModelReady = stage2ModelAvailable || stage2ModelRunState.status === "DONE";
   const stage2RequiredDataPct = Math.max(0, Math.round(((stage2RequiredTestCount + 1 - stage2MissingRequirements.length) / (stage2RequiredTestCount + 1)) * 100));
+  const stage2IntegrationStatus = useMemo(() => {
+    const hasBooking = detail.linkageStatus !== "NOT_CREATED";
+    const hasReceived = Boolean(stage2IntegrationState.receivedAt || stage2Evidence?.updatedAt || stage2Diagnosis.status !== "NOT_STARTED");
+    return deriveStage2ModelStatus(stage2ResultMissingCount, hasBooking, hasReceived);
+  }, [detail.linkageStatus, stage2Diagnosis.status, stage2Evidence?.updatedAt, stage2IntegrationState.receivedAt, stage2ResultMissingCount]);
+  const stage2IntegrationDisplayStatus =
+    stage2ModelRunState.status === "DONE" && stage2ResultMissingCount === 0 ? "READY" : stage2IntegrationStatus;
+  const stage2ModelRecommendedLabel = stage2ModelAvailable
+    ? stage2DisplayLabel
+    : stage2ModelRunState.status === "DONE"
+      ? stage2ModelRunState.recommendedLabel
+      : undefined;
+  const stage2ClassificationIsOverride =
+    Boolean(stage2ModelRecommendedLabel) && stage2ClassificationDraft !== stage2ModelRecommendedLabel;
+  const stage2OverrideMissing = stage2ClassificationIsOverride && stage2ClassificationOverrideReason.trim().length === 0;
+  const stage2CanConfirm = stage2ModelReady && stage2MissingRequirements.length === 0 && !stage2OverrideMissing;
   const stage2NextActionLabel =
     stage2Diagnosis.status === "NOT_STARTED"
       ? "검사 결과 입력"
@@ -6043,20 +6744,37 @@ export function Stage1OpsDetail({
           ? "분류 확정"
           : "다음 단계 결정";
   const stage2DraftMciStage = stage2ClassificationDraft === "MCI" ? inferStage2MciStage(caseRecord) : undefined;
-  const stage2DraftProbs = stage2ModelAvailable ? inferStage2Probs(stage2ClassificationDraft, stage2DraftMciStage) : undefined;
+  const stage2DraftProbs = stage2ModelReady ? inferStage2Probs(stage2ClassificationDraft, stage2DraftMciStage) : undefined;
   const stage2ResolvedLabel: Stage2ClassLabel = stage2DisplayLabel ?? stage2ClassificationDraft;
   const stage2ResolvedMciStage: Stage2MciStageLabel | undefined = stage2DisplayMciStage ?? (stage2ResolvedLabel === "MCI" ? stage2DraftMciStage : undefined);
-  const stage2ResolvedProbs = stage2ModelAvailable ? (ssotModel2?.probs ?? inferStage2Probs(stage2ResolvedLabel, stage2ResolvedMciStage)) : undefined;
+  const stage2ResolvedProbs = stage2ModelReady ? (ssotModel2?.probs ?? inferStage2Probs(stage2ResolvedLabel, stage2ResolvedMciStage)) : undefined;
+  const stage3CurrentStepErrors: Stage3TaskFieldErrors = stage3TaskModalStep ? stage3FieldErrorsByStep[stage3TaskModalStep] ?? {} : {};
+  const stage3ErrorSummaryEntries = useMemo(
+    () =>
+      stage3TaskModalStep
+        ? stage3ErrorOrderByStep[stage3TaskModalStep]
+            .filter((key) => Boolean(stage3CurrentStepErrors[key]))
+            .map((key) => ({ key, message: stage3CurrentStepErrors[key] as string }))
+        : [],
+    [stage3CurrentStepErrors, stage3ErrorOrderByStep, stage3TaskModalStep],
+  );
   const focusStage2ResultInput = useCallback(() => {
     if (typeof window === "undefined") return;
-    const target = document.getElementById("stage2-step2-input");
+    const target =
+      document.getElementById("stage2-modal-step2-input") ??
+      document.getElementById("stage2-step2-input");
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
   const focusStage3ResultInput = useCallback(() => {
+    setStage3TaskModalStep("CONTACT_EXECUTION");
+    setStage3ShowResultCollection(true);
     if (typeof window === "undefined") return;
-    const target = document.getElementById("stage3-step2-input");
-    target?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
+    window.setTimeout(() => {
+      const target = document.getElementById("stage3-step2-input");
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      focusStage3ErrorField("step2PerformedAt");
+    }, 30);
+  }, [focusStage3ErrorField]);
 
   const confirmDiscardResponseDraft = useCallback(() => {
     if (isOutcomeSaving) return false;
@@ -6533,27 +7251,29 @@ export function Stage1OpsDetail({
 
     if (stage3TaskModalStep === "PRECHECK") {
       if (isStage2OpsView) {
-        const requiredPlanKeys: Array<keyof typeof stage2PlanRequiredDraft> =
-          stage2PlanRouteDraft === "HOSPITAL_REFERRAL"
-            ? ["specialist", "mmse", "cdrOrGds", "neuroCognitive"]
-            : ["specialist", "cdrOrGds", "neuroCognitive"];
-        const requiredPlanLabelByKey: Record<keyof typeof stage2PlanRequiredDraft, string> = {
-          specialist: "전문의 진찰",
-          mmse: "MMSE",
-          cdrOrGds: "CDR 또는 GDS",
-          neuroCognitive: "신경인지검사",
-        };
-        const missingPlanItems = requiredPlanKeys.filter((key) => !stage2PlanRequiredDraft[key]);
-        if (!stage3ReviewDraft.consentConfirmed) {
-          toast.error("Stage1 결과/동의 정보 확인 체크가 필요합니다.");
-          return;
+        const blockingRequiredItems = stage2RequiredBlockingPlanItems;
+        const precheckErrors = buildStage2ValidationErrors(
+          stage2Diagnosis.tests,
+          stage2PlanRouteDraft as Stage2PlanRoute,
+          stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+          {
+            strategyMemo: stage3ReviewDraft.strategyMemo,
+            consentConfirmed: stage3ReviewDraft.consentConfirmed,
+          },
+        );
+        if (blockingRequiredItems.length > 0) {
+          precheckErrors.step1Plan = `필수 검사 상태 미충족: ${blockingRequiredItems
+            .map((item) => item.label)
+            .join(", ")}`;
         }
-        if (missingPlanItems.length > 0) {
-          toast.error(`필수 검사 계획 누락: ${missingPlanItems.map((item) => requiredPlanLabelByKey[item]).join(", ")}`);
-          return;
-        }
-        if (stage3ReviewDraft.strategyMemo.trim().length < 20) {
-          toast.error("전략 메모를 20자 이상 입력해야 완료할 수 있습니다.");
+        if (applyStage2ValidationErrors(precheckErrors)) {
+          if (blockingRequiredItems.length > 0) {
+            scrollToFirstErrorCard(
+              blockingRequiredItems.map((item) => item.id),
+              stage2PlanItemRefs,
+            );
+          }
+          toast.error("STEP1 필수 입력/계획 누락을 먼저 확인해 주세요.");
           return;
         }
         setDetail((prev) => {
@@ -6586,22 +7306,28 @@ export function Stage1OpsDetail({
           summary,
         });
         appendAuditLog(`STAGE2_PLAN_CONFIRMED: ${summary}`);
+        setStage2FieldErrors({});
         toast.success("STEP1 검사 계획이 확정되었습니다.");
         moveStage3TaskStep(1);
         return;
       }
+      const precheckErrors: Stage3TaskFieldErrors = {};
       if (!stage3ReviewDraft.diffDecisionSet) {
-        toast.error(isStage2OpsView ? "Stage2 진입 필요 여부를 선택해야 완료할 수 있습니다." : "감별검사 필요 여부를 선택해야 완료할 수 있습니다.");
-        return;
+        precheckErrors.step1DiffDecision = isStage2OpsView
+          ? "Stage2 진입 필요 여부를 선택해 주세요."
+          : "감별검사 필요 여부를 선택해 주세요.";
       }
       if (!stage3ReviewDraft.consentConfirmed) {
-        toast.error("상담 동의 확인 체크가 필요합니다.");
-        return;
+        precheckErrors.step1Consent = "상담 동의 확인이 필요합니다.";
       }
       if (stage3ReviewDraft.strategyMemo.trim().length < 20) {
-        toast.error("전략 메모를 20자 이상 입력해야 완료할 수 있습니다.");
+        precheckErrors.step1StrategyMemo = "전략 메모를 20자 이상 입력해 주세요.";
+      }
+      if (applyStage3ValidationErrors("PRECHECK", precheckErrors)) {
+        toast.error("STEP1 필수 입력을 먼저 확인해 주세요.");
         return;
       }
+      setStage3FieldErrorsByStep((prev) => ({ ...prev, PRECHECK: {} }));
       setDetail((prev) => {
         if (!prev.stage3) return prev;
         const series = [...prev.stage3.transitionRisk.series];
@@ -6643,9 +7369,8 @@ export function Stage1OpsDetail({
       const checklistSummary = [
         stage3ReviewDraft.diffNeeded ? (isStage2OpsView ? "Stage2 진입 필요" : "감별경로 필요") : isStage2OpsView ? "Stage2 진입 보류" : "감별경로 보류",
         stage3ReviewDraft.caregiverNeeded ? "보호자 협력 필요" : null,
-        stage3ReviewDraft.sensitiveHistory ? "민감 이력 주의" : null,
-        stage3ReviewDraft.resultLinkedChecked ? "검사결과 연결 확인" : null,
         stage3ReviewDraft.consentConfirmed ? "상담 동의 확인" : null,
+        stage3ReviewDraft.diffDecisionReason.trim() ? `사유:${stage3ReviewDraft.diffDecisionReason.trim()}` : null,
       ]
         .filter(Boolean)
         .join(", ");
@@ -6669,8 +7394,16 @@ export function Stage1OpsDetail({
 
     if (stage3TaskModalStep === "CONTACT_EXECUTION") {
       if (isStage2OpsView) {
-        if (stage2ResultMissingCount > 0) {
-          toast.error("필수 검사 입력 누락을 먼저 해소해 주세요.");
+        const step2Errors = buildStage2ValidationErrors(
+          stage2Diagnosis.tests,
+          stage2PlanRouteDraft as Stage2PlanRoute,
+          stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+        );
+        if (stage2ManualEditEnabled && stage2ManualEditReason.trim().length < 5) {
+          step2Errors.manualEditReason = "수동 수정 사유를 5자 이상 입력하세요.";
+        }
+        if (applyStage2ValidationErrors(step2Errors)) {
+          toast.error("STEP2 누락/오류 필드를 먼저 보완해 주세요.");
           return;
         }
         setDetail((prev) => {
@@ -6692,6 +7425,7 @@ export function Stage1OpsDetail({
           summary,
         });
         appendAuditLog(`STAGE2_RESULTS_RECORDED: ${summary}`);
+        setStage2FieldErrors({});
         toast.success("STEP2 검사 결과 입력이 완료되었습니다.");
         moveStage3TaskStep(1);
         return;
@@ -6700,8 +7434,58 @@ export function Stage1OpsDetail({
         toast.error("승인 대기 권고를 먼저 처리해 주세요.");
         return;
       }
+      const step2Errors: Stage3TaskFieldErrors = {};
+      if (!callMemo.trim() && !stage3Step2Flow.consultStarted) {
+        step2Errors.step2CallRecord = "전화 상담 기록(메모 또는 상담 시작)이 필요합니다.";
+      }
+      if (!stage3DiffDraft.preferredHospital.trim()) {
+        step2Errors.step2Hospital = "병원/기관 정보를 입력해 주세요.";
+      }
+      if (stage3ReviewDraft.diffNeeded && !stage3DiffDraft.testBiomarker && !stage3DiffDraft.testBrainImaging && !stage3DiffDraft.testOther) {
+        step2Errors.step2TestSelection = "검사 항목을 최소 1개 선택해 주세요.";
+      }
+      if (!stage3DiffDraft.bookingAt) {
+        step2Errors.step2BookingAt = "예약 일시를 입력해 주세요.";
+      }
+      if (!stage3Step2Flow.bookingConfirmed) {
+        step2Errors.step2BookingAt = "예약 확정 패키지를 먼저 실행해 주세요.";
+      }
+      if (stage3ReviewDraft.diffNeeded) {
+        if (!stage3DiffDraft.resultPerformedAt) {
+          step2Errors.step2PerformedAt = "검사 수행 일시를 입력해 주세요.";
+        }
+        if (!stage3DiffDraft.biomarkerResultText?.trim()) {
+          step2Errors.step2BiomarkerResult = "바이오마커 결과를 입력해 주세요.";
+        }
+        if (!stage3DiffDraft.imagingResultText?.trim()) {
+          step2Errors.step2ImagingResult = "뇌영상 결과를 입력해 주세요.";
+        }
+        if (!stage3DiffDraft.resultSummary.trim()) {
+          step2Errors.step2ResultSummary = "결과 요약을 입력해 주세요.";
+        }
+      }
+      if (Object.keys(step2Errors).length > 0) {
+        if (
+          stage3ReviewDraft.diffNeeded &&
+          (step2Errors.step2PerformedAt ||
+            step2Errors.step2BiomarkerResult ||
+            step2Errors.step2ImagingResult ||
+            step2Errors.step2ResultSummary)
+        ) {
+          setStage3ShowResultCollection(true);
+        }
+        applyStage3ValidationErrors("CONTACT_EXECUTION", step2Errors);
+        toast.error("STEP2 필수 입력을 먼저 완료해 주세요.");
+        return;
+      }
+      setStage3FieldErrorsByStep((prev) => ({ ...prev, CONTACT_EXECUTION: {} }));
+
       if (!stage3DiffReadyForRisk) {
-        toast.error(isStage2OpsView ? "신경심리검사 경로를 예약 또는 결과수신 상태로 만들어야 STEP3로 이동할 수 있습니다." : "감별경로를 예약 또는 완료 상태로 만들어야 STEP3로 이동할 수 있습니다.");
+        toast.error(
+          isStage2OpsView
+            ? "신경심리검사 경로를 예약 또는 결과수신 상태로 만들어야 STEP3로 이동할 수 있습니다."
+            : "검사 결과 반영 후에만 STEP3(위험 예측/추적)를 진행할 수 있습니다.",
+        );
         return;
       }
       appendAuditLog(`${isStage2OpsView ? "신경심리검사" : "감별경로"} 단계 완료 확인: ${detail.stage3.diffPathStatus}`);
@@ -6712,6 +7496,21 @@ export function Stage1OpsDetail({
 
     if (stage3TaskModalStep === "RESPONSE_HANDLING") {
       if (isStage2OpsView) {
+        const step3Errors = buildStage2ValidationErrors(
+          stage2Diagnosis.tests,
+          stage2PlanRouteDraft as Stage2PlanRoute,
+          stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+          {
+            rationale: stage2RationaleDraft,
+            recommendedLabel: stage2ModelRecommendedLabel,
+            selectedLabel: stage2ClassificationDraft,
+            overrideReason: stage2ClassificationOverrideReason,
+          },
+        );
+        if (applyStage2ValidationErrors(step3Errors)) {
+          toast.error("STEP3 분류 확정 조건을 확인해 주세요.");
+          return;
+        }
         if (!stage2CanConfirm) {
           toast.error("분류 확정 요건이 부족합니다.");
           return;
@@ -6735,6 +7534,7 @@ export function Stage1OpsDetail({
           summary,
         });
         appendAuditLog(`STAGE2_CLASS_CONFIRMED: ${summary}`);
+        setStage2FieldErrors({});
         toast.success("STEP3 분류 확정이 완료되었습니다.");
         moveStage3TaskStep(1);
         return;
@@ -6761,8 +7561,17 @@ export function Stage1OpsDetail({
     }
 
     if (isStage2OpsView) {
-      if (!stage2Diagnosis.nextStep) {
-        toast.error("STEP4에서 다음 단계를 먼저 선택해 주세요.");
+      const step4Errors = buildStage2ValidationErrors(
+        stage2Diagnosis.tests,
+        stage2PlanRouteDraft as Stage2PlanRoute,
+        stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
+        {
+          requireNextStep: true,
+          hasNextStep: Boolean(stage2Diagnosis.nextStep),
+        },
+      );
+      if (applyStage2ValidationErrors(step4Errors)) {
+        toast.error("STEP4에서 다음 단계를 선택해 주세요.");
         return;
       }
       setDetail((prev) => {
@@ -6794,6 +7603,7 @@ export function Stage1OpsDetail({
         summary: nextStepSummary,
       });
       appendAuditLog(`STAGE2_NEXT_STEP_SET: ${nextStepSummary}`);
+      setStage2FieldErrors({});
       toast.success("STEP4 다음 단계 결정이 완료되었습니다.");
       closeStage3TaskModal();
       return;
@@ -6859,6 +7669,7 @@ export function Stage1OpsDetail({
     stage3ReviewDraft.resultLinkedChecked,
     stage3ReviewDraft.sensitiveHistory,
     stage3ReviewDraft.strategyMemo,
+    stage3ReviewDraft.diffDecisionReason,
     stage3RiskReviewDraft.memo,
     stage3RiskReviewDraft.nextAction,
     stage3TaskModalStep,
@@ -6866,18 +7677,36 @@ export function Stage1OpsDetail({
     stage3TrackingPlanDraft.reminderDaysBefore,
     stage3TrackingPlanDraft.reminderTime,
     stage3TrackingPlanDraft.retryCount,
+    stage3DiffDraft.bookingAt,
+    stage3DiffDraft.preferredHospital,
+    stage3DiffDraft.testBiomarker,
+    stage3DiffDraft.testBrainImaging,
+    stage3DiffDraft.testOther,
+    stage3DiffDraft.resultPerformedAt,
+    stage3DiffDraft.resultSummary,
+    stage3DiffDraft.biomarkerResultText,
+    stage3DiffDraft.imagingResultText,
+    stage3Step2Flow.bookingConfirmed,
+    stage3Step2Flow.consultStarted,
     stage2CanConfirm,
     stage2ClassificationDraft,
+    stage2ClassificationOverrideReason,
     stage2Diagnosis,
     stage2DraftMciStage,
     stage2HospitalDraft,
+    stage2ManualEditEnabled,
+    stage2ManualEditReason,
+    stage2ModelRecommendedLabel,
     stage2PlanRequiredDraft,
     stage2PlanRouteDraft,
     stage2ResultMissingCount,
     stage2ScheduleDraft,
+    applyStage2ValidationErrors,
+    applyStage3ValidationErrors,
     confirmStage2Classification,
     isStage2OpsView,
     saveStage2TestInputs,
+    callMemo,
   ]);
 
   const handleStage1TaskComplete = useCallback(async () => {
@@ -8111,6 +8940,7 @@ export function Stage1OpsDetail({
                 {stage3TaskOrder.map((stepId, index) => {
                   const card = stage1FlowCards.find((item) => item.id === stepId);
                   const isActive = stage3TaskModalStep === stepId;
+                  const stepErrorCount = Object.keys(stage3FieldErrorsByStep[stepId] ?? {}).length;
                   return (
                     <button
                       key={stepId}
@@ -8128,7 +8958,14 @@ export function Stage1OpsDetail({
                         isActive ? "border-indigo-300 bg-white text-indigo-800" : "border-indigo-100 bg-indigo-50/60 text-indigo-700",
                       )}
                     >
-                      <p className="font-semibold">STEP {index + 1}</p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold">STEP {index + 1}</p>
+                        {stepErrorCount > 0 ? (
+                          <span className="rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                            오류 {stepErrorCount}
+                          </span>
+                        ) : null}
+                      </div>
                       <p className="mt-0.5 truncate">{card?.title ?? stepId}</p>
                     </button>
                   );
@@ -8179,18 +9016,73 @@ export function Stage1OpsDetail({
                     const resultInputCount = detail.timeline.filter(
                       (event) => event.type === "STAGE2_RESULTS_RECORDED" || event.type === "DIFF_RESULT_APPLIED",
                     ).length;
+                    const stage2Step1Errors = stage2ErrorSummaryEntries.filter(
+                      (entry) => entry.key === "step1Plan" || entry.key === "step1StrategyMemo" || entry.key === "step1Consent",
+                    );
 
                     return (
                       <section className="rounded-lg border border-gray-200 bg-white p-4">
-                        <h4 className="text-sm font-bold text-slate-900">Stage2 진입 리뷰 & 진단검사 계획 확정</h4>
+                        <h4 className="text-sm font-bold text-slate-900">Stage2 진입 리뷰 & 검사 수행 관리</h4>
                         <p className="mt-1 text-[11px] text-gray-600">
-                          Stage1 선별 결과와 Stage2 진입 근거를 확인하고, 필수 진단검사 항목/경로를 확정합니다.
+                          STEP1은 검사 항목 선택이 아니라, 현재 검사 플랜/연계 경로/누락 상태를 검토하고 승인하는 단계입니다.
                         </p>
                         <div className="mt-3">
                           <StepChecklist items={STAGE2_TASK_CHECKLIST.PRECHECK} />
                         </div>
+                        {stage2Step1Errors.length > 0 ? (
+                          <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2">
+                            <p className="text-[11px] font-semibold text-rose-700">누락/오류 항목</p>
+                            <ul className="mt-1 space-y-1">
+                              {stage2Step1Errors.map((entry) => (
+                                <li key={entry.key}>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (entry.key === "step1Plan") {
+                                        scrollToFirstErrorCard(
+                                          stage2RequiredBlockingPlanItems.map((item) => item.id),
+                                          stage2PlanItemRefs,
+                                        );
+                                        return;
+                                      }
+                                      focusStage2ErrorField(entry.key);
+                                    }}
+                                    className="text-[11px] text-rose-700 underline decoration-dotted underline-offset-2"
+                                  >
+                                    - {entry.message}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
 
-                        <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.15fr]">
+                        <div className="mt-3">
+                          <Stage2Step1PlanSummaryBar
+                            summary={stage2PlanSummary}
+                            route={stage2PlanRouteState}
+                            onOpenMissing={() =>
+                              scrollToFirstErrorCard(
+                                stage2RequiredBlockingPlanItems.map((item) => item.id),
+                                stage2PlanItemRefs,
+                              )
+                            }
+                            onPrimaryAction={handleStage2PlanPrimaryAction}
+                            onReviewComplete={handleStage3TaskComplete}
+                          />
+                        </div>
+
+                        <div className="mt-2 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setStage3TaskModalStep("CONTACT_EXECUTION")}
+                            className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold text-slate-700"
+                          >
+                            상담/문자 실행 열기
+                          </button>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.2fr]">
                           <div className="space-y-3">
                             <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                               <p className="text-xs font-semibold text-slate-800">Stage1→Stage2 요약 Scorecard</p>
@@ -8239,90 +9131,60 @@ export function Stage1OpsDetail({
                                 </div>
                               </div>
                             </details>
+
+                            <label className="text-[11px] text-slate-600">
+                              전략 메모(필수, 20자 이상)
+                              <textarea
+                                ref={registerStage2FieldRef("step1StrategyMemo")}
+                                value={stage3ReviewDraft.strategyMemo}
+                                onChange={(event) => {
+                                  clearStage2FieldError("step1StrategyMemo");
+                                  setStage3ReviewDraft((prev) => ({ ...prev, strategyMemo: event.target.value }));
+                                }}
+                                className={stage2FieldClass(
+                                  "step1StrategyMemo",
+                                  "mt-1 h-24 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300",
+                                )}
+                                placeholder="Stage1 근거 요약, Stage2 검사 경로, 담당자 확인 포인트를 입력하세요."
+                              />
+                            </label>
+                            {stage2FieldErrors.step1StrategyMemo ? (
+                              <p className="-mt-2 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.step1StrategyMemo}</p>
+                            ) : null}
+                            <label className="flex items-center gap-1 text-[11px] text-slate-700">
+                              <input
+                                ref={registerStage2FieldRef("step1Consent")}
+                                type="checkbox"
+                                checked={stage3ReviewDraft.consentConfirmed}
+                                onChange={(event) => {
+                                  clearStage2FieldError("step1Consent");
+                                  setStage3ReviewDraft((prev) => ({ ...prev, consentConfirmed: event.target.checked }));
+                                }}
+                              />
+                              Stage1 결과/동의 정보 확인 완료
+                            </label>
+                            {stage2FieldErrors.step1Consent ? (
+                              <p className="-mt-2 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.step1Consent}</p>
+                            ) : null}
                           </div>
 
                           <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                            <p className="text-xs font-semibold text-slate-800">진단검사 계획 확정</p>
-                            <div className="grid grid-cols-1 gap-2 text-[11px]">
-                              {([
-                                ["specialist", "전문의 진찰 (필수)"],
-                                ["mmse", "MMSE (협약병원 의뢰 시 필수)"],
-                                ["cdrOrGds", "CDR 또는 GDS (택1)"],
-                                ["neuroCognitive", "신경인지기능검사 (택1)"],
-                              ] as const).map(([key, label]) => (
-                                <label key={key} className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1.5">
-                                  <input
-                                    type="checkbox"
-                                    checked={stage2PlanRequiredDraft[key]}
-                                    onChange={(event) =>
-                                      setStage2PlanRequiredDraft((prev) => ({
-                                        ...prev,
-                                        [key]: event.target.checked,
-                                      }))
-                                    }
-                                  />
-                                  <span className="text-slate-700">{label}</span>
-                                </label>
-                              ))}
-                            </div>
-                            <div className="grid grid-cols-3 gap-2 text-[11px]">
-                              <label className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1.5">
-                                <input
-                                  type="checkbox"
-                                  checked={stage2OptionalTestsDraft.gdsk}
-                                  onChange={(event) =>
-                                    setStage2OptionalTestsDraft((prev) => ({ ...prev, gdsk: event.target.checked }))
-                                  }
+                            <div ref={registerStage2FieldRef("step1Plan")}>
+                              <p className="text-xs font-semibold text-slate-800">검사 수행 경로</p>
+                              <div className="mt-2">
+                                <PlanRouteCards
+                                  routeType={stage2PlanRouteDraft as Stage2PlanRoute}
+                                  orgName={stage2HospitalDraft}
+                                  dueAt={stage2ScheduleDraft}
+                                  needsReasonOnChange={stage2PlanRouteChangeNeedsReason}
+                                  onSelectRoute={handleStage2PlanRouteSelect}
                                 />
-                                GDS-K
-                              </label>
-                              <label className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1.5">
-                                <input
-                                  type="checkbox"
-                                  checked={stage2OptionalTestsDraft.adl}
-                                  onChange={(event) =>
-                                    setStage2OptionalTestsDraft((prev) => ({ ...prev, adl: event.target.checked }))
-                                  }
-                                />
-                                ADL
-                              </label>
-                              <label className="flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1.5">
-                                <input
-                                  type="checkbox"
-                                  checked={stage2OptionalTestsDraft.bpsd}
-                                  onChange={(event) =>
-                                    setStage2OptionalTestsDraft((prev) => ({ ...prev, bpsd: event.target.checked }))
-                                  }
-                                />
-                                BPSD
-                              </label>
+                              </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-2 text-[11px]">
-                              <button
-                                type="button"
-                                onClick={() => setStage2PlanRouteDraft("HOSPITAL_REFERRAL")}
-                                className={cn(
-                                  "rounded border px-2 py-1.5 font-semibold",
-                                  stage2PlanRouteDraft === "HOSPITAL_REFERRAL"
-                                    ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                                    : "border-slate-200 bg-white text-slate-700",
-                                )}
-                              >
-                                협약병원 의뢰
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setStage2PlanRouteDraft("CENTER_DIRECT")}
-                                className={cn(
-                                  "rounded border px-2 py-1.5 font-semibold",
-                                  stage2PlanRouteDraft === "CENTER_DIRECT"
-                                    ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                                    : "border-slate-200 bg-white text-slate-700",
-                                )}
-                              >
-                                센터 직접 수행
-                              </button>
-                            </div>
+                            {stage2FieldErrors.step1Plan ? (
+                              <p className="text-[10px] font-semibold text-rose-600">{stage2FieldErrors.step1Plan}</p>
+                            ) : null}
+
                             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                               <label className="text-[11px] text-slate-600">
                                 기관
@@ -8342,25 +9204,25 @@ export function Stage1OpsDetail({
                                 />
                               </label>
                             </div>
-                            <label className="text-[11px] text-slate-600">
-                              전략 메모(필수, 20자 이상)
-                              <textarea
-                                value={stage3ReviewDraft.strategyMemo}
-                                onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, strategyMemo: event.target.value }))}
-                                className="mt-1 h-24 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
-                                placeholder="Stage1 근거 요약, Stage2 검사 경로, 담당자 확인 포인트를 입력하세요."
-                              />
-                            </label>
-                            <label className="flex items-center gap-1 text-[11px] text-slate-700">
-                              <input
-                                type="checkbox"
-                                checked={stage3ReviewDraft.consentConfirmed}
-                                onChange={(event) =>
-                                  setStage3ReviewDraft((prev) => ({ ...prev, consentConfirmed: event.target.checked }))
-                                }
-                              />
-                              Stage1 결과/동의 정보 확인 완료
-                            </label>
+
+                            <div>
+                              <p className="text-xs font-semibold text-slate-800">검사 항목 상태 카드</p>
+                              <p className="mt-1 text-[10px] text-slate-500">
+                                필수 항목은 누락/검증 필요 상태에서 STEP2가 잠금됩니다. 카드 액션으로 결과 재요청/수기입력 전환이 가능합니다.
+                              </p>
+                              <div className="mt-2">
+                                <PlanItemCardList
+                                  items={stage2PlanItems}
+                                  onAction={handleStage2PlanItemAction}
+                                  registerRef={registerStage2PlanItemRef}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="rounded-md border border-slate-200 bg-white p-2 text-[10px] text-slate-600">
+                              <p>STEP 잠금 상태: STEP2 {stage2PlanSummary.locks.step2 ? "잠금" : "해제"} · STEP3 {stage2PlanSummary.locks.step3 ? "잠금" : "해제"} · STEP4 {stage2PlanSummary.locks.step4 ? "잠금" : "해제"}</p>
+                              <p className="mt-1">검토 완료 여부: {stage2PlanSummary.step1Reviewed ? "완료" : "대기"} · 완료율 {stage2PlanSummary.completionRate}%</p>
+                            </div>
                           </div>
                         </div>
                       </section>
@@ -8607,87 +9469,143 @@ export function Stage1OpsDetail({
                         </div>
 
                         <div className="space-y-3">
+                          {stage3ErrorSummaryEntries.length > 0 ? (
+                            <div className="rounded-md border border-rose-200 bg-rose-50 p-2">
+                              <p className="text-[11px] font-semibold text-rose-700">필수 항목 누락 {stage3ErrorSummaryEntries.length}건</p>
+                              <ul className="mt-1 space-y-1">
+                                {stage3ErrorSummaryEntries.map((entry) => (
+                                  <li key={entry.key}>
+                                    <button
+                                      type="button"
+                                      onClick={() => focusStage3ErrorField(entry.key)}
+                                      className="text-[11px] text-rose-700 underline decoration-dotted underline-offset-2"
+                                    >
+                                      - {entry.message}
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
                           <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                             <p className="text-xs font-semibold text-slate-800">전략 수립(필수)</p>
-                            <div className="mt-2 space-y-1 text-[11px] text-slate-700">
-                              <div>
-                                <p className="text-[11px] font-semibold text-slate-700">{isStage2OpsView ? "Stage2 진입/진단검사 필요 여부(필수)" : "감별검사 필요 여부(필수)"}</p>
-                                <div className="mt-1 grid grid-cols-2 gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setStage3ReviewDraft((prev) => ({
-                                        ...prev,
-                                        diffNeeded: true,
-                                        diffDecisionSet: true,
-                                      }))
-                                    }
-                                    className={cn(
-                                      "rounded border px-2 py-1 text-[10px] font-semibold",
-                                      stage3ReviewDraft.diffDecisionSet && stage3ReviewDraft.diffNeeded
-                                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                                        : "border-slate-200 bg-white text-slate-600",
-                                    )}
-                                  >
-                                    필요
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setStage3ReviewDraft((prev) => ({
-                                        ...prev,
-                                        diffNeeded: false,
-                                        diffDecisionSet: true,
-                                      }))
-                                    }
-                                    className={cn(
-                                      "rounded border px-2 py-1 text-[10px] font-semibold",
-                                      stage3ReviewDraft.diffDecisionSet && !stage3ReviewDraft.diffNeeded
-                                        ? "border-indigo-300 bg-indigo-50 text-indigo-700"
-                                        : "border-slate-200 bg-white text-slate-600",
-                                    )}
-                                  >
-                                    보류
-                                  </button>
-                                </div>
+                            <div className="mt-2 rounded-md border border-slate-200 bg-white p-2">
+                              <p className="text-[11px] font-semibold text-slate-700">자동 감지된 주의/전제</p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {[
+                                  stage3ReviewDraft.sensitiveHistory ? "민감 이력 주의" : null,
+                                  stage3ReviewDraft.resultLinkedChecked ? "검사결과 연결 확인 필요" : null,
+                                  detail.timeline.some((event) => event.type === "CALL_ATTEMPT" && event.result === "NO_ANSWER")
+                                    ? "미응답 이력 누적"
+                                    : null,
+                                  caseRecord?.profile.guardianPhone ? "보호자 연락 우선 가능" : "본인 연락 우선",
+                                ]
+                                  .filter(Boolean)
+                                  .map((chip) => (
+                                    <span key={chip} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                                      {chip}
+                                    </span>
+                                  ))}
                               </div>
-                              <label className="flex items-center gap-1">
-                                <input
-                                  type="checkbox"
-                                  checked={stage3ReviewDraft.caregiverNeeded}
-                                  onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, caregiverNeeded: event.target.checked }))}
-                                />
-                                보호자 협력 필요
-                              </label>
-                              <label className="flex items-center gap-1">
-                                <input
-                                  type="checkbox"
-                                  checked={stage3ReviewDraft.sensitiveHistory}
-                                  onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, sensitiveHistory: event.target.checked }))}
-                                />
-                                민감 이력 주의
-                              </label>
-                              <label className="flex items-center gap-1">
-                                <input
-                                  type="checkbox"
-                                  checked={stage3ReviewDraft.resultLinkedChecked}
-                                  onChange={(event) =>
-                                    setStage3ReviewDraft((prev) => ({ ...prev, resultLinkedChecked: event.target.checked }))
-                                  }
-                                />
-                                검사결과 입력/연결 완료 여부 확인
-                              </label>
-                              <label className="flex items-center gap-1">
-                                <input
-                                  type="checkbox"
-                                  checked={stage3ReviewDraft.consentConfirmed}
-                                  onChange={(event) =>
-                                    setStage3ReviewDraft((prev) => ({ ...prev, consentConfirmed: event.target.checked }))
-                                  }
-                                />
-                                상담 동의 확인
-                              </label>
                             </div>
+
+                            <div
+                              ref={registerStage3FieldRef("step1DiffDecision")}
+                              className={cn(
+                                "mt-2 grid grid-cols-1 gap-2",
+                                stage3CurrentStepErrors.step1DiffDecision ? "rounded-md border border-rose-200 bg-rose-50 p-1" : "",
+                              )}
+                            >
+                              <p className="text-[11px] font-semibold text-slate-700">감별검사 필요 여부(필수)</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  clearStage3FieldError("PRECHECK", "step1DiffDecision");
+                                  setStage3ReviewDraft((prev) => ({
+                                    ...prev,
+                                    diffNeeded: true,
+                                    diffDecisionSet: true,
+                                  }));
+                                }}
+                                className={cn(
+                                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left",
+                                  stage3ReviewDraft.diffDecisionSet && stage3ReviewDraft.diffNeeded
+                                    ? "border-indigo-300 bg-indigo-50 text-indigo-800"
+                                    : "border-slate-200 bg-white text-slate-700",
+                                )}
+                              >
+                                <span className="text-xs font-semibold">감별검사 필요(권고)</span>
+                                <span className="text-[10px]">전화 상담 후 병원 연계/예약 패키지 실행</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  clearStage3FieldError("PRECHECK", "step1DiffDecision");
+                                  setStage3ReviewDraft((prev) => ({
+                                    ...prev,
+                                    diffNeeded: false,
+                                    diffDecisionSet: true,
+                                  }));
+                                }}
+                                className={cn(
+                                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left",
+                                  stage3ReviewDraft.diffDecisionSet && !stage3ReviewDraft.diffNeeded
+                                    ? "border-slate-400 bg-slate-100 text-slate-800"
+                                    : "border-slate-200 bg-white text-slate-700",
+                                )}
+                              >
+                                <span className="text-xs font-semibold">보류(추적/재평가 후 결정)</span>
+                                <span className="text-[10px]">전화 상담 후 재평가/추적 계획 우선</span>
+                              </button>
+                              {stage3CurrentStepErrors.step1DiffDecision ? (
+                                <p className="text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step1DiffDecision}</p>
+                              ) : null}
+                            </div>
+
+                            {stage3ReviewDraft.diffDecisionSet ? (
+                              <label className="mt-2 block text-[11px] text-slate-600">
+                                선택 이유(선택 입력)
+                                <input
+                                  ref={registerStage3FieldRef("step1DiffReason")}
+                                  value={stage3ReviewDraft.diffDecisionReason}
+                                  onChange={(event) => {
+                                    clearStage3FieldError("PRECHECK", "step1DiffReason");
+                                    setStage3ReviewDraft((prev) => ({ ...prev, diffDecisionReason: event.target.value }));
+                                  }}
+                                  className={stage3FieldClass(
+                                    "PRECHECK",
+                                    "step1DiffReason",
+                                    "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300",
+                                  )}
+                                  placeholder="선택 이유를 짧게 기록하세요."
+                                />
+                              </label>
+                            ) : null}
+
+                            <label className="mt-2 flex items-center gap-1 text-[11px] text-slate-700">
+                              <input
+                                ref={registerStage3FieldRef("step1Consent")}
+                                type="checkbox"
+                                checked={stage3ReviewDraft.consentConfirmed}
+                                onChange={(event) => {
+                                  clearStage3FieldError("PRECHECK", "step1Consent");
+                                  setStage3ReviewDraft((prev) => ({ ...prev, consentConfirmed: event.target.checked }));
+                                }}
+                              />
+                              상담 동의 확인(필수)
+                            </label>
+                            {stage3CurrentStepErrors.step1Consent ? (
+                              <p className="text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step1Consent}</p>
+                            ) : null}
+                            <label className="mt-1 flex items-center gap-1 text-[11px] text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={stage3ReviewDraft.caregiverNeeded}
+                                onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, caregiverNeeded: event.target.checked }))}
+                              />
+                              보호자 협조 필요(선택)
+                            </label>
+
                             <div className="mt-2">
                               <label className="text-[11px] font-semibold text-slate-600">업무 우선순위(운영)</label>
                               <select
@@ -8708,15 +9626,22 @@ export function Stage1OpsDetail({
                             <div className="mt-2">
                               <label className="text-[11px] font-semibold text-slate-600">전략 메모(필수)</label>
                               <textarea
+                                ref={registerStage3FieldRef("step1StrategyMemo")}
                                 value={stage3ReviewDraft.strategyMemo}
-                                onChange={(event) => setStage3ReviewDraft((prev) => ({ ...prev, strategyMemo: event.target.value }))}
-                                className="mt-1 h-28 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
-                                placeholder={
-                                  isStage2OpsView
-                                    ? "1) Stage1 근거 요약\n2) 신경심리/임상평가 계획\n3) 전문의/최종분류 준비사항"
-                                    : "1) 왜 Stage3로 전이되었는지\n2) 감별검사/뇌영상 계획\n3) 정밀관리/추적 방향"
-                                }
+                                onChange={(event) => {
+                                  clearStage3FieldError("PRECHECK", "step1StrategyMemo");
+                                  setStage3ReviewDraft((prev) => ({ ...prev, strategyMemo: event.target.value }));
+                                }}
+                                className={stage3FieldClass(
+                                  "PRECHECK",
+                                  "step1StrategyMemo",
+                                  "mt-1 h-28 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300",
+                                )}
+                                placeholder={"1) Stage3로 넘어온 이유\n2) 감별검사/연계 계획\n3) 추적/정밀관리 방향"}
                               />
+                              {stage3CurrentStepErrors.step1StrategyMemo ? (
+                                <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step1StrategyMemo}</p>
+                              ) : null}
                             </div>
                           </div>
 
@@ -8751,91 +9676,330 @@ export function Stage1OpsDetail({
                     { key: "calendarSynced", label: "6) 캘린더 등록" },
                   ];
                   if (isStage2OpsView) {
+                    const stage2Step2Errors = stage2ErrorSummaryEntries.filter(
+                      (entry) =>
+                        entry.key === "manualEditReason" ||
+                        entry.key === "mmse" ||
+                        entry.key === "cdr" ||
+                        entry.key === "neuro" ||
+                        entry.key === "specialist",
+                    );
+                    const integrationMeta = {
+                      WAITING: { label: "대기", chip: "bg-slate-100 text-slate-700 border-slate-200" },
+                      REQUESTED: { label: "요청됨", chip: "bg-blue-50 text-blue-700 border-blue-200" },
+                      PARTIAL: { label: "부분 수신", chip: "bg-amber-50 text-amber-700 border-amber-200" },
+                      VERIFY_NEEDED: { label: "검증 필요", chip: "bg-rose-50 text-rose-700 border-rose-200" },
+                      READY: { label: "수신 완료", chip: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+                    } as const;
+                    const integrationChip = integrationMeta[stage2IntegrationDisplayStatus];
+                    const integrationHistory = detail.timeline
+                      .filter((event) =>
+                        event.type === "STAGE2_RESULTS_RECORDED" ||
+                        event.type === "DIFF_RESULT_APPLIED" ||
+                        event.type === "DIFF_REFER_CREATED" ||
+                        event.type === "DIFF_SCHEDULED" ||
+                        event.type === "MESSAGE_SENT",
+                      )
+                      .slice(0, 6);
+                    const inputLocked = !stage2ManualEditEnabled;
+                    const syncAt = stage2IntegrationState.lastSyncedAt ?? stage2Evidence?.updatedAt;
+                    const receivedAt = stage2IntegrationState.receivedAt ?? stage2Evidence?.updatedAt;
+                    const step2Tasks = [
+                      { label: "연계 결과 수신 확인", done: Boolean(receivedAt) },
+                      { label: "누락/이상치 검증", done: stage2ResultMissingCount === 0 },
+                      { label: "전문의 소견 확인", done: Boolean(stage2Diagnosis.tests.specialist) },
+                      { label: "반영 후 STEP3 모델 산출 요청", done: stage2ModelRunState.status === "DONE" },
+                    ];
+
                     return (
-                      <section id="stage3-step2-input" className="rounded-lg border border-gray-200 bg-white p-4">
-                        <h4 className="text-sm font-bold text-slate-900">검사 결과 입력</h4>
+                      <section id="stage2-modal-step2-input" className="rounded-lg border border-gray-200 bg-white p-4">
+                        <h4 className="text-sm font-bold text-slate-900">검사 결과 수신/검증/반영</h4>
                         <p className="mt-1 text-[11px] text-gray-600">
-                          MMSE/CDR(GDS)/신경인지검사/전문의 소견을 입력하고 누락 항목을 0으로 맞춥니다.
+                          연계병원 결과를 자동 수신해 검증 후 반영합니다. 수동 수정은 사유 기록 후에만 가능합니다.
                         </p>
                         <div className="mt-3">
                           <StepChecklist items={STAGE2_TASK_CHECKLIST.CONTACT_EXECUTION} />
                         </div>
 
+                        <div className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-indigo-900">연계 상태</p>
+                            <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", integrationChip.chip)}>
+                              {integrationChip.label}
+                            </span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] md:grid-cols-4">
+                            <div className="rounded border border-indigo-100 bg-white px-2 py-1.5">
+                              <p className="text-slate-500">마지막 동기화</p>
+                              <p className="font-semibold text-slate-900">{formatDateTime(syncAt)}</p>
+                            </div>
+                            <div className="rounded border border-indigo-100 bg-white px-2 py-1.5">
+                              <p className="text-slate-500">결과 수신 시각</p>
+                              <p className="font-semibold text-slate-900">{formatDateTime(receivedAt)}</p>
+                            </div>
+                            <div className="rounded border border-indigo-100 bg-white px-2 py-1.5">
+                              <p className="text-slate-500">수신 기관</p>
+                              <p className="font-semibold text-slate-900">{stage2IntegrationState.sourceOrg ?? stage2HospitalDraft}</p>
+                            </div>
+                            <div className="rounded border border-indigo-100 bg-white px-2 py-1.5">
+                              <p className="text-slate-500">누락 항목</p>
+                              <p className={cn("font-semibold", stage2ResultMissingCount > 0 ? "text-rose-700" : "text-emerald-700")}>
+                                {stage2ResultMissingCount}건
+                              </p>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const now = nowIso();
+                                setStage2IntegrationState((prev) => ({ ...prev, lastSyncedAt: now }));
+                                setStage2ModelRunState({ status: "PENDING", updatedAt: now });
+                                appendTimeline({
+                                  type: "MESSAGE_SENT",
+                                  at: now,
+                                  by: detail.header.assigneeName,
+                                  summary: "연계병원 결과 재요청",
+                                });
+                                appendAuditLog("Stage2 결과 재요청 실행");
+                                toast.success("결과 재요청 이벤트를 기록했습니다.");
+                              }}
+                              className="rounded border border-blue-200 bg-white px-2 py-1 text-[10px] font-semibold text-blue-700"
+                            >
+                              결과 재요청
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const now = nowIso();
+                                setStage2IntegrationState((prev) => ({ ...prev, lastSyncedAt: now }));
+                                if (stage2ResultMissingCount > 0) {
+                                  setStage2ModelRunState({ status: "PENDING", updatedAt: now });
+                                }
+                                appendAuditLog("Stage2 최신화 실행");
+                                toast.success("최신화 시각을 갱신했습니다.");
+                              }}
+                              className="rounded border border-indigo-200 bg-white px-2 py-1 text-[10px] font-semibold text-indigo-700"
+                            >
+                              최신화
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setStage2ReceiveHistoryOpen((prev) => !prev)}
+                              className="rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700"
+                            >
+                              수신 이력 보기
+                            </button>
+                          </div>
+                          {stage2ReceiveHistoryOpen ? (
+                            <div className="mt-2 space-y-1 rounded border border-indigo-100 bg-white p-2">
+                              {integrationHistory.length > 0 ? (
+                                integrationHistory.map((event, idx) => (
+                                  <div key={`${event.at}-${idx}`} className="rounded border border-slate-200 px-2 py-1 text-[10px] text-slate-600">
+                                    <p className="font-semibold text-slate-700">{eventTitle(event)}</p>
+                                    <p>{formatDateTime(event.at)} · {event.summary}</p>
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="text-[10px] text-slate-500">수신 이력이 없습니다.</p>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {stage2Step2Errors.length > 0 ? (
+                          <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2">
+                            <p className="text-[11px] font-semibold text-rose-700">누락/오류 항목</p>
+                            <ul className="mt-1 space-y-1">
+                              {stage2Step2Errors.map((entry) => (
+                                <li key={entry.key}>
+                                  <button
+                                    type="button"
+                                    onClick={() => focusStage2ErrorField(entry.key)}
+                                    className="text-[11px] text-rose-700 underline decoration-dotted underline-offset-2"
+                                  >
+                                    - {entry.message}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
+
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-slate-800">자동 기입 결과 확인</p>
+                            <label className="flex items-center gap-1 text-[10px] font-semibold text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={stage2ManualEditEnabled}
+                                onChange={(event) => {
+                                  setStage2ManualEditEnabled(event.target.checked);
+                                  if (!event.target.checked) {
+                                    setStage2ManualEditReason("");
+                                    clearStage2FieldError("manualEditReason");
+                                  }
+                                }}
+                              />
+                              수동 수정
+                            </label>
+                          </div>
+                          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                            <label className="text-[11px] text-slate-600">
+                              <TermWithTooltip term="MMSE" /> 점수 (0~30)
+                              <input
+                                ref={registerStage2FieldRef("mmse")}
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                max={30}
+                                step={1}
+                                value={stage2Diagnosis.tests.mmse ?? ""}
+                                disabled={inputLocked}
+                                onChange={(event) => {
+                                  clearStage2FieldError("mmse");
+                                  const value = event.target.value;
+                                  const next = value === "" ? undefined : Number(value);
+                                  setStage2Diagnosis((prev) => ({
+                                    ...prev,
+                                    tests: {
+                                      ...prev.tests,
+                                      mmse: value === "" || Number.isNaN(next) ? undefined : next,
+                                    },
+                                  }));
+                                }}
+                                className={stage2FieldClass(
+                                  "mmse",
+                                  "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300 disabled:cursor-not-allowed disabled:bg-slate-100",
+                                )}
+                              />
+                              {stage2FieldErrors.mmse ? <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.mmse}</p> : null}
+                            </label>
+                            <label className="text-[11px] text-slate-600">
+                              <TermWithTooltip term="CDR" />/<TermWithTooltip term="GDS" /> 점수 (0~7)
+                              <input
+                                ref={registerStage2FieldRef("cdr")}
+                                type="number"
+                                inputMode="decimal"
+                                min={0}
+                                max={7}
+                                step={0.5}
+                                value={stage2Diagnosis.tests.cdr ?? ""}
+                                disabled={inputLocked}
+                                onChange={(event) => {
+                                  clearStage2FieldError("cdr");
+                                  const value = event.target.value;
+                                  const next = value === "" ? undefined : Number(value);
+                                  setStage2Diagnosis((prev) => ({
+                                    ...prev,
+                                    tests: {
+                                      ...prev.tests,
+                                      cdr: value === "" || Number.isNaN(next) ? undefined : next,
+                                    },
+                                  }));
+                                }}
+                                className={stage2FieldClass(
+                                  "cdr",
+                                  "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300 disabled:cursor-not-allowed disabled:bg-slate-100",
+                                )}
+                              />
+                              {stage2FieldErrors.cdr ? <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.cdr}</p> : null}
+                            </label>
+                            <label className="text-[11px] text-slate-600">
+                              신경인지검사 유형
+                              <select
+                                ref={registerStage2FieldRef("neuro")}
+                                value={stage2Diagnosis.tests.neuroCognitiveType ?? ""}
+                                disabled={inputLocked}
+                                onChange={(event) => {
+                                  clearStage2FieldError("neuro");
+                                  setStage2Diagnosis((prev) => ({
+                                    ...prev,
+                                    tests: {
+                                      ...prev.tests,
+                                      neuroCognitiveType:
+                                        (event.target.value as Stage2Diagnosis["tests"]["neuroCognitiveType"]) || undefined,
+                                    },
+                                  }));
+                                }}
+                                className={stage2FieldClass(
+                                  "neuro",
+                                  "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300 disabled:cursor-not-allowed disabled:bg-slate-100",
+                                )}
+                              >
+                                <option value="">선택</option>
+                                <option value="CERAD-K">CERAD-K</option>
+                                <option value="SNSB-II">SNSB-II</option>
+                                <option value="SNSB-C">SNSB-C</option>
+                                <option value="LICA">LICA</option>
+                              </select>
+                              {stage2FieldErrors.neuro ? <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.neuro}</p> : null}
+                            </label>
+                            <label className="text-[11px] text-slate-600">
+                              전문의 소견 상태
+                              <select
+                                ref={registerStage2FieldRef("specialist")}
+                                value={stage2Diagnosis.tests.specialist ? "DONE" : "MISSING"}
+                                disabled={inputLocked}
+                                onChange={(event) => {
+                                  clearStage2FieldError("specialist");
+                                  setStage2Diagnosis((prev) => ({
+                                    ...prev,
+                                    tests: {
+                                      ...prev.tests,
+                                      specialist: event.target.value === "DONE",
+                                    },
+                                  }));
+                                }}
+                                className={stage2FieldClass(
+                                  "specialist",
+                                  "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300 disabled:cursor-not-allowed disabled:bg-slate-100",
+                                )}
+                              >
+                                <option value="MISSING">MISSING</option>
+                                <option value="DONE">DONE</option>
+                              </select>
+                              {stage2FieldErrors.specialist ? (
+                                <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.specialist}</p>
+                              ) : null}
+                            </label>
+                          </div>
+                          {stage2ManualEditEnabled ? (
+                            <label className="mt-2 block text-[11px] text-slate-600">
+                              수동 수정 사유(필수)
+                              <textarea
+                                ref={registerStage2FieldRef("manualEditReason")}
+                                value={stage2ManualEditReason}
+                                onChange={(event) => {
+                                  clearStage2FieldError("manualEditReason");
+                                  setStage2ManualEditReason(event.target.value);
+                                }}
+                                className={stage2FieldClass(
+                                  "manualEditReason",
+                                  "mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-blue-300",
+                                )}
+                                placeholder="자동 수신값을 수정한 이유를 입력하세요."
+                              />
+                              {stage2FieldErrors.manualEditReason ? (
+                                <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.manualEditReason}</p>
+                              ) : null}
+                            </label>
+                          ) : null}
+                        </div>
+
                         <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                          <label className="text-[11px] text-slate-600">
-                            MMSE 점수
-                            <input
-                              value={stage2Diagnosis.tests.mmse ?? ""}
-                              onChange={(event) =>
-                                setStage2Diagnosis((prev) => ({
-                                  ...prev,
-                                  tests: {
-                                    ...prev.tests,
-                                    mmse: event.target.value === "" ? undefined : Number(event.target.value),
-                                  },
-                                }))
-                              }
-                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
-                            />
-                          </label>
-                          <label className="text-[11px] text-slate-600">
-                            CDR/GDS 점수
-                            <input
-                              value={stage2Diagnosis.tests.cdr ?? ""}
-                              onChange={(event) =>
-                                setStage2Diagnosis((prev) => ({
-                                  ...prev,
-                                  tests: {
-                                    ...prev.tests,
-                                    cdr: event.target.value === "" ? undefined : Number(event.target.value),
-                                  },
-                                }))
-                              }
-                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
-                            />
-                          </label>
-                          <label className="text-[11px] text-slate-600">
-                            신경인지검사 유형
-                            <select
-                              value={stage2Diagnosis.tests.neuroCognitiveType ?? ""}
-                              onChange={(event) =>
-                                setStage2Diagnosis((prev) => ({
-                                  ...prev,
-                                  tests: {
-                                    ...prev.tests,
-                                    neuroCognitiveType:
-                                      (event.target.value as Stage2Diagnosis["tests"]["neuroCognitiveType"]) || undefined,
-                                  },
-                                }))
-                              }
-                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
+                          {step2Tasks.map((task) => (
+                            <div
+                              key={task.label}
+                              className={cn(
+                                "rounded-md border px-2 py-1.5 text-[11px]",
+                                task.done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700",
+                              )}
                             >
-                              <option value="">선택</option>
-                              <option value="CERAD-K">CERAD-K</option>
-                              <option value="SNSB-II">SNSB-II</option>
-                              <option value="SNSB-C">SNSB-C</option>
-                              <option value="LICA">LICA</option>
-                            </select>
-                          </label>
-                          <label className="text-[11px] text-slate-600">
-                            전문의 소견
-                            <select
-                              value={stage2Diagnosis.tests.specialist ? "DONE" : "MISSING"}
-                              onChange={(event) =>
-                                setStage2Diagnosis((prev) => ({
-                                  ...prev,
-                                  tests: {
-                                    ...prev.tests,
-                                    specialist: event.target.value === "DONE",
-                                  },
-                                }))
-                              }
-                              className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
-                            >
-                              <option value="MISSING">MISSING</option>
-                              <option value="DONE">DONE</option>
-                            </select>
-                          </label>
+                              <p className="font-semibold">{task.done ? "완료" : "대기"}</p>
+                              <p className="mt-0.5">{task.label}</p>
+                            </div>
+                          ))}
                         </div>
 
                         {stage2ResultMissingCount > 0 ? (
@@ -8844,7 +10008,7 @@ export function Stage1OpsDetail({
                           </div>
                         ) : (
                           <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
-                            필수 검사 입력 누락이 없습니다. 결과 반영 후 STEP3로 이동할 수 있습니다.
+                            필수 검사 입력 누락이 없습니다. 결과 반영 후 STEP3 모델 산출을 확인할 수 있습니다.
                           </div>
                         )}
 
@@ -8859,58 +10023,101 @@ export function Stage1OpsDetail({
                   }
                   const approvedReady = stage3PendingApprovalCount === 0;
                   const highPriorityRecs = ragRecommendations.slice(0, 3);
+                  const stage3Step2Errors = stage3ErrorSummaryEntries.filter((entry) =>
+                    stage3ErrorOrderByStep.CONTACT_EXECUTION.includes(entry.key as Stage3TaskFieldKey),
+                  );
+                  const isDiffPathFlow = stage3ReviewDraft.diffNeeded;
+                  const flowProgress = isDiffPathFlow
+                    ? [
+                        { label: "통화 기록", done: stage3Step2Flow.consultStarted || callMemo.trim().length > 0 },
+                        { label: "검사/조치 계획 확정", done: stage3DiffDraft.testBiomarker || stage3DiffDraft.testBrainImaging || stage3DiffDraft.testOther },
+                        { label: "예약 확정", done: stage3Step2Flow.bookingConfirmed },
+                        { label: "문자/캘린더", done: stage3Step2Flow.messageSent && stage3Step2Flow.calendarSynced },
+                      ]
+                    : [
+                        { label: "통화 기록", done: stage3Step2Flow.consultStarted || callMemo.trim().length > 0 },
+                        { label: "재평가 안내 계획", done: stage3Step2Flow.infoCollected },
+                        { label: "추적 일정 확정", done: stage3Step2Flow.bookingConfirmed },
+                        { label: "리마인더/캘린더", done: stage3Step2Flow.messageSent && stage3Step2Flow.calendarSynced },
+                      ];
+                  const previousExamSummary = [
+                    `Stage1 우선도 ${modelPriorityMeta.bandLabel} (${Math.round(modelPriorityValue)}점)`,
+                    `Stage2 결과 ${stage2ResolvedLabel}${stage2ResolvedMciStage ? `(${stage2ResolvedMciStage})` : ""}`,
+                    `현재 감별경로 상태 ${diffStatus}`,
+                  ];
 
                   return (
                     <section id="stage3-step2-input" className="rounded-lg border border-gray-200 bg-white p-4">
-                      <h4 className="text-sm font-bold text-slate-900">{isStage2OpsView ? "2차 1단계 신경심리검사 실행" : "감별검사/뇌영상 경로 실행"}</h4>
+                      <h4 className="text-sm font-bold text-slate-900">
+                        {isDiffPathFlow
+                          ? "이전검사 리뷰 → 전화 상담 → 예약/문자/캘린더 → 결과 수집"
+                          : "이전검사 리뷰 → 전화 상담 → 재평가 안내/추적 계획"}
+                      </h4>
                       <p className="mt-1 text-[11px] text-gray-600">
-                        {isStage2OpsView
-                          ? "의뢰/예약/결과수신 경로를 한 화면에서 처리하고 문자/캘린더 기록까지 연결합니다."
-                          : "전화 상담 기반 정보 수집 → RAG 자동기록 → 예약/문자/캘린더 패키지 실행까지 한 화면에서 처리합니다."}
+                        {isDiffPathFlow
+                          ? "이전 검사 결과를 확인한 뒤 통화로 연계/예약을 진행하고, 필요 시 결과 수집을 반영합니다."
+                          : "이전 검사 결과를 확인한 뒤 통화로 재평가 안내와 추적 계획을 확정합니다."}
                       </p>
 
-                      <div className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 p-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-xs font-semibold text-indigo-900">업무 플로우 미리보기</p>
-                          <span className="rounded border border-indigo-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
-                            현재 상태 {diffStatus} · 승인대기 {stage3PendingApprovalCount}건
-                          </span>
-                        </div>
-                        <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-6">
-                          {flowItems.map((step) => {
-                            const done = stage3Step2Flow[step.key];
-                            return (
-                              <div
-                                key={step.key}
-                                className={cn(
-                                  "rounded border px-2 py-1.5 text-[10px]",
-                                  done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-600",
-                                )}
-                              >
-                                <p className="font-semibold">{step.label}</p>
-                                <p className="mt-0.5">{done ? "DONE" : "PENDING"}</p>
-                              </div>
-                            );
-                          })}
-                        </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+                        {flowProgress.map((item) => (
+                          <div
+                            key={item.label}
+                            className={cn(
+                              "rounded border px-2 py-1.5 text-[11px]",
+                              item.done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-700",
+                            )}
+                          >
+                            <p className="font-semibold">{item.done ? "완료" : "대기"}</p>
+                            <p className="mt-0.5">{item.label}</p>
+                          </div>
+                        ))}
                       </div>
+
+                      {stage3Step2Errors.length > 0 ? (
+                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2">
+                          <p className="text-[11px] font-semibold text-rose-700">필수 항목 누락 {stage3Step2Errors.length}건</p>
+                          <ul className="mt-1 space-y-1">
+                            {stage3Step2Errors.map((entry) => (
+                              <li key={entry.key}>
+                                <button
+                                  type="button"
+                                  onClick={() => focusStage3ErrorField(entry.key as Stage3TaskFieldKey)}
+                                  className="text-[11px] text-rose-700 underline decoration-dotted underline-offset-2"
+                                >
+                                  - {entry.message}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
 
                       <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.1fr]">
                         <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <div className="rounded-md border border-slate-200 bg-white p-2">
+                            <p className="text-xs font-semibold text-slate-800">이전 검사 요약</p>
+                            <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                              {previousExamSummary.map((item) => (
+                                <li key={item}>• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-xs font-semibold text-slate-800">상담 프로그램 패널</p>
-                            <span className="text-[10px] text-slate-500">기존 상담 UI 재사용</span>
+                            <p className="text-xs font-semibold text-slate-800">전화 상담 패널</p>
+                            <span className="text-[10px] text-slate-500">Stage1 상담/문자 시스템 재사용</span>
                           </div>
                           <div className="grid grid-cols-3 gap-1">
                             <button
                               type="button"
                               onClick={() => {
+                                clearStage3FieldError("CONTACT_EXECUTION", "step2CallRecord");
                                 setStage3Step2Flow((prev) => ({ ...prev, consultStarted: true }));
                                 handleCallStart();
                               }}
                               className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700"
                             >
-                              상담 시작
+                              전화상담 시작
                             </button>
                             <button
                               type="button"
@@ -8919,7 +10126,7 @@ export function Stage1OpsDetail({
                                 if (first) {
                                   handleApplyRagRecommendation(first);
                                   setStage3Step2Flow((prev) => ({ ...prev, consultStarted: true }));
-                                  toast.success("추천 스크립트를 불러왔습니다.");
+                                  toast.success("스크립트 추천을 적용했습니다.");
                                 } else {
                                   toast("추천 스크립트가 아직 없습니다.");
                                 }
@@ -8932,9 +10139,14 @@ export function Stage1OpsDetail({
                               type="button"
                               onClick={() => {
                                 if (!callMemo.trim()) {
+                                  applyStage3ValidationErrors("CONTACT_EXECUTION", {
+                                    ...stage3FieldErrorsByStep.CONTACT_EXECUTION,
+                                    step2CallRecord: "통화 메모를 입력해 주세요.",
+                                  });
                                   toast.error("통화 메모를 먼저 입력해 주세요.");
                                   return;
                                 }
+                                clearStage3FieldError("CONTACT_EXECUTION", "step2CallRecord");
                                 setStage3Step2Flow((prev) => ({ ...prev, infoCollected: true }));
                                 setStage3DiffDraft((prev) => ({ ...prev, note: callMemo.trim() }));
                                 appendAuditLog(`Stage3 통화 메모 반영: ${callMemo.slice(0, 60)}`);
@@ -8944,6 +10156,26 @@ export function Stage1OpsDetail({
                               통화 메모 반영
                             </button>
                           </div>
+                          <label className="text-[11px] text-slate-600">
+                            통화 메모 요약(필수)
+                            <textarea
+                              ref={registerStage3FieldRef("step2CallRecord")}
+                              value={callMemo}
+                              onChange={(event) => {
+                                clearStage3FieldError("CONTACT_EXECUTION", "step2CallRecord");
+                                setCallMemo(event.target.value);
+                              }}
+                              className={stage3FieldClass(
+                                "CONTACT_EXECUTION",
+                                "step2CallRecord",
+                                "mt-1 h-14 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300",
+                              )}
+                              placeholder="전화 상담 핵심 내용을 요약하세요."
+                            />
+                            {stage3CurrentStepErrors.step2CallRecord ? (
+                              <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step2CallRecord}</p>
+                            ) : null}
+                          </label>
 
                           <SmsPanel
                             stageLabel="3차"
@@ -8964,59 +10196,66 @@ export function Stage1OpsDetail({
                         </div>
 
                         <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                          <p className="text-xs font-semibold text-slate-800">연계/예약 폼(자동 채움 중심)</p>
+                          <p className="text-xs font-semibold text-slate-800">연계/예약 폼</p>
                           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                             <label className="text-[11px] text-slate-600">
-                              병원/기관
+                              병원/기관(필수)
                               <input
+                                ref={registerStage3FieldRef("step2Hospital")}
                                 value={stage3DiffDraft.preferredHospital}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, preferredHospital: event.target.value }))}
-                                className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                onChange={(event) => {
+                                  clearStage3FieldError("CONTACT_EXECUTION", "step2Hospital");
+                                  setStage3DiffDraft((prev) => ({ ...prev, preferredHospital: event.target.value }));
+                                }}
+                                className={stage3FieldClass(
+                                  "CONTACT_EXECUTION",
+                                  "step2Hospital",
+                                  "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300",
+                                )}
                               />
+                              {stage3CurrentStepErrors.step2Hospital ? (
+                                <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step2Hospital}</p>
+                              ) : null}
                             </label>
                             <label className="text-[11px] text-slate-600">
-                              연락처
+                              예약 일시(필수)
                               <input
-                                value={stage3DiffDraft.orgPhone}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, orgPhone: event.target.value }))}
-                                className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
-                              />
-                            </label>
-                            <label className="text-[11px] text-slate-600">
-                              예약 일시
-                              <input
+                                ref={registerStage3FieldRef("step2BookingAt")}
                                 type="datetime-local"
                                 value={toDateTimeLocalValue(stage3DiffDraft.bookingAt)}
-                                onChange={(event) =>
+                                onChange={(event) => {
+                                  clearStage3FieldError("CONTACT_EXECUTION", "step2BookingAt");
                                   setStage3DiffDraft((prev) => ({
                                     ...prev,
                                     bookingAt: fromDateTimeLocalValue(event.target.value) || prev.bookingAt,
-                                  }))
-                                }
-                                className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                  }));
+                                }}
+                                className={stage3FieldClass(
+                                  "CONTACT_EXECUTION",
+                                  "step2BookingAt",
+                                  "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300",
+                                )}
                               />
-                            </label>
-                            <label className="text-[11px] text-slate-600">
-                              대체 일정
-                              <input
-                                type="datetime-local"
-                                value={toDateTimeLocalValue(stage3DiffDraft.bookingAltAt)}
-                                onChange={(event) =>
-                                  setStage3DiffDraft((prev) => ({
-                                    ...prev,
-                                    bookingAltAt: fromDateTimeLocalValue(event.target.value) || prev.bookingAltAt,
-                                  }))
-                                }
-                                className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
-                              />
+                              {stage3CurrentStepErrors.step2BookingAt ? (
+                                <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step2BookingAt}</p>
+                              ) : null}
                             </label>
                           </div>
-                          <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-700">
+                          <div
+                            ref={registerStage3FieldRef("step2TestSelection")}
+                            className={cn(
+                              "grid grid-cols-3 gap-2 rounded-md border border-slate-200 bg-white p-2 text-[11px] text-slate-700",
+                              stage3CurrentStepErrors.step2TestSelection ? "border-rose-300 bg-rose-50" : "",
+                            )}
+                          >
                             <label className="flex items-center gap-1">
                               <input
                                 type="checkbox"
                                 checked={stage3DiffDraft.testBiomarker}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, testBiomarker: event.target.checked }))}
+                                onChange={(event) => {
+                                  clearStage3FieldError("CONTACT_EXECUTION", "step2TestSelection");
+                                  setStage3DiffDraft((prev) => ({ ...prev, testBiomarker: event.target.checked }));
+                                }}
                               />
                               바이오마커
                             </label>
@@ -9024,43 +10263,76 @@ export function Stage1OpsDetail({
                               <input
                                 type="checkbox"
                                 checked={stage3DiffDraft.testBrainImaging}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, testBrainImaging: event.target.checked }))}
+                                onChange={(event) => {
+                                  clearStage3FieldError("CONTACT_EXECUTION", "step2TestSelection");
+                                  setStage3DiffDraft((prev) => ({ ...prev, testBrainImaging: event.target.checked }));
+                                }}
                               />
                               뇌영상
                             </label>
                             <label className="flex items-center gap-1">
                               <input
                                 type="checkbox"
-                                checked={stage3DiffDraft.caregiverCompanion}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, caregiverCompanion: event.target.checked }))}
+                                checked={stage3DiffDraft.testOther}
+                                onChange={(event) => {
+                                  clearStage3FieldError("CONTACT_EXECUTION", "step2TestSelection");
+                                  setStage3DiffDraft((prev) => ({ ...prev, testOther: event.target.checked }));
+                                }}
                               />
-                              보호자 동행
-                            </label>
-                            <label className="flex items-center gap-1">
-                              <input
-                                type="checkbox"
-                                checked={stage3DiffDraft.mobilityIssue}
-                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, mobilityIssue: event.target.checked }))}
-                              />
-                              이동/교통 이슈
+                              기타 검사
                             </label>
                           </div>
-                          <label className="block text-[11px] text-slate-600">
-                            안내/준비사항
-                            <textarea
-                              value={stage3DiffDraft.prepGuide}
-                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, prepGuide: event.target.value }))}
-                              className="mt-1 h-14 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
-                            />
-                          </label>
-                          <label className="block text-[11px] text-slate-600">
-                            상담/운영 메모
-                            <textarea
-                              value={stage3DiffDraft.note}
-                              onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, note: event.target.value }))}
-                              className="mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
-                            />
-                          </label>
+                          {stage3CurrentStepErrors.step2TestSelection ? (
+                            <p className="text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step2TestSelection}</p>
+                          ) : null}
+
+                          <details
+                            open={stage3AdditionalInfoOpen}
+                            onToggle={(event) => setStage3AdditionalInfoOpen((event.target as HTMLDetailsElement).open)}
+                            className="rounded-md border border-slate-200 bg-white p-2"
+                          >
+                            <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">추가 정보(선택)</summary>
+                            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <label className="text-[11px] text-slate-600">
+                                연락처
+                                <input
+                                  value={stage3DiffDraft.orgPhone}
+                                  onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, orgPhone: event.target.value }))}
+                                  className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                />
+                              </label>
+                              <label className="text-[11px] text-slate-600">
+                                대체 일정
+                                <input
+                                  type="datetime-local"
+                                  value={toDateTimeLocalValue(stage3DiffDraft.bookingAltAt)}
+                                  onChange={(event) =>
+                                    setStage3DiffDraft((prev) => ({
+                                      ...prev,
+                                      bookingAltAt: fromDateTimeLocalValue(event.target.value) || prev.bookingAltAt,
+                                    }))
+                                  }
+                                  className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                />
+                              </label>
+                            </div>
+                            <label className="mt-2 block text-[11px] text-slate-600">
+                              안내/준비사항
+                              <textarea
+                                value={stage3DiffDraft.prepGuide}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, prepGuide: event.target.value }))}
+                                className="mt-1 h-14 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
+                              />
+                            </label>
+                            <label className="mt-2 block text-[11px] text-slate-600">
+                              운영 메모
+                              <textarea
+                                value={stage3DiffDraft.note}
+                                onChange={(event) => setStage3DiffDraft((prev) => ({ ...prev, note: event.target.value }))}
+                                className="mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300"
+                              />
+                            </label>
+                          </details>
 
                           <div className="rounded-md border border-indigo-200 bg-white p-2">
                             <div className="flex flex-wrap items-center gap-1">
@@ -9105,7 +10377,9 @@ export function Stage1OpsDetail({
 
                           <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
                             <p className="text-[10px] text-emerald-800">
-                              완료 조건: SCHEDULED 이상 + 승인 대기 0건. 예약 확정 시 문자/캘린더/감사 로그를 일괄 기록합니다.
+                              {isDiffPathFlow
+                                ? "예약 확정 패키지: 예약 저장 + 확인 문자 + 캘린더 등록 + 감사 로그 기록"
+                                : "추적 계획 패키지: 다음 연락 일정 저장 + 안내 문자 + 캘린더 등록 + 감사 로그 기록"}
                             </p>
                             <button
                               type="button"
@@ -9113,10 +10387,175 @@ export function Stage1OpsDetail({
                               disabled={!approvedReady}
                               className="mt-2 w-full rounded-md border border-emerald-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              예약 확정 패키지 실행
+                              {isDiffPathFlow ? "예약 확정 패키지 실행" : "추적 계획 패키지 실행"}
                             </button>
                             {!approvedReady ? <p className="mt-1 text-[10px] text-amber-700">승인 대기 액션을 먼저 처리하세요.</p> : null}
                           </div>
+
+                          <label className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={stage3ShowResultCollection}
+                              onChange={(event) => setStage3ShowResultCollection(event.target.checked)}
+                            />
+                            검사 완료/결과 수신 입력 열기 (Step3 진입 필수)
+                          </label>
+                          {stage3ShowResultCollection ? (
+                            <div className="rounded-md border border-slate-200 bg-white p-2">
+                              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                <label className="text-[11px] text-slate-600">
+                                  수행 일시(필수)
+                                  <input
+                                    ref={registerStage3FieldRef("step2PerformedAt")}
+                                    type="datetime-local"
+                                    value={toDateTimeLocalValue(stage3DiffDraft.resultPerformedAt)}
+                                    onChange={(event) => {
+                                      clearStage3FieldError("CONTACT_EXECUTION", "step2PerformedAt");
+                                      setStage3DiffDraft((prev) => ({
+                                        ...prev,
+                                        resultPerformedAt: fromDateTimeLocalValue(event.target.value) || "",
+                                      }));
+                                    }}
+                                    className={stage3FieldClass(
+                                      "CONTACT_EXECUTION",
+                                      "step2PerformedAt",
+                                      "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300",
+                                    )}
+                                  />
+                                  {stage3CurrentStepErrors.step2PerformedAt ? (
+                                    <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step2PerformedAt}</p>
+                                  ) : null}
+                                </label>
+                                <label className="text-[11px] text-slate-600">
+                                  결과 라벨
+                                  <select
+                                    value={stage3DiffDraft.resultLabel}
+                                    onChange={(event) =>
+                                      setStage3DiffDraft((prev) => ({
+                                        ...prev,
+                                        resultLabel: event.target.value as Stage3DiffDraft["resultLabel"],
+                                      }))
+                                    }
+                                    className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                  >
+                                    <option value="양성 신호">양성 신호</option>
+                                    <option value="음성 신호">음성 신호</option>
+                                    <option value="불확실">불확실</option>
+                                  </select>
+                                </label>
+                                <label className="text-[11px] text-slate-600">
+                                  바이오마커 결과({isDiffPathFlow ? "필수" : "선택"})
+                                  <input
+                                    ref={registerStage3FieldRef("step2BiomarkerResult")}
+                                    value={stage3DiffDraft.biomarkerResultText ?? ""}
+                                    onChange={(event) => {
+                                      clearStage3FieldError("CONTACT_EXECUTION", "step2BiomarkerResult");
+                                      setStage3DiffDraft((prev) => ({
+                                        ...prev,
+                                        biomarkerResultText: event.target.value,
+                                      }));
+                                    }}
+                                    className={stage3FieldClass(
+                                      "CONTACT_EXECUTION",
+                                      "step2BiomarkerResult",
+                                      "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300",
+                                    )}
+                                  />
+                                  {stage3CurrentStepErrors.step2BiomarkerResult ? (
+                                    <p className="mt-1 text-[10px] font-semibold text-rose-600">
+                                      {stage3CurrentStepErrors.step2BiomarkerResult}
+                                    </p>
+                                  ) : null}
+                                </label>
+                                <label className="text-[11px] text-slate-600">
+                                  뇌영상 결과({isDiffPathFlow ? "필수" : "선택"})
+                                  <input
+                                    ref={registerStage3FieldRef("step2ImagingResult")}
+                                    value={stage3DiffDraft.imagingResultText ?? ""}
+                                    onChange={(event) => {
+                                      clearStage3FieldError("CONTACT_EXECUTION", "step2ImagingResult");
+                                      setStage3DiffDraft((prev) => ({
+                                        ...prev,
+                                        imagingResultText: event.target.value,
+                                      }));
+                                    }}
+                                    className={stage3FieldClass(
+                                      "CONTACT_EXECUTION",
+                                      "step2ImagingResult",
+                                      "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300",
+                                    )}
+                                  />
+                                  {stage3CurrentStepErrors.step2ImagingResult ? (
+                                    <p className="mt-1 text-[10px] font-semibold text-rose-600">
+                                      {stage3CurrentStepErrors.step2ImagingResult}
+                                    </p>
+                                  ) : null}
+                                </label>
+                              </div>
+                              <label className="mt-2 block text-[11px] text-slate-600">
+                                결과 요약(필수)
+                                <textarea
+                                  ref={registerStage3FieldRef("step2ResultSummary")}
+                                  value={stage3DiffDraft.resultSummary}
+                                  onChange={(event) => {
+                                    clearStage3FieldError("CONTACT_EXECUTION", "step2ResultSummary");
+                                    setStage3DiffDraft((prev) => ({ ...prev, resultSummary: event.target.value }));
+                                  }}
+                                  className={stage3FieldClass(
+                                    "CONTACT_EXECUTION",
+                                    "step2ResultSummary",
+                                    "mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300",
+                                  )}
+                                  placeholder="결과 요약을 입력하세요."
+                                />
+                                {stage3CurrentStepErrors.step2ResultSummary ? (
+                                  <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step2ResultSummary}</p>
+                                ) : null}
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const resultErrors: Stage3TaskFieldErrors = {};
+                                  if (!stage3DiffDraft.resultPerformedAt) {
+                                    resultErrors.step2PerformedAt = "결과 수행 일시를 입력하세요.";
+                                  }
+                                  if (isDiffPathFlow && !stage3DiffDraft.biomarkerResultText?.trim()) {
+                                    resultErrors.step2BiomarkerResult = "바이오마커 결과를 입력하세요.";
+                                  }
+                                  if (isDiffPathFlow && !stage3DiffDraft.imagingResultText?.trim()) {
+                                    resultErrors.step2ImagingResult = "뇌영상 결과를 입력하세요.";
+                                  }
+                                  if (!stage3DiffDraft.resultSummary.trim()) {
+                                    resultErrors.step2ResultSummary = "결과 요약을 입력하세요.";
+                                  }
+                                  if (Object.keys(resultErrors).length > 0) {
+                                    applyStage3ValidationErrors("CONTACT_EXECUTION", {
+                                      ...stage3FieldErrorsByStep.CONTACT_EXECUTION,
+                                      ...resultErrors,
+                                    });
+                                    toast.error("결과 수집 항목을 확인해 주세요.");
+                                    return;
+                                  }
+                                  setStage3FieldErrorsByStep((prev) => {
+                                    const nextErrors = { ...(prev.CONTACT_EXECUTION ?? {}) };
+                                    delete nextErrors.step2PerformedAt;
+                                    delete nextErrors.step2BiomarkerResult;
+                                    delete nextErrors.step2ImagingResult;
+                                    delete nextErrors.step2ResultSummary;
+                                    return {
+                                      ...prev,
+                                      CONTACT_EXECUTION: nextErrors,
+                                    };
+                                  });
+                                  handleStage3DiffPathAction("APPLY_RESULT");
+                                  toast.success("검사 결과가 반영되었습니다.");
+                                }}
+                                className="mt-2 rounded border border-indigo-200 bg-indigo-50 px-3 py-1 text-[11px] font-semibold text-indigo-700"
+                              >
+                                결과 수집/입력 반영
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
 
@@ -9169,64 +10608,246 @@ export function Stage1OpsDetail({
                   <div className="mt-3">
                     <StepChecklist items={STAGE2_TASK_CHECKLIST.RESPONSE_HANDLING} />
                   </div>
+                  {(() => {
+                    const stage2Step3Errors = stage2ErrorSummaryEntries.filter(
+                      (entry) =>
+                        entry.key === "classification" ||
+                        entry.key === "rationale" ||
+                        entry.key === "overrideReason" ||
+                        entry.key === "mmse" ||
+                        entry.key === "cdr" ||
+                        entry.key === "neuro" ||
+                        entry.key === "specialist",
+                    );
+                    const stage2TimeFlow = [
+                      ...detail.timeline
+                        .filter((event) =>
+                          event.type === "STAGE2_PLAN_CONFIRMED" ||
+                          event.type === "STAGE2_RESULTS_RECORDED" ||
+                          event.type === "DIFF_RESULT_APPLIED" ||
+                          event.type === "STAGE2_CLASS_CONFIRMED",
+                        )
+                        .slice(0, 6)
+                        .map((event) => ({
+                          at: event.at,
+                          label: eventTitle(event),
+                          summary: event.summary,
+                        })),
+                      ...(stage2ModelRunState.updatedAt
+                        ? [
+                            {
+                              at: stage2ModelRunState.updatedAt,
+                              label:
+                                stage2ModelRunState.status === "RUNNING"
+                                  ? "모델 실행 시작"
+                                  : stage2ModelRunState.status === "DONE"
+                                    ? "모델 결과 생성"
+                                    : stage2ModelRunState.status === "FAILED"
+                                      ? "모델 실행 실패"
+                                      : "모델 실행 대기",
+                              summary:
+                                stage2ModelRunState.status === "DONE"
+                                  ? `추천 분류 ${stage2ModelRunState.recommendedLabel ?? "-"}`
+                                  : "검사 결과 반영 후 모델 결과를 갱신합니다.",
+                            },
+                          ]
+                        : []),
+                    ]
+                      .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
+                      .slice(-6);
+                    const modelStatusChip =
+                      stage2ModelRunState.status === "DONE"
+                        ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                        : stage2ModelRunState.status === "RUNNING"
+                          ? "bg-blue-50 border-blue-200 text-blue-700"
+                          : stage2ModelRunState.status === "FAILED"
+                            ? "bg-rose-50 border-rose-200 text-rose-700"
+                            : "bg-slate-100 border-slate-200 text-slate-700";
+                    const modelReadyForConfirm = stage2ModelReady && stage2DraftProbs;
+                    return (
+                      <>
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs font-semibold text-slate-800">Stage2 처리 흐름</p>
+                          <div className="mt-2 space-y-1.5">
+                            {stage2TimeFlow.length > 0 ? (
+                              stage2TimeFlow.map((event) => (
+                                <div key={`${event.at}-${event.label}`} className="rounded border border-slate-200 bg-white px-2 py-1.5 text-[10px]">
+                                  <p className="font-semibold text-slate-700">{event.label}</p>
+                                  <p className="text-slate-500">{formatDateTime(event.at)}</p>
+                                  <p className="text-slate-600">{event.summary}</p>
+                                </div>
+                              ))
+                            ) : (
+                              <p className="rounded border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-500">
+                                단계 이벤트가 아직 없습니다.
+                              </p>
+                            )}
+                          </div>
+                        </div>
 
-                  <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                    {stage2ModelAvailable && stage2DraftProbs ? (
-                      <Stage2ClassificationViz
-                        probs={stage2DraftProbs}
-                        predictedLabel={stage2ClassificationDraft}
-                        mciSeverity={stage2DraftMciStage}
-                        mciScore={stage2ClassificationDraft === "MCI" ? (stage2DraftMciStage === "위험" ? 82 : stage2DraftMciStage === "양호" ? 34 : 58) : undefined}
-                      />
-                    ) : (
-                      <ModelGateGuard stage={2} missing={stage2GateMissing} onOpenStep={focusStage2ResultInput} />
-                    )}
-                  </div>
+                        <div className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-indigo-900">모델 산출 상태</p>
+                            <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", modelStatusChip)}>
+                              {stage2ModelRunState.status}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-indigo-800">
+                            추천 분류: {stage2ModelRecommendedLabel ?? "대기"} · 업데이트 {formatDateTime(stage2ModelRunState.updatedAt)}
+                          </p>
+                          <p className="text-[10px] text-indigo-700">
+                            모델 결과는 운영 참고용이며, 최종 분류 확정은 담당자 판단으로 기록됩니다.
+                          </p>
+                        </div>
 
-                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    <label className="text-[11px] text-slate-600">
-                      분류 결과
-                      <select
-                        value={stage2ClassificationDraft}
-                        onChange={(event) => setStage2ClassificationDraft(event.target.value as Stage2ClassLabel)}
-                        className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300"
-                      >
-                        <option value="정상">정상</option>
-                        <option value="MCI">MCI</option>
-                        <option value="치매">치매</option>
-                      </select>
-                    </label>
-                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
-                      <p className="font-semibold">MCI 세분화(ANN)</p>
-                      <p className="mt-1">{stage2ClassificationDraft === "MCI" ? stage2DraftMciStage ?? "산출 대기" : "-"}</p>
-                    </div>
-                  </div>
+                        {stage2Step3Errors.length > 0 ? (
+                          <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2">
+                            <p className="text-[11px] font-semibold text-rose-700">누락/오류 항목</p>
+                            <ul className="mt-1 space-y-1">
+                              {stage2Step3Errors.map((entry) => (
+                                <li key={entry.key}>
+                                  <button
+                                    type="button"
+                                    onClick={() => focusStage2ErrorField(entry.key)}
+                                    className="text-[11px] text-rose-700 underline decoration-dotted underline-offset-2"
+                                  >
+                                    - {entry.message}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        ) : null}
 
-                  <label className="mt-3 block text-[11px] text-slate-600">
-                    확정 근거 1줄(필수)
-                    <textarea
-                      value={stage2RationaleDraft}
-                      onChange={(event) => setStage2RationaleDraft(event.target.value)}
-                      className="mt-1 h-20 w-full rounded-md border border-gray-200 px-2 py-1 text-xs outline-none focus:border-blue-300"
-                      placeholder="분류 근거를 입력하세요. (운영 참고 / 담당자 확인 필요)"
-                    />
-                  </label>
+                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          {modelReadyForConfirm ? (
+                            <Stage2ClassificationViz
+                              probs={stage2DraftProbs}
+                              predictedLabel={stage2ModelRecommendedLabel ?? stage2ClassificationDraft}
+                              mciSeverity={stage2DraftMciStage}
+                              mciScore={
+                                (stage2ModelRecommendedLabel ?? stage2ClassificationDraft) === "MCI"
+                                  ? stage2DraftMciStage === "위험"
+                                    ? 82
+                                    : stage2DraftMciStage === "양호"
+                                      ? 34
+                                      : 58
+                                  : undefined
+                              }
+                            />
+                          ) : (
+                            <ModelGateGuard stage={2} missing={stage2GateMissing} onOpenStep={focusStage2ResultInput} />
+                          )}
+                        </div>
 
-                  {!stage2CanConfirm ? (
-                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                      {stage2MissingRequirements.map((message) => (
-                        <p key={message}>- {message}</p>
-                      ))}
-                    </div>
-                  ) : null}
+                        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                          <label className="text-[11px] text-slate-600">
+                            분류 결과
+                            <select
+                              ref={registerStage2FieldRef("classification")}
+                              value={stage2ClassificationDraft}
+                              onChange={(event) => {
+                                const nextValue = event.target.value as Stage2ClassLabel;
+                                clearStage2FieldError("classification");
+                                clearStage2FieldError("overrideReason");
+                                setStage2ClassificationEdited(true);
+                                setStage2ClassificationDraft(nextValue);
+                                if (stage2ModelRecommendedLabel && nextValue === stage2ModelRecommendedLabel) {
+                                  setStage2ClassificationOverrideReason("");
+                                }
+                              }}
+                              className={stage2FieldClass(
+                                "classification",
+                                "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-xs outline-none focus:border-blue-300",
+                              )}
+                            >
+                              <option value="정상">정상</option>
+                              <option value="MCI">MCI</option>
+                              <option value="치매">치매</option>
+                            </select>
+                            {stage2FieldErrors.classification ? (
+                              <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.classification}</p>
+                            ) : null}
+                            {stage2ClassificationEdited ? (
+                              <p className="mt-1 text-[10px] font-semibold text-indigo-700">담당자 분류 선택이 변경되었습니다.</p>
+                            ) : null}
+                          </label>
+                          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+                            <p className="font-semibold">
+                              <TermWithTooltip term="ANN" /> 세분화
+                            </p>
+                            <p className="mt-1">{stage2ClassificationDraft === "MCI" ? stage2DraftMciStage ?? "산출 대기" : "-"}</p>
+                          </div>
+                        </div>
 
-                  <button
-                    onClick={confirmStage2Classification}
-                    disabled={!stage2CanConfirm}
-                    className="mt-3 inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a] disabled:opacity-50"
-                  >
-                    <ShieldCheck size={13} /> 분류 확정
-                  </button>
+                        {stage2ClassificationIsOverride ? (
+                          <label className="mt-2 block text-[11px] text-slate-600">
+                            모델 추천과 다르게 확정하는 사유(필수)
+                            <textarea
+                              ref={registerStage2FieldRef("overrideReason")}
+                              value={stage2ClassificationOverrideReason}
+                              onChange={(event) => {
+                                clearStage2FieldError("overrideReason");
+                                setStage2ClassificationOverrideReason(event.target.value);
+                              }}
+                              className={stage2FieldClass(
+                                "overrideReason",
+                                "mt-1 h-16 w-full rounded-md border border-gray-200 px-2 py-1 text-xs outline-none focus:border-blue-300",
+                              )}
+                              placeholder="모델 추천과 다른 분류를 선택한 사유를 입력하세요."
+                            />
+                            {stage2FieldErrors.overrideReason ? (
+                              <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.overrideReason}</p>
+                            ) : null}
+                          </label>
+                        ) : null}
+
+                        <label className="mt-3 block text-[11px] text-slate-600">
+                          확정 근거 1줄(필수)
+                          <textarea
+                            ref={registerStage2FieldRef("rationale")}
+                            value={stage2RationaleDraft}
+                            onChange={(event) => {
+                              clearStage2FieldError("rationale");
+                              setStage2RationaleDraft(event.target.value);
+                            }}
+                            className={stage2FieldClass(
+                              "rationale",
+                              "mt-1 h-20 w-full rounded-md border border-gray-200 px-2 py-1 text-xs outline-none focus:border-blue-300",
+                            )}
+                            placeholder="예: MMSE __점, CDR/GDS __, 신경인지검사 __ 결과를 근거로 __로 분류함."
+                          />
+                          {stage2FieldErrors.rationale ? (
+                            <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.rationale}</p>
+                          ) : null}
+                        </label>
+
+                        {!stage2CanConfirm ? (
+                          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                            {stage2MissingRequirements.map((message) => (
+                              <p key={message}>- {message}</p>
+                            ))}
+                            {stage2OverrideMissing ? <p>- 모델 추천과 다르게 확정하는 사유를 입력하세요.</p> : null}
+                            <button
+                              type="button"
+                              onClick={focusStage2ResultInput}
+                              className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold text-amber-700"
+                            >
+                              검사 결과 입력 열기
+                            </button>
+                          </div>
+                        ) : null}
+
+                        <button
+                          onClick={confirmStage2Classification}
+                          disabled={!stage2CanConfirm}
+                          className="mt-3 inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a] disabled:opacity-50"
+                        >
+                          <ShieldCheck size={13} /> 분류 확정
+                        </button>
+                      </>
+                    );
+                  })()}
                 </section>
               ) : (
                 <section className="rounded-lg border border-gray-200 bg-white p-4">
@@ -9234,13 +10855,32 @@ export function Stage1OpsDetail({
                   <p className="mt-1 text-[11px] text-gray-600">
                     감별경로 예약/결과 입력 이후에만 위험 추세 검토를 완료할 수 있습니다.
                   </p>
-                  {!stage3ModelAvailable ? (
+                  {!stage3ResultEvidenceReady ? (
                     <div className="mt-3">
-                      <ModelGateGuard stage={3} missing={stage3GateMissing} onOpenStep={focusStage3ResultInput} />
+                      <ModelGateGuard
+                        stage={3}
+                        missing={
+                          stage3GateMissing.length > 0
+                            ? stage3GateMissing
+                            : ["검사 수행 일시", "바이오마커 결과", "뇌영상 결과", "결과 요약"]
+                        }
+                        onOpenStep={focusStage3ResultInput}
+                      />
+                    </div>
+                  ) : !stage3ModelAvailable ? (
+                    <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-[11px] text-blue-800">
+                      검사결과는 반영되었고 모델 산출을 기다리는 중입니다.
+                      <button
+                        type="button"
+                        onClick={() => handleStage3DiffPathAction("APPLY_RESULT")}
+                        className="mt-2 block rounded border border-blue-300 bg-white px-2 py-1 text-[10px] font-semibold text-blue-700"
+                      >
+                        모델 결과 갱신
+                      </button>
                     </div>
                   ) : !stage3DiffReadyForRisk ? (
                     <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-800">
-                      감별경로 상태가 {detail.stage3?.diffPathStatus ?? "NONE"} 입니다. STEP2에서 예약 또는 완료 상태를 먼저 기록해 주세요.
+                      감별경로 상태가 {detail.stage3?.diffPathStatus ?? "NONE"} 입니다. STEP2에서 결과 수집/입력 반영을 먼저 완료해 주세요.
                     </div>
                   ) : (
                     <div className="mt-3 space-y-3">
@@ -12300,6 +13940,454 @@ function RiskTrendChart({
   );
 }
 
+const STAGE2_STEP2_READY_STATUSES = new Set<Stage2PlanItemStatus>([
+  "REFERRED",
+  "SCHEDULED",
+  "DONE",
+  "RECEIVED",
+  "EXCEPTION",
+]);
+
+function planItemStatusLabel(status: Stage2PlanItemStatus) {
+  if (status === "PENDING") return "대기";
+  if (status === "REFERRED") return "의뢰됨";
+  if (status === "SCHEDULED") return "예약확정";
+  if (status === "DONE") return "수행완료";
+  if (status === "RECEIVED") return "결과수신";
+  if (status === "NEEDS_REVIEW") return "검증필요";
+  if (status === "MISSING") return "누락";
+  return "예외(수기)";
+}
+
+function planItemRequiredLevelLabel(requiredLevel: Stage2PlanItemRequiredLevel) {
+  if (requiredLevel === "REQUIRED") return "필수";
+  if (requiredLevel === "RECOMMENDED") return "권고";
+  return "선택";
+}
+
+function planItemSourceLabel(source: Stage2PlanItemSource) {
+  if (source === "AUTO") return "AUTO(병원)";
+  if (source === "MANUAL") return "MANUAL(센터)";
+  if (source === "OVERRIDE") return "OVERRIDE";
+  return "출처 미지정";
+}
+
+function planItemStatusClass(status: Stage2PlanItemStatus) {
+  if (status === "MISSING" || status === "NEEDS_REVIEW") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (status === "DONE" || status === "RECEIVED") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "REFERRED" || status === "SCHEDULED") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (status === "EXCEPTION") return "border-violet-200 bg-violet-50 text-violet-700";
+  return "border-slate-200 bg-slate-100 text-slate-700";
+}
+
+function planSummaryStatusLabel(status: Stage2PlanStatus) {
+  if (status === "PAUSED") return "PAUSED";
+  if (status === "IN_PROGRESS") return "IN_PROGRESS";
+  if (status === "READY") return "READY";
+  return "BLOCKED";
+}
+
+function planSummaryStatusClass(status: Stage2PlanStatus) {
+  if (status === "READY") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "IN_PROGRESS") return "border-blue-200 bg-blue-50 text-blue-700";
+  if (status === "BLOCKED") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-slate-200 bg-slate-100 text-slate-700";
+}
+
+function renderPlanItemTerm(item: Stage2PlanItem) {
+  if (item.id === "MMSE") return <GlossaryTooltip term="MMSE" className="text-[11px] font-semibold text-slate-900" />;
+  if (item.id === "CDR_GDS") {
+    return (
+      <span className="text-[11px] font-semibold text-slate-900">
+        <GlossaryTooltip term="CDR" /> 또는 <GlossaryTooltip term="GDS" />
+      </span>
+    );
+  }
+  if (item.id === "NEURO") return <span className="text-[11px] font-semibold text-slate-900">신경인지검사</span>;
+  if (item.id === "SPECIALIST") return <span className="text-[11px] font-semibold text-slate-900">전문의 진찰</span>;
+  if (item.id === "GDS_K") return <GlossaryTooltip term="GDS-K" className="text-[11px] font-semibold text-slate-900" />;
+  if (item.id === "ADL") return <GlossaryTooltip term="ADL" className="text-[11px] font-semibold text-slate-900" />;
+  return <GlossaryTooltip term="BPSD" className="text-[11px] font-semibold text-slate-900" />;
+}
+
+function scrollToFirstErrorCard(
+  itemIds: Stage2PlanItemId[],
+  refs: React.MutableRefObject<Partial<Record<Stage2PlanItemId, HTMLDivElement | null>>>,
+) {
+  const firstId = itemIds[0];
+  if (!firstId) return;
+  const target = refs.current[firstId];
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  if ("focus" in target && typeof target.focus === "function") {
+    target.focus();
+  }
+}
+
+function usePlanItems({
+  routeType,
+  hospitalName,
+  dueAt,
+  tests,
+  optionalTests,
+  integrationReceivedAt,
+  integrationUpdatedAt,
+  manualEditEnabled,
+}: {
+  routeType: Stage2PlanRoute;
+  hospitalName: string;
+  dueAt: string;
+  tests: Stage2Diagnosis["tests"];
+  optionalTests: { gdsk: boolean; adl: boolean; bpsd: boolean };
+  integrationReceivedAt?: string;
+  integrationUpdatedAt?: string;
+  manualEditEnabled: boolean;
+}) {
+  return useMemo<Stage2PlanItem[]>(() => {
+    const resolvedDueAt = dueAt || "2026-02-20T09:00:00";
+    const resolvedUpdatedAt = integrationUpdatedAt || integrationReceivedAt;
+    const defaultSource: Stage2PlanItemSource = manualEditEnabled ? "OVERRIDE" : routeType === "HOSPITAL_REFERRAL" ? "AUTO" : "MANUAL";
+    const hasMmse = typeof tests.mmse === "number" && Number.isFinite(tests.mmse);
+    const hasCdrOrGds = typeof tests.cdr === "number" && Number.isFinite(tests.cdr);
+    const hasNeuro = Boolean(tests.neuroCognitiveType);
+    const hasSpecialist = Boolean(tests.specialist);
+
+    const buildActions = (status: Stage2PlanItemStatus): Stage2PlanItemAction[] => {
+      if (status === "MISSING") {
+        return [
+          { key: "OPEN_PIPELINE", label: "결과 입력 열기", enabled: true, intent: "danger" },
+          { key: "REQUEST_RESULT", label: "결과 재요청", enabled: true, intent: "warning" },
+          { key: "MANUAL_EXCEPTION", label: "수기 입력(예외)", enabled: true, intent: "default" },
+        ];
+      }
+      if (status === "NEEDS_REVIEW") {
+        return [
+          { key: "VIEW_RESULT", label: "결과 보기", enabled: true, intent: "default" },
+          { key: "MARK_REVIEWED", label: "검증 완료", enabled: true, intent: "success" },
+        ];
+      }
+      if (status === "REFERRED" || status === "SCHEDULED") {
+        return [
+          { key: "OPEN_PIPELINE", label: "의뢰/예약 확인", enabled: true, intent: "default" },
+          { key: "REQUEST_RESULT", label: "결과 재요청", enabled: true, intent: "warning" },
+        ];
+      }
+      if (status === "DONE" || status === "RECEIVED" || status === "EXCEPTION") {
+        return [
+          { key: "VIEW_RESULT", label: "결과 보기", enabled: true, intent: "default" },
+          { key: "MARK_REVIEWED", label: "검증 완료", enabled: true, intent: "success" },
+        ];
+      }
+      return [{ key: "OPEN_PIPELINE", label: "작업 열기", enabled: true, intent: "default" }];
+    };
+
+    const items: Stage2PlanItem[] = [
+      {
+        id: "MMSE",
+        label: "MMSE",
+        fullName: "인지기능 선별검사",
+        description: "인지기능 선별검사 점수 수신 상태를 관리합니다.",
+        requiredLevel: routeType === "HOSPITAL_REFERRAL" ? "REQUIRED" : "RECOMMENDED",
+        status: hasMmse ? "RECEIVED" : routeType === "HOSPITAL_REFERRAL" ? "REFERRED" : "PENDING",
+        source: defaultSource,
+        orgName: hospitalName,
+        dueAt: resolvedDueAt,
+        updatedAt: resolvedUpdatedAt,
+        actions: [],
+      },
+      {
+        id: "CDR_GDS",
+        label: "CDR 또는 GDS",
+        fullName: "치매 임상척도",
+        description: "CDR 또는 GDS 점수 중 최소 1개 수신이 필요합니다.",
+        requiredLevel: "REQUIRED",
+        status: hasCdrOrGds ? "RECEIVED" : "MISSING",
+        source: defaultSource,
+        orgName: hospitalName,
+        dueAt: resolvedDueAt,
+        updatedAt: resolvedUpdatedAt,
+        missingReason: hasCdrOrGds ? undefined : "임상척도 점수 미수신",
+        actions: [],
+      },
+      {
+        id: "NEURO",
+        label: "신경인지검사",
+        fullName: "CERAD-K / SNSB-II / SNSB-C / LICA",
+        description: "선택한 신경인지검사 결과를 수신/검증합니다.",
+        requiredLevel: "REQUIRED",
+        status: hasNeuro ? "RECEIVED" : "PENDING",
+        source: defaultSource,
+        orgName: hospitalName,
+        dueAt: resolvedDueAt,
+        updatedAt: resolvedUpdatedAt,
+        actions: [],
+      },
+      {
+        id: "SPECIALIST",
+        label: "전문의 진찰",
+        fullName: "전문의 소견/진찰 기록",
+        description: "전문의 소견 여부와 기록 연결 상태를 관리합니다.",
+        requiredLevel: "REQUIRED",
+        status: hasSpecialist ? "DONE" : routeType === "HOSPITAL_REFERRAL" ? "REFERRED" : "PENDING",
+        source: defaultSource,
+        orgName: hospitalName,
+        dueAt: resolvedDueAt,
+        updatedAt: resolvedUpdatedAt,
+        actions: [],
+      },
+      {
+        id: "GDS_K",
+        label: "GDS-K",
+        fullName: "노인우울척도(한국판)",
+        description: "고령자에서 우울 증상 여부와 정도를 선별하기 위한 자가보고식 설문 도구입니다.",
+        requiredLevel: "OPTIONAL",
+        status: optionalTests.gdsk ? "SCHEDULED" : "PENDING",
+        source: optionalTests.gdsk ? "MANUAL" : null,
+        orgName: hospitalName,
+        dueAt: resolvedDueAt,
+        updatedAt: resolvedUpdatedAt,
+        actions: [],
+      },
+      {
+        id: "ADL",
+        label: "ADL",
+        fullName: "일상생활 수행능력",
+        description: "기능 저하 여부를 평가하는 보조 지표입니다.",
+        requiredLevel: "OPTIONAL",
+        status: optionalTests.adl ? "SCHEDULED" : "PENDING",
+        source: optionalTests.adl ? "MANUAL" : null,
+        orgName: hospitalName,
+        dueAt: resolvedDueAt,
+        updatedAt: resolvedUpdatedAt,
+        actions: [],
+      },
+      {
+        id: "BPSD",
+        label: "BPSD",
+        fullName: "행동·심리 증상",
+        description: "행동·심리 증상 관련 보조 평가 항목입니다.",
+        requiredLevel: "OPTIONAL",
+        status: optionalTests.bpsd ? "SCHEDULED" : "PENDING",
+        source: optionalTests.bpsd ? "MANUAL" : null,
+        orgName: hospitalName,
+        dueAt: resolvedDueAt,
+        updatedAt: resolvedUpdatedAt,
+        actions: [],
+      },
+    ];
+
+    return items.map((item) => ({
+      ...item,
+      actions: buildActions(item.status),
+    }));
+  }, [dueAt, hospitalName, integrationReceivedAt, integrationUpdatedAt, manualEditEnabled, optionalTests.adl, optionalTests.bpsd, optionalTests.gdsk, routeType, tests.cdr, tests.mmse, tests.neuroCognitiveType, tests.specialist]);
+}
+
+function Stage2Step1PlanSummaryBar({
+  summary,
+  route,
+  onOpenMissing,
+  onPrimaryAction,
+  onReviewComplete,
+}: {
+  summary: Stage2PlanSummary;
+  route: Stage2PlanRouteState;
+  onOpenMissing: () => void;
+  onPrimaryAction: () => void;
+  onReviewComplete: () => void;
+}) {
+  const routeLabel = route.routeType === "HOSPITAL_REFERRAL" ? "협력병원 의뢰" : "센터 직접 수행";
+  return (
+    <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+        <div className="rounded-md border border-indigo-100 bg-white px-2 py-1.5">
+          <p className="text-[10px] text-slate-500">플랜 상태</p>
+          <p className={cn("mt-1 inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold", planSummaryStatusClass(summary.status))}>
+            {planSummaryStatusLabel(summary.status)}
+          </p>
+        </div>
+        <div className="rounded-md border border-indigo-100 bg-white px-2 py-1.5">
+          <p className="text-[10px] text-slate-500">연계 경로</p>
+          <p className="mt-1 text-[11px] font-semibold text-slate-900">{routeLabel}</p>
+        </div>
+        <div className="rounded-md border border-indigo-100 bg-white px-2 py-1.5">
+          <p className="text-[10px] text-slate-500">목표일</p>
+          <p className="mt-1 text-[11px] font-semibold text-slate-900">{formatDateTime(route.dueAt)}</p>
+        </div>
+        <div className="rounded-md border border-indigo-100 bg-white px-2 py-1.5">
+          <p className="text-[10px] text-slate-500">최근 동기화</p>
+          <p className="mt-1 text-[11px] font-semibold text-slate-900">{formatDateTime(route.lastSyncAt)}</p>
+        </div>
+        <div className="rounded-md border border-indigo-100 bg-white px-2 py-1.5">
+          <p className="text-[10px] text-slate-500">필수자료 충족도</p>
+          <p className="mt-1 text-[11px] font-semibold text-slate-900">{summary.requiredSatisfaction}%</p>
+        </div>
+        <div className="rounded-md border border-indigo-100 bg-white px-2 py-1.5">
+          <button
+            type="button"
+            onClick={onOpenMissing}
+            className={cn(
+              "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold",
+              summary.missingCount > 0
+                ? "border-rose-200 bg-rose-50 text-rose-700"
+                : "border-emerald-200 bg-emerald-50 text-emerald-700",
+            )}
+          >
+            <AlertTriangle size={12} />
+            누락 {summary.missingCount}건
+          </button>
+          <p className="mt-1 text-[10px] text-slate-500">품질 {summary.qualityScore}%</p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onPrimaryAction}
+          className="rounded-md border border-indigo-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-indigo-700"
+        >
+          {route.routeType === "HOSPITAL_REFERRAL" ? "의뢰 생성/재전송" : "센터 일정 생성"}
+        </button>
+        <button
+          type="button"
+          onClick={onReviewComplete}
+          className="rounded-md bg-[#163b6f] px-3 py-1.5 text-[11px] font-semibold text-white"
+        >
+          검토 완료
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PlanRouteCards({
+  routeType,
+  orgName,
+  dueAt,
+  needsReasonOnChange,
+  onSelectRoute,
+}: {
+  routeType: Stage2PlanRoute;
+  orgName?: string;
+  dueAt?: string;
+  needsReasonOnChange?: boolean;
+  onSelectRoute: (route: Stage2PlanRoute) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+      <button
+        type="button"
+        onClick={() => onSelectRoute("HOSPITAL_REFERRAL")}
+        className={cn(
+          "rounded-md border px-3 py-2 text-left",
+          routeType === "HOSPITAL_REFERRAL" ? "border-indigo-300 bg-indigo-50 text-indigo-800" : "border-slate-200 bg-white text-slate-700",
+        )}
+      >
+        <p className="text-xs font-semibold"><GlossaryTooltip term="협약병원 의뢰" /></p>
+        <p className="mt-1 text-[10px]">기관: {orgName || "-"}</p>
+        <p className="text-[10px]">목표일: {formatDateTime(dueAt)}</p>
+      </button>
+      <button
+        type="button"
+        onClick={() => onSelectRoute("CENTER_DIRECT")}
+        className={cn(
+          "rounded-md border px-3 py-2 text-left",
+          routeType === "CENTER_DIRECT" ? "border-indigo-300 bg-indigo-50 text-indigo-800" : "border-slate-200 bg-white text-slate-700",
+        )}
+      >
+        <p className="text-xs font-semibold"><GlossaryTooltip term="센터 직접 수행" /></p>
+        <p className="mt-1 text-[10px]">센터 내부 일정/담당 배정 중심</p>
+        {needsReasonOnChange ? <p className="text-[10px] text-amber-700">기존 의뢰 이력이 있어 경로 변경 시 사유가 필요합니다.</p> : null}
+      </button>
+    </div>
+  );
+}
+
+function PlanItemCard({
+  item,
+  onAction,
+  registerRef,
+}: {
+  item: Stage2PlanItem;
+  onAction: (item: Stage2PlanItem, action: Stage2PlanItemAction) => void;
+  registerRef?: (id: Stage2PlanItemId) => (el: HTMLDivElement | null) => void;
+}) {
+  const isError = item.status === "MISSING" || item.status === "NEEDS_REVIEW";
+  return (
+    <div
+      ref={registerRef?.(item.id)}
+      tabIndex={-1}
+      className={cn(
+        "rounded-md border bg-white p-3 outline-none",
+        isError ? "border-rose-300 bg-rose-50/40" : "border-slate-200",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          {renderPlanItemTerm(item)}
+          <p className="mt-0.5 text-[10px] text-slate-500">{item.fullName}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+            {planItemRequiredLevelLabel(item.requiredLevel)}
+          </span>
+          <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold", planItemStatusClass(item.status))}>
+            {planItemStatusLabel(item.status)}
+          </span>
+        </div>
+      </div>
+      <p className="mt-1 text-[10px] text-slate-600">{item.description}</p>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-slate-600">
+        <p>출처: {planItemSourceLabel(item.source)}</p>
+        <p>기관: {item.orgName || "-"}</p>
+        <p>목표일: {formatDateTime(item.dueAt)}</p>
+        <p>업데이트: {formatDateTime(item.updatedAt)}</p>
+      </div>
+      {item.missingReason ? <p className="mt-1 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">{item.missingReason}</p> : null}
+      <div className="mt-2 flex flex-wrap gap-1">
+        {item.actions.map((action) => (
+          <button
+            key={action.key}
+            type="button"
+            disabled={!action.enabled}
+            onClick={() => onAction(item, action)}
+            className={cn(
+              "rounded border px-1.5 py-1 text-[10px] font-semibold",
+              action.intent === "danger"
+                ? "border-rose-200 bg-rose-50 text-rose-700"
+                : action.intent === "warning"
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : action.intent === "success"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-slate-200 bg-slate-50 text-slate-700",
+              action.enabled ? "" : "cursor-not-allowed opacity-50",
+            )}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PlanItemCardList({
+  items,
+  onAction,
+  registerRef,
+}: {
+  items: Stage2PlanItem[];
+  onAction: (item: Stage2PlanItem, action: Stage2PlanItemAction) => void;
+  registerRef?: (id: Stage2PlanItemId) => (el: HTMLDivElement | null) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+      {items.map((item) => (
+        <PlanItemCard key={item.id} item={item} onAction={onAction} registerRef={registerRef} />
+      ))}
+    </div>
+  );
+}
+
 const STAGE2_TASK_CHECKLIST: Record<Stage1FlowCardId, string[]> = {
   PRECHECK: [
     "Stage1 선별 결과와 Stage2 진입 근거 확인",
@@ -12325,6 +14413,90 @@ const STAGE2_TASK_CHECKLIST: Record<Stage1FlowCardId, string[]> = {
     "다음 단계 결정 이벤트 기록",
   ],
 };
+
+const STAGE2_TERM_GLOSSARY: Record<string, string> = {
+  "MMSE": "인지기능 선별검사(기억/지남력 등) 점수입니다.",
+  "CDR": "치매 중증도 평가 척도입니다.",
+  "GDS": "약어 정의 확인 필요: 업무정의서 기준으로 CDR 대체 척도로 사용 중인지 확인이 필요합니다.",
+  "GDS-K": "고령자에서 우울 증상 여부와 정도를 선별하기 위한 자가보고식 설문 도구입니다.",
+  "ADL": "일상생활 수행능력(식사/옷입기/이동 등) 평가입니다.",
+  "BPSD": "치매 관련 행동·심리 증상(불안/초조/환각 등) 평가입니다.",
+  "MCI": "경도인지장애 분류입니다.",
+  "AD": "알츠하이머형 치매 관련 분류 항목입니다.",
+  "ANN": "모델(인공신경망) 기반 세분화 결과(운영 참고)입니다.",
+  "협약병원 의뢰": "협력 병원에 검사 경로를 의뢰하고 결과를 수신하는 운영 경로입니다.",
+  "센터 직접 수행": "센터 내부 일정으로 검사/평가를 직접 수행하는 운영 경로입니다.",
+};
+
+function GlossaryTooltip({
+  term,
+  className,
+}: {
+  term: string;
+  className?: string;
+}) {
+  return <TermWithTooltip term={term} className={className} />;
+}
+
+function TermWithTooltip({
+  term,
+  className,
+}: {
+  term: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const tooltipId = useId();
+  const wrapperRef = useRef<HTMLSpanElement | null>(null);
+  const description = STAGE2_TERM_GLOSSARY[term];
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!wrapperRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  if (!description) {
+    return <span className={className}>{term}</span>;
+  }
+
+  return (
+    <span ref={wrapperRef} className={cn("relative inline-flex items-center", className)}>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 rounded px-0.5 text-inherit underline decoration-dotted underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-300"
+        aria-describedby={open ? tooltipId : undefined}
+        aria-expanded={open}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={(event) => {
+          const next = event.relatedTarget as Node | null;
+          if (!wrapperRef.current?.contains(next)) setOpen(false);
+        }}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        {term}
+        <AlertCircle size={12} className="text-slate-400" />
+      </button>
+      {open ? (
+        <span
+          id={tooltipId}
+          role="tooltip"
+          className="absolute left-0 top-[calc(100%+6px)] z-40 w-64 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-medium text-slate-600 shadow-lg"
+        >
+          {description}
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function StepChecklist({ items }: { items: string[] }) {
   return (

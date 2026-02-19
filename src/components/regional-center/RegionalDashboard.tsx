@@ -63,10 +63,13 @@ import type {
   AlertSummary,
   DifferentialDelay,
   MapLayer,
+  OpsTodoItem,
   RegionalKpiBlock,
   StageConversionRate,
+  TodoStatus,
 } from './opsContracts';
 import type { RegionalPageId } from './regionalRouting';
+import { buildOpsTodos } from './regionalOpsMockApi';
 
 type AnalyticsPeriod = 'week' | 'month' | 'quarter';
 type RangePreset = '24h' | '7d' | '30d' | '90d';
@@ -851,6 +854,9 @@ export function RegionalDashboard({
   const [showCauseDetail, setShowCauseDetail] = useState(false);
   const [selectedActionId, setSelectedActionId] = useState<ActionEngineId>('STAFFING');
   const [showExtendedTopN, setShowExtendedTopN] = useState(false);
+  const [todoStateById, setTodoStateById] = useState<
+    Record<string, { status: TodoStatus; dismissReason?: string }>
+  >({});
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>('Initial');
   const lastFilterSignatureRef = useRef<string>('');
   const filterSyncTimerRef = useRef<number | null>(null);
@@ -984,6 +990,7 @@ export function RegionalDashboard({
     subRegionSignatureByScopeRef.current = {};
     setStageImpactOpen(false);
     setShowCauseDetail(false);
+    setTodoStateById({});
   }, [region.id, updateSelectedRegionId]);
 
   useEffect(() => {
@@ -2622,37 +2629,98 @@ export function RegionalDashboard({
     return safeOpsText(`이번 주 권장 개입: ${topTwoDistrictLabel}에 초기 처리 인력 우선 배치`);
   }, [selectedKpiKey, topTwoDistrictLabel]);
 
-  const todoItems = useMemo(
-    () => [
-      {
-        id: 'risk',
-        text: safeOpsText(
-          `${getCopyTerm('sla').user} 위험 구역 ${alertSummary.slaAtRiskRegions}곳 확인 → 상위 2곳 우선 개입`,
-        ),
-        onClick: () => updateSelectedKpiKey('regionalSla'),
-      },
-      {
-        id: 'bottleneck',
-        text: safeOpsText(
-          `${getCopyTerm('examDelay').user} 평균 ${Math.round(focusData.differentialDelay.avgWaitDays)}일 → 병목 상세 분석 필요`,
-        ),
-        onClick: () => onNavigateModule?.('cause'),
-      },
-      {
-        id: 'followup',
-        text: safeOpsText(
-          `${getCopyTerm('followupDelay').user} ${alertSummary.overdueFollowups.toLocaleString()}건 → 자동화 확대 검토`,
-        ),
-        onClick: () => onNavigateModule?.('interventions'),
-      },
-    ],
+  const baseTodoItems = useMemo<OpsTodoItem[]>(
+    () =>
+      buildOpsTodos({
+        regionKey: region.id,
+        regionLabel: region.label,
+        selectedRegionSgg: selectedDistrictName,
+        selectedRange: analyticsPeriod,
+        selectedKpiKey,
+        mapLayer: activeMapLayer,
+        alertSummary,
+        avgExamDelayDays: focusData.differentialDelay.avgWaitDays,
+        overdueFollowups: alertSummary.overdueFollowups,
+        longWaitDays: settings.thresholds.longWaitDays,
+      }),
     [
-      alertSummary.overdueFollowups,
-      alertSummary.slaAtRiskRegions,
+      activeMapLayer,
+      alertSummary,
+      analyticsPeriod,
       focusData.differentialDelay.avgWaitDays,
-      onNavigateModule,
-      updateSelectedKpiKey,
+      region.id,
+      region.label,
+      selectedDistrictName,
+      selectedKpiKey,
+      settings.thresholds.longWaitDays,
     ],
+  );
+
+  const todoItems = useMemo(
+    () =>
+      baseTodoItems.map((item) => {
+        const state = todoStateById[item.id];
+        return {
+          ...item,
+          status: state?.status ?? item.status,
+          dismissReason: state?.dismissReason ?? item.dismissReason,
+        };
+      }),
+    [baseTodoItems, todoStateById],
+  );
+
+  const todoActiveCount = useMemo(
+    () => todoItems.filter((item) => item.status === 'open' || item.status === 'acknowledged').length,
+    [todoItems],
+  );
+
+  const setTodoStatus = useCallback((id: string, status: TodoStatus, dismissReason?: string) => {
+    setTodoStateById((prev) => ({
+      ...prev,
+      [id]: {
+        status,
+        dismissReason: dismissReason ?? prev[id]?.dismissReason,
+      },
+    }));
+  }, []);
+
+  const handleTodoAnalyze = useCallback(
+    (item: OpsTodoItem) => {
+      const kpi = item.relatedQueryState.kpiKey as RegionalKpiKey;
+      updateSelectedKpiKey(kpi);
+      if (item.relatedQueryState.areaKey) {
+        updateSelectedDistrict(item.relatedQueryState.areaKey);
+      }
+      updateSelectedRange(item.relatedQueryState.period as AnalyticsPeriod);
+      setTodoStatus(item.id, 'acknowledged');
+      onNavigateModule?.('cause');
+    },
+    [onNavigateModule, setTodoStatus, updateSelectedDistrict, updateSelectedKpiKey, updateSelectedRange],
+  );
+
+  const handleTodoCreate = useCallback(
+    (item: OpsTodoItem) => {
+      const kpi = item.relatedQueryState.kpiKey as RegionalKpiKey;
+      onCreateIntervention?.({
+        kpi,
+        sgg: item.relatedQueryState.areaKey ?? selectedDistrictName ?? null,
+        range: item.relatedQueryState.period as AnalyticsPeriod,
+        source: 'overview',
+        primaryDriverStage: uiEmphasis.primaryDriverStage,
+      });
+      setTodoStatus(item.id, 'converted_to_intervention');
+    },
+    [onCreateIntervention, selectedDistrictName, setTodoStatus, uiEmphasis.primaryDriverStage],
+  );
+
+  const handleTodoDismiss = useCallback(
+    (item: OpsTodoItem) => {
+      const reason = window.prompt('To-Do 제외 사유를 입력하세요.');
+      if (reason == null) return;
+      const normalized = reason.trim();
+      setTodoStatus(item.id, 'dismissed', normalized || '사유 미입력');
+    },
+    [setTodoStatus],
   );
 
   const diagnosisMetrics = useMemo(() => {
@@ -3466,20 +3534,82 @@ export function RegionalDashboard({
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-semibold text-gray-700">오늘의 운영 To-Do</span>
                 <span className="text-[10px] px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700">
-                  3개
+                  활성 {todoActiveCount}개
                 </span>
               </div>
               <div className="space-y-1.5">
-                {todoItems.map((item, index) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={item.onClick}
-                    className="w-full text-left rounded border border-gray-100 bg-gray-50 px-2 py-1.5 text-[11px] text-gray-700 hover:border-blue-200 hover:bg-blue-50"
-                  >
-                    {index + 1}. {item.text}
-                  </button>
-                ))}
+                {todoItems.map((item, index) => {
+                  const statusTone =
+                    item.status === 'converted_to_intervention'
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                      : item.status === 'dismissed'
+                        ? 'border-slate-200 bg-slate-100 text-slate-600'
+                        : item.status === 'acknowledged'
+                          ? 'border-blue-200 bg-blue-50 text-blue-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-700';
+                  const statusLabel =
+                    item.status === 'converted_to_intervention'
+                      ? '개입 전환'
+                      : item.status === 'dismissed'
+                        ? '제외'
+                        : item.status === 'acknowledged'
+                          ? '확인'
+                          : '오픈';
+
+                  return (
+                    <div key={item.id} className="rounded border border-gray-200 bg-gray-50 px-2 py-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-semibold text-gray-800 truncate">
+                            {index + 1}. {item.title}
+                          </div>
+                          <div className="text-[10px] text-gray-600 mt-0.5">{item.reason}</div>
+                          <div className="text-[10px] text-gray-500 mt-0.5">
+                            대상 {item.target} · SLA {item.dueSlaHours}h
+                          </div>
+                        </div>
+                        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${statusTone}`}>
+                          {statusLabel}
+                        </span>
+                      </div>
+                      {item.status === 'dismissed' && item.dismissReason ? (
+                        <div className="mt-1 rounded border border-slate-200 bg-white px-1.5 py-1 text-[10px] text-slate-600">
+                          제외 사유: {item.dismissReason}
+                        </div>
+                      ) : null}
+                      <div className="mt-1.5 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleTodoAnalyze(item)}
+                          className="rounded border border-blue-200 bg-blue-50 px-1.5 py-1 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+                        >
+                          분석 보기
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleTodoCreate(item)}
+                          className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-1 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100"
+                        >
+                          개입 생성
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTodoStatus(item.id, 'acknowledged')}
+                          className="rounded border border-gray-200 bg-white px-1.5 py-1 text-[10px] text-gray-600 hover:bg-gray-100"
+                        >
+                          확인
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleTodoDismiss(item)}
+                          className="rounded border border-gray-200 bg-white px-1.5 py-1 text-[10px] text-gray-500 hover:bg-gray-100"
+                        >
+                          제외
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

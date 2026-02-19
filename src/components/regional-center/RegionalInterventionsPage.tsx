@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  AssignmentPolicy,
   InternalRangeKey,
   Intervention,
   InterventionDraft,
@@ -7,6 +8,7 @@ import type {
   InterventionLog,
   InterventionLogType,
   InterventionMetricSnapshot,
+  OwnerOrg,
   InterventionStageKey,
   InterventionStatus,
   InterventionType,
@@ -14,6 +16,8 @@ import type {
 } from './opsContracts';
 import type { RegionalScope } from '../geomap/regions';
 import { safeOpsText } from '../../lib/uiTextGuard';
+import { findCausePolicy, resolveAssignmentPolicy } from './regionalOpsPolicies';
+import { previewAutoInterventions, type AutoInterventionPreview } from './regionalOpsMockApi';
 
 interface RegionalInterventionsPageProps {
   region: RegionalScope;
@@ -94,6 +98,7 @@ const LOG_TYPE_LABEL: Record<InterventionLogType, string> = {
   adjustment: '조정',
   confirmation: '확인',
   completion: '완료 보고',
+  escalation: '에스컬레이션',
 };
 
 const STAGE_LABEL: Record<InterventionStageKey, string> = {
@@ -119,18 +124,15 @@ const CAUSE_LABEL_BY_KEY: Record<string, string> = {
 };
 
 const OWNER_OPTIONS = ['김운영', '박지원', '이현장', '최기획'] as const;
+const SNAPSHOT_BUCKET_KEY = 'regional_bottleneck_intervention_snapshots_v1';
 
-const AUTO_RULES = [
-  { id: 'RULE-SLA-15', label: 'SLA 위험 15% 초과' },
-  { id: 'RULE-DX-7D', label: '감별검사 지연 7일 이상' },
-  { id: 'RULE-AD-HR-5', label: 'AD 전환 고위험군 미조치 5건 이상' },
-] as const;
-
-const ASSIGNMENT_RULES = [
-  '강남구 → 강남센터장',
-  '서초구 → 서초센터장',
-  '병원 지연 신호 → 협약 병원 담당자',
-];
+const OWNER_ORG_LABEL: Record<OwnerOrg, string> = {
+  regional: '광역',
+  center: '센터',
+  hospital: '병원',
+  system: '시스템',
+  external: '외부',
+};
 
 const hashSeed = (input: string) => {
   let h = 0;
@@ -188,6 +190,45 @@ function formatByUnit(value: number, unit: '%' | '건' | '일' | '점'): string 
   if (unit === '점') return `${value.toFixed(1)}점`;
   if (unit === '일') return `${value.toFixed(1)}일`;
   return `${value.toFixed(1)}%`;
+}
+
+function layerByKpi(kpiKey: KpiKey): 'RISK' | 'BOTTLENECK' | 'GAP' | 'LOAD' {
+  if (kpiKey === 'regionalAdTransitionHotspot') return 'RISK';
+  if (kpiKey === 'regionalScreenToDxRate') return 'GAP';
+  if (kpiKey === 'regionalDxDelayHotspot' || kpiKey === 'regionalRecontact') return 'BOTTLENECK';
+  return 'LOAD';
+}
+
+function metricTypeByKpi(kpiKey: KpiKey): 'count' | 'ratio' {
+  const unit = KPI_UNIT[kpiKey];
+  return unit === '건' ? 'count' : 'ratio';
+}
+
+type BottleneckBeforeSnapshot = {
+  kpiValue: number;
+  backlogCount: number;
+  avgDwellMin: number;
+  stageBreakdown?: Array<{ deltaVsRegionalAvg?: number }>;
+};
+
+type BottleneckSnapshotEnvelope = {
+  snapshotId: string;
+  payload?: {
+    beforeSnapshot?: BottleneckBeforeSnapshot;
+  };
+};
+
+function readBottleneckSnapshot(snapshotId?: string | null): BottleneckBeforeSnapshot | null {
+  if (!snapshotId) return null;
+  try {
+    const raw = window.localStorage.getItem(SNAPSHOT_BUCKET_KEY);
+    if (!raw) return null;
+    const list = JSON.parse(raw) as BottleneckSnapshotEnvelope[];
+    const matched = list.find((item) => item.snapshotId === snapshotId);
+    return matched?.payload?.beforeSnapshot ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function inferTypeByKpi(kpiKey: KpiKey): InterventionType {
@@ -251,7 +292,13 @@ function buildComparison(
   };
 }
 
-function buildLogs(seed: string, owner: string, status: InterventionStatus, createdAt: string): InterventionLog[] {
+function buildLogs(
+  seed: string,
+  owner: string,
+  ownerOrg: OwnerOrg,
+  status: InterventionStatus,
+  createdAt: string,
+): InterventionLog[] {
   const base = Date.parse(createdAt);
   const instructionAt = new Date(base).toISOString();
   const adjustmentAt = new Date(base + 10 * 60 * 60 * 1000).toISOString();
@@ -263,9 +310,11 @@ function buildLogs(seed: string, owner: string, status: InterventionStatus, crea
       id: `${seed}-log-instruction`,
       type: 'instruction',
       actor: owner,
+      actorOrg: ownerOrg,
       timestamp: instructionAt,
       referenceLink: '/regional/bottleneck',
       requiresFollowup: true,
+      followupDueAt: new Date(Date.parse(instructionAt) + FOLLOWUP_LIMIT_HOURS * 60 * 60 * 1000).toISOString(),
       note: safeOpsText('광역센터 지시 전달 및 대상 센터 착수 요청'),
     },
   ];
@@ -275,10 +324,12 @@ function buildLogs(seed: string, owner: string, status: InterventionStatus, crea
       id: `${seed}-log-adjustment`,
       type: 'adjustment',
       actor: OWNER_OPTIONS[(hashSeed(seed) + 1) % OWNER_OPTIONS.length],
+      actorOrg: ownerOrg,
       timestamp: adjustmentAt,
       referenceLink: '/regional/ops',
       requiresFollowup: true,
       followedUpAt: status === 'BLOCKED' ? undefined : confirmationAt,
+      followupDueAt: new Date(Date.parse(adjustmentAt) + FOLLOWUP_LIMIT_HOURS * 60 * 60 * 1000).toISOString(),
       note: safeOpsText('현장 리소스 재조정 및 조치 단계 갱신'),
     });
   }
@@ -288,6 +339,7 @@ function buildLogs(seed: string, owner: string, status: InterventionStatus, crea
       id: `${seed}-log-confirm`,
       type: 'confirmation',
       actor: OWNER_OPTIONS[(hashSeed(seed) + 2) % OWNER_OPTIONS.length],
+      actorOrg: ownerOrg,
       timestamp: confirmationAt,
       referenceLink: 'https://hospital.example.local/sync',
       requiresFollowup: false,
@@ -300,6 +352,7 @@ function buildLogs(seed: string, owner: string, status: InterventionStatus, crea
       id: `${seed}-log-complete`,
       type: 'completion',
       actor: owner,
+      actorOrg: ownerOrg,
       timestamp: completionAt,
       referenceLink: '/regional/reports',
       requiresFollowup: false,
@@ -358,10 +411,12 @@ function buildIntervention(params: {
   id: string;
   regionId: string;
   areaLabel: string;
+  period: InternalRangeKey;
   kpiKey: KpiKey;
   type: InterventionType;
   status: InterventionStatus;
   owner: string;
+  ownerOrg?: OwnerOrg;
   stageKey: InterventionStageKey;
   causeKey: string;
   createdAt: string;
@@ -370,12 +425,55 @@ function buildIntervention(params: {
   notes?: string;
   includeAfter: boolean;
   seed: string;
+  beforeSnapshot?: BottleneckBeforeSnapshot | null;
+  assignmentOverride?: {
+    assigneeId: string;
+    assigneeRole: string;
+    dueSlaHours: number;
+  };
 }): Intervention {
   const beforeMetrics = buildMetrics(`${params.seed}-before`);
+  if (params.beforeSnapshot) {
+    beforeMetrics[params.kpiKey] = Number(params.beforeSnapshot.kpiValue);
+    beforeMetrics.regionalQueueRisk = Number(params.beforeSnapshot.backlogCount);
+  }
   const afterMetrics = params.includeAfter ? buildMetrics(`${params.seed}-after`) : undefined;
   const comparison = buildComparison(params.kpiKey, beforeMetrics, afterMetrics);
   const causeLabel = CAUSE_LABEL_BY_KEY[params.causeKey] ?? params.causeKey;
   const title = `[${causeLabel}] ${params.areaLabel} ${STAGE_LABEL[params.stageKey]} 개입`;
+  const causePolicy = findCausePolicy(params.causeKey);
+  const ownerOrg = params.ownerOrg ?? causePolicy?.ownerOrg ?? 'regional';
+  const assignmentPolicy = params.assignmentOverride
+    ? {
+        assigneeId: params.assignmentOverride.assigneeId,
+        assigneeRole: params.assignmentOverride.assigneeRole,
+        defaultDueSlaHours: params.assignmentOverride.dueSlaHours,
+      }
+    : resolveAssignmentPolicy({
+        regionKey: params.regionId,
+        areaKey: params.areaLabel,
+        causeKey: params.causeKey,
+        ownerOrg,
+      });
+  const dueAt =
+    params.dueAt ??
+    new Date(Date.parse(params.createdAt) + assignmentPolicy.defaultDueSlaHours * 60 * 60 * 1000).toISOString();
+  const context = {
+    regionKey: params.regionId,
+    period: params.period,
+    kpiKey: params.kpiKey,
+    areaKey: params.areaLabel,
+    layer: layerByKpi(params.kpiKey),
+    selectedStage: params.stageKey === 'Stage3' ? '3rd' : params.stageKey === 'Stage2' ? 'L2' : 'contact',
+    selectedCauseKey: params.causeKey,
+    trendMetric: metricTypeByKpi(params.kpiKey),
+  } as const;
+  const successMetric = {
+    kpiKey: params.kpiKey,
+    metricType: metricTypeByKpi(params.kpiKey),
+    targetDelta: metricTypeByKpi(params.kpiKey) === 'count' ? -12 : -2.5,
+    evaluationWindowDays: 7,
+  } as const;
 
   return {
     id: params.id,
@@ -388,22 +486,40 @@ function buildIntervention(params: {
     type: params.type,
     status: params.status,
     owner: params.owner,
+    ownerOrg,
     createdAt: params.createdAt,
-    dueAt: params.dueAt,
+    dueAt,
     ruleId: params.ruleId,
+    context,
+    assignment: {
+      ownerOrg,
+      assigneeId: assignmentPolicy.assigneeId,
+      assigneeName: assignmentPolicy.assigneeRole,
+      dueAt,
+      slaHours: assignmentPolicy.defaultDueSlaHours,
+      escalationPolicyId: `ESC-${params.causeKey.toUpperCase()}`,
+    },
+    successMetric: {
+      ...successMetric,
+    },
     createdFrom: {
       causeKey: params.causeKey,
       kpiKey: params.kpiKey,
+      queryState: context,
       snapshot: {
         kpiValue: comparison.before.value,
         backlogCount: comparison.before.backlog,
-        avgDwell: Number(seeded(`${params.seed}-dwell`, 24, 96).toFixed(1)),
-        deltaVsRegional: Number(seeded(`${params.seed}-delta`, -12, 24).toFixed(1)),
+        avgDwell: params.beforeSnapshot
+          ? Number((params.beforeSnapshot.avgDwellMin / 60).toFixed(1))
+          : Number(seeded(`${params.seed}-dwell`, 24, 96).toFixed(1)),
+        deltaVsRegional: params.beforeSnapshot
+          ? Number((params.beforeSnapshot.stageBreakdown?.[0]?.deltaVsRegionalAvg ?? 0).toFixed(1))
+          : Number(seeded(`${params.seed}-delta`, -12, 24).toFixed(1)),
         unit: KPI_UNIT[params.kpiKey],
       },
     },
     expectedEffectTags: effectTagsByKpi(params.kpiKey),
-    logs: buildLogs(params.seed, params.owner, params.status, params.createdAt),
+    logs: buildLogs(params.seed, params.owner, ownerOrg, params.status, params.createdAt),
     kpiComparison: comparison,
     notes: params.notes ?? safeOpsText(`${params.areaLabel} 대상 ${TYPE_LABEL[params.type]} 지시 항목`),
     evidenceLinks: ['/regional/bottleneck', 'https://hospital.example.local/sync'],
@@ -420,7 +536,11 @@ function buildIntervention(params: {
   };
 }
 
-function buildInitialInterventions(regionId: string, districts: string[]): Intervention[] {
+function buildInitialInterventions(
+  regionId: string,
+  districts: string[],
+  period: InternalRangeKey,
+): Intervention[] {
   const localDistricts = districts.length ? districts : ['권역 전체'];
   const now = Date.now();
   const templates: Array<{
@@ -481,6 +601,7 @@ function buildInitialInterventions(regionId: string, districts: string[]): Inter
       id: `INT-${index + 1}`,
       regionId,
       areaLabel,
+      period,
       kpiKey: template.kpiKey,
       type: template.type,
       status: template.status,
@@ -541,7 +662,9 @@ export function RegionalInterventionsPage({
   pendingDraft,
   onPendingDraftConsumed,
 }: RegionalInterventionsPageProps) {
-  const [interventions, setInterventions] = useState<Intervention[]>(() => buildInitialInterventions(region.id, districtOptions));
+  const [interventions, setInterventions] = useState<Intervention[]>(
+    () => buildInitialInterventions(region.id, districtOptions, selectedRange),
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<InterventionStatus | 'ALL'>('ALL');
   const [typeFilter, setTypeFilter] = useState<InterventionType | 'ALL'>('ALL');
@@ -550,7 +673,7 @@ export function RegionalInterventionsPage({
   const consumedUrlDraftRef = useRef(false);
 
   useEffect(() => {
-    setInterventions(buildInitialInterventions(region.id, districtOptions));
+    setInterventions(buildInitialInterventions(region.id, districtOptions, selectedRange));
     setSelectedId(null);
   }, [districtOptions, region.id]);
 
@@ -563,6 +686,7 @@ export function RegionalInterventionsPage({
       const stageKey = inferStageByDraft(draft);
       const causeKey = draft.selectedCauseKey ?? defaultCauseByKpi(kpiKey);
       const seed = `${region.id}-${areaLabel}-${kpiKey}-${now}`;
+      const snapshot = readBottleneckSnapshot(draft.snapshotId);
       const notes = source === 'url'
         ? safeOpsText('병목·원인 분석에서 전달된 조건으로 자동 초안 생성')
         : safeOpsText('운영자 수동 생성 초안');
@@ -571,6 +695,7 @@ export function RegionalInterventionsPage({
         id: `INT-${Date.now()}`,
         regionId: region.id,
         areaLabel,
+        period: draft.range ?? selectedRange,
         kpiKey,
         type,
         status: 'TODO',
@@ -581,15 +706,16 @@ export function RegionalInterventionsPage({
         dueAt: new Date(Date.parse(now) + DAY_MS * 3).toISOString(),
         includeAfter: false,
         seed,
+        beforeSnapshot: snapshot,
         notes: safeOpsText(
-          `${notes}\n[원인] ${CAUSE_LABEL_BY_KEY[causeKey] ?? causeKey}\n[단계] ${STAGE_LABEL[stageKey]}\n[대상] ${draft.selectedArea ?? areaLabel}`,
+          `${notes}\n[원인] ${CAUSE_LABEL_BY_KEY[causeKey] ?? causeKey}\n[단계] ${STAGE_LABEL[stageKey]}\n[대상] ${draft.selectedArea ?? areaLabel}${draft.snapshotId ? `\n[스냅샷] ${draft.snapshotId}` : ''}`,
         ),
       });
 
       setInterventions((prev) => [created, ...prev]);
       setSelectedId(created.id);
     },
-    [districtOptions, region.id, region.label, selectedRegionSgg],
+    [districtOptions, region.id, region.label, selectedRange, selectedRegionSgg],
   );
 
   useEffect(() => {
@@ -617,6 +743,7 @@ export function RegionalInterventionsPage({
       selectedCauseKey: params.get('cause'),
       selectedArea: params.get('area'),
       primaryDriverStage: params.get('stage') ?? undefined,
+      snapshotId: params.get('snapshotId'),
     };
     createDraftIntervention(urlDraft, 'url');
     consumedUrlDraftRef.current = true;
@@ -633,6 +760,11 @@ export function RegionalInterventionsPage({
     });
   }, [interventions, ownerFilter, selectedKpiKey, selectedRegionSgg, statusFilter, typeFilter]);
 
+  const ownerOptions = useMemo(
+    () => Array.from(new Set([...OWNER_OPTIONS, ...interventions.map((item) => item.owner)])),
+    [interventions],
+  );
+
   const selected = useMemo(() => {
     if (!filtered.length) return null;
     if (!selectedId) return filtered[0];
@@ -644,10 +776,47 @@ export function RegionalInterventionsPage({
     [filtered],
   );
 
-  const expectedAutoCreateCount = useMemo(() => {
-    if (selectedRegionSgg) return 1;
-    return Math.min(4, Math.max(1, districtOptions.length));
-  }, [districtOptions.length, selectedRegionSgg]);
+  const autoPreviewItems = useMemo<AutoInterventionPreview[]>(
+    () =>
+      previewAutoInterventions({
+        regionKey: region.id,
+        selectedRange,
+        selectedRegionSgg,
+        districtOptions,
+        existingOpenInterventions: interventions.map((item) => ({
+          kpiKey: item.kpiKey,
+          areaLabel: item.areaLabel,
+          causeKey: item.createdFrom.causeKey,
+          stageKey: item.stageKey,
+          period: item.context?.period ?? selectedRange,
+          status: item.status,
+        })),
+      }),
+    [districtOptions, interventions, region.id, selectedRange, selectedRegionSgg],
+  );
+
+  const expectedAutoCreateCount = useMemo(
+    () => autoPreviewItems.filter((item) => !item.blockedByDuplicate).length,
+    [autoPreviewItems],
+  );
+
+  const autoRuleSummary = useMemo(
+    () =>
+      Array.from(
+        new Map(autoPreviewItems.map((item) => [item.ruleId, item.ruleLabel])).entries(),
+      ).map(([ruleId, ruleLabel]) => ({ ruleId, ruleLabel })),
+    [autoPreviewItems],
+  );
+
+  const autoAssignmentSummary = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          autoPreviewItems.map((item) => [`${item.ownerOrg}-${item.assigneeId}`, `${OWNER_ORG_LABEL[item.ownerOrg]} → ${item.assigneeRole}`]),
+        ).values(),
+      ),
+    [autoPreviewItems],
+  );
 
   const updateSelectedStatus = (nextStatus: InterventionStatus) => {
     if (!selected) return;
@@ -659,9 +828,14 @@ export function RegionalInterventionsPage({
           id: `${item.id}-status-${Date.now()}`,
           type: nextStatus === 'DONE' ? 'completion' : nextStatus === 'IN_PROGRESS' ? 'adjustment' : 'confirmation',
           actor: '광역 담당자',
+          actorOrg: 'regional',
           timestamp: now,
           referenceLink: '/regional/actions',
           requiresFollowup: nextStatus !== 'DONE',
+          followupDueAt:
+            nextStatus !== 'DONE'
+              ? new Date(Date.parse(now) + FOLLOWUP_LIMIT_HOURS * 60 * 60 * 1000).toISOString()
+              : undefined,
           note: safeOpsText(`상태를 ${STATUS_LABEL[nextStatus]}로 변경`),
         };
         return {
@@ -683,34 +857,96 @@ export function RegionalInterventionsPage({
   };
 
   const handleGenerateAutoInterventions = () => {
-    const targets = selectedRegionSgg
-      ? [selectedRegionSgg]
-      : districtOptions.slice(0, Math.min(4, Math.max(1, districtOptions.length)));
     const now = Date.now();
+    const creatable = autoPreviewItems.filter((item) => !item.blockedByDuplicate);
+    if (!creatable.length) {
+      window.alert('생성 가능한 자동 개입이 없습니다. 중복 규칙을 확인하세요.');
+      return;
+    }
 
-    const generated = targets.map((target, idx) =>
+    const generated = creatable.map((preview, idx) => {
+      const assignmentPolicy: AssignmentPolicy = resolveAssignmentPolicy({
+        regionKey: region.id,
+        areaKey: preview.regionLabel,
+        causeKey: preview.causeKey,
+        ownerOrg: preview.ownerOrg,
+      });
+      return (
       buildIntervention({
         id: `INT-AUTO-${now + idx}`,
         regionId: region.id,
-        areaLabel: target,
-        kpiKey: idx % 2 === 0 ? 'regionalRecontact' : 'regionalDxDelayHotspot',
-        type: idx % 2 === 0 ? 'RECONTACT_PUSH' : 'STAFFING',
+        areaLabel: preview.regionLabel,
+        period: selectedRange,
+        kpiKey: preview.kpiKey,
+        type: inferTypeByKpi(preview.kpiKey),
         status: 'TODO',
-        owner: OWNER_OPTIONS[idx % OWNER_OPTIONS.length],
-        stageKey: idx % 3 === 0 ? 'Stage1' : idx % 3 === 1 ? 'Stage2' : 'Stage3',
-        causeKey: idx % 2 === 0 ? 'contact_failure' : 'hospital_slot_delay',
+        owner: assignmentPolicy.assigneeRole,
+        ownerOrg: preview.ownerOrg,
+        stageKey: preview.stageKey,
+        causeKey: preview.causeKey,
         createdAt: new Date(now).toISOString(),
-        dueAt: new Date(now + DAY_MS * 3).toISOString(),
+        dueAt: new Date(now + preview.dueSlaHours * 60 * 60 * 1000).toISOString(),
         includeAfter: false,
-        ruleId: AUTO_RULES[idx % AUTO_RULES.length].id,
-        seed: `${region.id}-${target}-auto-${idx}`,
-        notes: safeOpsText(`자동 개입 생성 규칙 적용: ${AUTO_RULES[idx % AUTO_RULES.length].label}`),
-      }),
-    );
+        ruleId: preview.ruleId,
+        seed: `${region.id}-${preview.regionLabel}-auto-${idx}`,
+        assignmentOverride: {
+          assigneeId: preview.assigneeId,
+          assigneeRole: preview.assigneeRole,
+          dueSlaHours: preview.dueSlaHours,
+        },
+        notes: safeOpsText(`자동 개입 생성 규칙 적용: ${preview.ruleLabel}\n중복 키: ${preview.dedupeKey}`),
+      })
+      );
+    });
 
     setInterventions((prev) => [...generated, ...prev]);
     setSelectedId(generated[0]?.id ?? null);
     setRuleModalOpen(false);
+  };
+
+  const handleEscalateSelected = () => {
+    if (!selected) return;
+    const policy = findCausePolicy(selected.createdFrom.causeKey);
+    const nextEscalation = policy?.escalationPath?.[0];
+    if (!nextEscalation) {
+      window.alert('등록된 에스컬레이션 경로가 없습니다.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const followupDueAt = new Date(
+      Date.parse(now) + nextEscalation.slaHours * 60 * 60 * 1000,
+    ).toISOString();
+    setInterventions((prev) =>
+      prev.map((item) => {
+        if (item.id !== selected.id) return item;
+        const escalationLog: InterventionLog = {
+          id: `${item.id}-escalation-${Date.now()}`,
+          type: 'escalation',
+          actor: '광역 담당자',
+          actorOrg: 'regional',
+          timestamp: now,
+          referenceLink: '/regional/actions',
+          requiresFollowup: true,
+          followupDueAt,
+          note: safeOpsText(
+            `에스컬레이션: ${nextEscalation.toOrgRole}(${nextEscalation.channel})로 전달 · SLA ${nextEscalation.slaHours}h`,
+          ),
+        };
+        return {
+          ...item,
+          logs: [...item.logs, escalationLog],
+          timeline: [
+            ...item.timeline,
+            {
+              id: `${item.id}-timeline-escalation-${Date.now()}`,
+              at: now,
+              actor: '광역 담당자',
+              message: safeOpsText('에스컬레이션 전달'),
+            },
+          ],
+        };
+      }),
+    );
   };
 
   const selectedProgress = selected ? evaluateProgress(selected) : null;
@@ -847,7 +1083,7 @@ export function RegionalInterventionsPage({
             className="px-2 py-1.5 border border-gray-300 rounded text-sm"
           >
             <option value="ALL">담당 전체</option>
-            {OWNER_OPTIONS.map((owner) => (
+            {ownerOptions.map((owner) => (
               <option key={owner} value={owner}>
                 {owner}
               </option>
@@ -948,6 +1184,10 @@ export function RegionalInterventionsPage({
                   <div className="text-[12px] text-gray-500">
                     대상 {selected.areaLabel} · 담당 {selected.owner} · 생성 {formatDate(selected.createdAt)}
                   </div>
+                  <div className="text-[11px] text-gray-500">
+                    책임 주체 {OWNER_ORG_LABEL[selected.ownerOrg ?? 'regional']} · 기한{' '}
+                    {selected.assignment?.dueAt ? formatDateTime(selected.assignment.dueAt) : selected.dueAt ? formatDateTime(selected.dueAt) : '미설정'}
+                  </div>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {(['TODO', 'IN_PROGRESS', 'DONE', 'BLOCKED'] as InterventionStatus[]).map((status) => (
@@ -964,6 +1204,13 @@ export function RegionalInterventionsPage({
                       {STATUS_LABEL[status]}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={handleEscalateSelected}
+                    className="px-2 py-1 rounded border border-rose-200 bg-rose-50 text-[11px] font-medium text-rose-700 hover:bg-rose-100"
+                  >
+                    에스컬레이션
+                  </button>
                 </div>
               </div>
 
@@ -1015,6 +1262,26 @@ export function RegionalInterventionsPage({
                     </div>
                     <div className="text-gray-600">
                       광역 평균 대비 {selected.createdFrom.snapshot.deltaVsRegional != null ? `${selected.createdFrom.snapshot.deltaVsRegional > 0 ? '+' : ''}${selected.createdFrom.snapshot.deltaVsRegional.toFixed(1)}` : '-'}
+                    </div>
+                  </div>
+                  <div className="rounded border border-gray-200 bg-gray-50 px-2 py-2">
+                    <div className="text-gray-500">책임/배정</div>
+                    <div className="mt-1 font-medium text-gray-800">
+                      {OWNER_ORG_LABEL[selected.assignment?.ownerOrg ?? selected.ownerOrg ?? 'regional']} · {selected.assignment?.assigneeName ?? selected.owner}
+                    </div>
+                    <div className="text-gray-600 mt-0.5">
+                      SLA {selected.assignment?.slaHours ?? '-'}h · 기한{' '}
+                      {selected.assignment?.dueAt ? formatDateTime(selected.assignment.dueAt) : selected.dueAt ? formatDateTime(selected.dueAt) : '미설정'}
+                    </div>
+                  </div>
+                  <div className="rounded border border-gray-200 bg-gray-50 px-2 py-2">
+                    <div className="text-gray-500">성공 기준</div>
+                    <div className="mt-1 font-medium text-gray-800">
+                      {KPI_LABEL[selected.successMetric?.kpiKey ?? selected.kpiKey]} · {selected.successMetric?.metricType === 'count' ? '건수' : '비율'}
+                    </div>
+                    <div className="text-gray-600 mt-0.5">
+                      목표 Δ {selected.successMetric?.targetDelta != null ? `${selected.successMetric.targetDelta > 0 ? '+' : ''}${selected.successMetric.targetDelta}` : '-'} ·
+                      평가창 {selected.successMetric?.evaluationWindowDays ?? 7}일
                     </div>
                   </div>
                 </div>
@@ -1099,6 +1366,7 @@ export function RegionalInterventionsPage({
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-[12px] font-medium text-gray-800">
                             {LOG_TYPE_LABEL[log.type]} · {log.actor}
+                            {log.actorOrg ? ` (${OWNER_ORG_LABEL[log.actorOrg]})` : ''}
                           </div>
                           <div className="flex items-center gap-1">
                             {log.requiresFollowup && (
@@ -1115,6 +1383,11 @@ export function RegionalInterventionsPage({
                         </div>
                         <div className="text-[11px] text-gray-500 mt-0.5">{formatDateTime(log.timestamp)}</div>
                         <div className="text-[12px] text-gray-700 mt-1">{log.note}</div>
+                        {log.followupDueAt ? (
+                          <div className="mt-1 text-[11px] text-gray-600">
+                            후속 기한: {formatDateTime(log.followupDueAt)}
+                          </div>
+                        ) : null}
                         <div className="mt-1 text-[11px]">
                           {log.referenceLink ? (
                             <a href={log.referenceLink} target="_blank" rel="noreferrer" className="text-blue-700 underline underline-offset-2">
@@ -1146,23 +1419,49 @@ export function RegionalInterventionsPage({
             <div className="mt-3 rounded border border-gray-200 bg-gray-50 p-3">
               <div className="text-[12px] font-semibold text-gray-700 mb-1.5">적용 규칙 미리보기</div>
               <div className="space-y-1 text-[12px] text-gray-700">
-                {AUTO_RULES.map((rule) => (
-                  <div key={rule.id}>- {rule.label}</div>
+                {autoRuleSummary.map((rule) => (
+                  <div key={rule.ruleId}>- {rule.ruleLabel}</div>
                 ))}
               </div>
             </div>
 
             <div className="mt-2 rounded border border-violet-200 bg-violet-50 p-3">
               <div className="text-[12px] font-semibold text-violet-800">
-                예상 생성 개수: {expectedAutoCreateCount}건
+                예상 생성 개수: {expectedAutoCreateCount}건 / 전체 후보 {autoPreviewItems.length}건
               </div>
             </div>
 
             <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-3">
               <div className="text-[12px] font-semibold text-gray-700 mb-1.5">담당자 자동 배정 규칙</div>
               <div className="space-y-1 text-[12px] text-gray-700">
-                {ASSIGNMENT_RULES.map((rule) => (
+                {autoAssignmentSummary.map((rule) => (
                   <div key={rule}>- {rule}</div>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-2 rounded border border-gray-200 bg-white p-3 max-h-56 overflow-y-auto">
+              <div className="text-[12px] font-semibold text-gray-700 mb-1.5">생성 대상 프리뷰</div>
+              <div className="space-y-1.5">
+                {autoPreviewItems.map((item) => (
+                  <div
+                    key={item.previewId}
+                    className={`rounded border px-2 py-1.5 text-[11px] ${
+                      item.blockedByDuplicate
+                        ? 'border-rose-200 bg-rose-50 text-rose-700'
+                        : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    }`}
+                  >
+                    <div className="font-semibold">
+                      {item.regionLabel} · {KPI_LABEL[item.kpiKey]} · {item.stageKey}
+                    </div>
+                    <div className="mt-0.5">
+                      {item.ruleLabel} · {OWNER_ORG_LABEL[item.ownerOrg]} · {item.assigneeRole} · SLA {item.dueSlaHours}h
+                    </div>
+                    {item.blockedByDuplicate ? (
+                      <div className="mt-0.5">차단 사유: {item.blockedReason}</div>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             </div>
@@ -1178,7 +1477,12 @@ export function RegionalInterventionsPage({
               <button
                 type="button"
                 onClick={handleGenerateAutoInterventions}
-                className="px-3 py-1.5 rounded bg-purple-600 text-sm font-semibold text-white hover:bg-purple-700"
+                disabled={expectedAutoCreateCount === 0}
+                className={`px-3 py-1.5 rounded text-sm font-semibold text-white ${
+                  expectedAutoCreateCount === 0
+                    ? 'bg-gray-300 cursor-not-allowed'
+                    : 'bg-purple-600 hover:bg-purple-700'
+                }`}
               >
                 자동 생성 실행
               </button>
@@ -1189,4 +1493,3 @@ export function RegionalInterventionsPage({
     </div>
   );
 }
-

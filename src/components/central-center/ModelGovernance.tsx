@@ -2,10 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import type { TabContext } from '../../lib/useTabContext';
-import {
-  MOCK_POLICY_CHANGES,
-  type PolicyChangeEvent,
-} from '../../mocks/mockCentralOps';
+import { fetchPolicyChanges } from '../../lib/centralApi';
+import type { PolicyChangeEvent } from '../../mocks/mockCentralOps';
 
 interface ModelGovernanceProps {
   context?: TabContext;
@@ -418,9 +416,28 @@ function ImpactMiniChart({ points, stroke, chartId }: ImpactMiniChartProps) {
 export function ModelGovernance({ context, onNavigate }: ModelGovernanceProps) {
   const [selectedId, setSelectedId] = useState<string>(context?.changeId ?? '');
   const [expandedReasons, setExpandedReasons] = useState<Record<string, boolean>>({});
+  const [policyChanges, setPolicyChanges] = useState<PolicyChangeEvent[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchPolicyChanges()
+      .then((rows) => {
+        if (cancelled) return;
+        setPolicyChanges(rows);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPolicyChanges([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const rows = useMemo<GovernanceRow[]>(() => {
-    return [...MOCK_POLICY_CHANGES]
+    return [...policyChanges]
       .sort((a, b) => new Date(b.deployedAt).getTime() - new Date(a.deployedAt).getTime())
       .map((event) => {
         const extension = CHANGE_EXTENSION_BY_ID[event.id] ?? buildFallbackExtension(event);
@@ -436,7 +453,7 @@ export function ModelGovernance({ context, onNavigate }: ModelGovernanceProps) {
           rollback: event.status === 'rollback',
         };
       });
-  }, []);
+  }, [policyChanges]);
 
   useEffect(() => {
     if (context?.changeId) {

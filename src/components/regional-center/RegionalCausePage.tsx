@@ -15,7 +15,7 @@ import {
   LabelList,
 } from 'recharts';
 import { AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import type { RegionalScope } from '../geomap/regions';
 import type { InternalRangeKey, InterventionDraft, KpiKey } from './opsContracts';
 import { safeOpsText } from '../../lib/uiTextGuard';
@@ -38,6 +38,10 @@ type RegionalNeed = 'high' | 'medium' | 'low';
 type HighlightLevel = 'none' | 'watch' | 'critical';
 type TrendAlertType = 'increasing_streak' | 'no_decrease' | 'rebound';
 type TrendSeverity = 'watch' | 'critical';
+type TrendMetric = 'count' | 'ratio';
+type EvidenceType = 'call_log' | 'appointment' | 'integration' | 'manual';
+type EvidenceConfidence = 'high' | 'med' | 'low';
+type UnclassifiedOwner = CauseOwner;
 
 type StageTopCause = { causeKey: string; ratio: number };
 
@@ -61,6 +65,12 @@ type CauseTopNItem = {
     actionable: boolean;
     regionalNeed: RegionalNeed;
   };
+  evidence: {
+    type: EvidenceType;
+    link: string | null;
+    confidence: EvidenceConfidence;
+    missingReason?: string;
+  };
 };
 
 type AreaComparisonItem = {
@@ -80,8 +90,48 @@ type CauseTrendPoint = {
 
 type CauseTrendAlert = {
   type: TrendAlertType;
+  metric: TrendMetric;
   days: number;
   severity: TrendSeverity;
+  delta: number;
+};
+
+type KpiDefinition = {
+  backlogType: 'snapshot_waiting' | 'period_accumulated';
+  denominator: 'overall' | 'stage' | 'cause';
+  areaOwnership: 'resident' | 'center' | 'hospital';
+};
+
+type ClassificationCoverage = {
+  classifiedRatio: number;
+  unclassifiedRatio: number;
+  unclassifiedOwner: UnclassifiedOwner;
+};
+
+type SummaryResponse = {
+  stageBacklogBreakdown: StageBacklogBreakdownItem[];
+  kpiDefinition: KpiDefinition;
+  classificationCoverage: ClassificationCoverage;
+};
+
+type CausesResponse = {
+  causes: CauseTopNItem[];
+  coverage: ClassificationCoverage;
+};
+
+type TrendResponse = {
+  metric: TrendMetric;
+  points: Array<{ dateKey: string; value: number; count: number; ratio: number }>;
+  alerts: CauseTrendAlert[];
+};
+
+type InterventionBeforeSnapshot = {
+  kpiValue: number;
+  backlogCount: number;
+  avgDwellMin: number;
+  stageBreakdown: StageBacklogBreakdownItem[];
+  causeBreakdownTop5: CauseTopNItem[];
+  coverage: ClassificationCoverage;
 };
 
 type OperationRecommendation = {
@@ -146,6 +196,47 @@ const REGIONAL_NEED_LABEL: Record<RegionalNeed, string> = {
 const ALERT_STYLE: Record<TrendSeverity, string> = {
   watch: 'bg-amber-50 text-amber-700 border-amber-200',
   critical: 'bg-red-50 text-red-700 border-red-200',
+};
+
+const TREND_METRIC_LABEL: Record<TrendMetric, string> = {
+  count: '건수',
+  ratio: '비율',
+};
+
+const EVIDENCE_TYPE_LABEL: Record<EvidenceType, string> = {
+  call_log: '콜로그',
+  appointment: '예약',
+  integration: '연계',
+  manual: '수기',
+};
+
+const EVIDENCE_CONFIDENCE_LABEL: Record<EvidenceConfidence, string> = {
+  high: 'High',
+  med: 'Med',
+  low: 'Low',
+};
+
+const EVIDENCE_CONFIDENCE_STYLE: Record<EvidenceConfidence, string> = {
+  high: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  med: 'border-amber-200 bg-amber-50 text-amber-700',
+  low: 'border-rose-200 bg-rose-50 text-rose-700',
+};
+
+const KPI_DEFINITION_LABEL = {
+  backlogType: {
+    snapshot_waiting: '스냅샷 대기',
+    period_accumulated: '기간 누적',
+  } as Record<KpiDefinition['backlogType'], string>,
+  denominator: {
+    overall: '전체 분모',
+    stage: 'Stage 분모',
+    cause: '원인 분모',
+  } as Record<KpiDefinition['denominator'], string>,
+  areaOwnership: {
+    resident: '거주지 기준',
+    center: '관할센터 기준',
+    hospital: '병원 위치 기준',
+  } as Record<KpiDefinition['areaOwnership'], string>,
 };
 
 const HIGHLIGHT_STYLE: Record<HighlightLevel, string> = {
@@ -228,6 +319,10 @@ function formatRatio(value: number): string {
   return `${value.toFixed(1)}%`;
 }
 
+function formatTrendValue(metric: TrendMetric, value: number): string {
+  return metric === 'count' ? formatCount(value) : formatRatio(value);
+}
+
 function buildStageBacklogBreakdown(seed: string): StageBacklogBreakdownItem[] {
   const raw = STAGE_ORDER.map((stageKey, idx) => {
     const count = Math.round(sv(`${seed}-${stageKey}-count`, 82 + idx * 12, 360 + idx * 20));
@@ -263,9 +358,29 @@ function buildCauseTopN(seed: string, selectedStage: StageKey | null, selectedAr
       8,
       Math.round(sv(`${seed}-${cause.causeKey}-count`, 42, 260) * stageWeight * areaWeight),
     );
+    const evidenceTypePool: EvidenceType[] = ['call_log', 'appointment', 'integration', 'manual'];
+    const evidenceType = evidenceTypePool[hashSeed(`${seed}-${cause.causeKey}-evidence-type`) % evidenceTypePool.length];
+    const confidencePool: EvidenceConfidence[] = ['high', 'med', 'low'];
+    const confidence = confidencePool[hashSeed(`${seed}-${cause.causeKey}-evidence-confidence`) % confidencePool.length];
+    const hasLink = hashSeed(`${seed}-${cause.causeKey}-evidence-link`) % 100 >= 23;
+    const missingReasonPool = [
+      '외부 시스템 미연동',
+      '콜로그 미수집',
+      '수기 이력 미등록',
+      '예약 시스템 응답 지연',
+    ];
+    const missingReason =
+      missingReasonPool[hashSeed(`${seed}-${cause.causeKey}-missing`) % missingReasonPool.length];
+
     return {
       ...cause,
       count,
+      evidence: {
+        type: evidenceType,
+        link: hasLink ? `/regional/bottleneck?cause=${cause.causeKey}` : null,
+        confidence,
+        ...(hasLink ? {} : { missingReason }),
+      },
     };
   }).sort((a, b) => b.count - a.count);
 
@@ -280,6 +395,7 @@ function buildCauseTopN(seed: string, selectedStage: StageKey | null, selectedAr
       actionable: row.actionable,
       regionalNeed: row.regionalNeed,
     },
+    evidence: row.evidence,
   }));
 }
 
@@ -363,46 +479,79 @@ function buildTrendPoints(
   });
 }
 
-function deriveTrendAlerts(points: CauseTrendPoint[]): CauseTrendAlert[] {
+function buildKpiDefinition(seed: string): KpiDefinition {
+  const backlogType: KpiDefinition['backlogType'] =
+    hashSeed(`${seed}-backlog-type`) % 100 < 82 ? 'snapshot_waiting' : 'period_accumulated';
+  const denominatorPool: KpiDefinition['denominator'][] = ['overall', 'stage', 'cause'];
+  const denominator = denominatorPool[hashSeed(`${seed}-denominator`) % denominatorPool.length];
+  const areaOwnershipPool: KpiDefinition['areaOwnership'][] = ['center', 'resident', 'hospital'];
+  const areaOwnership = areaOwnershipPool[hashSeed(`${seed}-area-ownership`) % areaOwnershipPool.length];
+  return { backlogType, denominator, areaOwnership };
+}
+
+function buildClassificationCoverage(seed: string, selectedStage: StageKey | null, selectedCauseKey: string | null): ClassificationCoverage {
+  const stageBias = selectedStage ? (hashSeed(`${selectedStage}-coverage`) % 16) - 8 : 0;
+  const causeBias = selectedCauseKey ? (hashSeed(`${selectedCauseKey}-coverage`) % 14) - 7 : 0;
+  const classified = clamp(Number((sv(`${seed}-classified`, 64, 94) + stageBias + causeBias).toFixed(1)), 28, 98);
+  const unclassified = Number((100 - classified).toFixed(1));
+  const ownerPool: UnclassifiedOwner[] = ['system', 'center', 'hospital', 'external'];
+  const unclassifiedOwner = ownerPool[hashSeed(`${seed}-unclassified-owner`) % ownerPool.length];
+  return {
+    classifiedRatio: classified,
+    unclassifiedRatio: unclassified,
+    unclassifiedOwner,
+  };
+}
+
+function deriveTrendAlerts(points: CauseTrendPoint[], metric: TrendMetric): CauseTrendAlert[] {
   if (points.length < 3) return [];
 
   const alerts: CauseTrendAlert[] = [];
+  const series = points.map((point) => (metric === 'count' ? point.count : point.ratio));
   let increasingStreak = 1;
-  for (let i = points.length - 1; i > 0; i -= 1) {
-    if (points[i].ratio > points[i - 1].ratio) increasingStreak += 1;
+  for (let i = series.length - 1; i > 0; i -= 1) {
+    if (series[i] > series[i - 1]) increasingStreak += 1;
     else break;
   }
   if (increasingStreak >= 3) {
+    const delta = Number((series[series.length - 1] - series[Math.max(0, series.length - increasingStreak)]).toFixed(1));
     alerts.push({
       type: 'increasing_streak',
+      metric,
       days: increasingStreak,
       severity: increasingStreak >= 5 ? 'critical' : 'watch',
+      delta,
     });
   }
 
-  const recent = points.slice(-Math.min(5, points.length));
-  const hasDecrease = recent.some((point, idx) => idx > 0 && point.ratio < recent[idx - 1].ratio);
-  if (!hasDecrease && recent.length >= 4) {
+  const recent = series.slice(-Math.min(5, series.length));
+  const hasDecrease = recent.some((value, idx) => idx > 0 && value < recent[idx - 1]);
+  if (!hasDecrease && recent.length >= 4 && recent[recent.length - 1] >= recent[0]) {
+    const delta = Number((recent[recent.length - 1] - recent[0]).toFixed(1));
     alerts.push({
       type: 'no_decrease',
+      metric,
       days: recent.length,
       severity: recent.length >= 5 ? 'critical' : 'watch',
+      delta,
     });
   }
 
-  const pivotIndex = Math.max(1, points.length - 4);
-  const pivotWindow = points.slice(pivotIndex - 1);
-  const ratioSeries = pivotWindow.map((point) => point.ratio);
+  const pivotIndex = Math.max(1, series.length - 4);
+  const pivotWindow = series.slice(pivotIndex - 1);
   if (
-    ratioSeries.length >= 4 &&
-    ratioSeries[1] < ratioSeries[0] &&
-    ratioSeries[2] > ratioSeries[1] &&
-    ratioSeries[3] > ratioSeries[2]
+    pivotWindow.length >= 4 &&
+    pivotWindow[1] < pivotWindow[0] &&
+    pivotWindow[2] > pivotWindow[1] &&
+    pivotWindow[3] > pivotWindow[2]
   ) {
+    const delta = Number((pivotWindow[3] - pivotWindow[1]).toFixed(1));
     alerts.push({
       type: 'rebound',
+      metric,
       days: 2,
       severity: 'watch',
+      delta,
     });
   }
 
@@ -430,6 +579,111 @@ function buildStageImpactRows(seed: string) {
       desc: '보조 신호 변화와 3차 경로 큐 증감이 함께 나타남',
     },
   ];
+}
+
+function buildSummaryResponse(seed: string, selectedStage: StageKey | null, selectedCauseKey: string | null): SummaryResponse {
+  return {
+    stageBacklogBreakdown: buildStageBacklogBreakdown(`${seed}-stage`),
+    kpiDefinition: buildKpiDefinition(`${seed}-definition`),
+    classificationCoverage: buildClassificationCoverage(`${seed}-coverage`, selectedStage, selectedCauseKey),
+  };
+}
+
+function buildCausesResponse(seed: string, selectedStage: StageKey | null, selectedArea: string | null): CausesResponse {
+  return {
+    causes: buildCauseTopN(`${seed}-causes`, selectedStage, selectedArea),
+    coverage: buildClassificationCoverage(`${seed}-coverage`, selectedStage, null),
+  };
+}
+
+function buildTrendResponse(
+  seed: string,
+  period: InternalRangeKey,
+  selectedCauseKey: string | null,
+  selectedStage: StageKey | null,
+  selectedArea: string | null,
+  metric: TrendMetric,
+): TrendResponse {
+  const points = buildTrendPoints(seed, period, selectedCauseKey, selectedStage, selectedArea);
+  const alerts = deriveTrendAlerts(points, metric);
+  return {
+    metric,
+    points: points.map((point) => ({
+      dateKey: point.dateKey,
+      value: metric === 'count' ? point.count : point.ratio,
+      count: point.count,
+      ratio: point.ratio,
+    })),
+    alerts,
+  };
+}
+
+function buildBeforeSnapshot(
+  selectedKpiKey: KpiKey,
+  stageBreakdown: StageBacklogBreakdownItem[],
+  causes: CauseTopNItem[],
+  coverage: ClassificationCoverage,
+): InterventionBeforeSnapshot {
+  const totalBacklog = stageBreakdown.reduce((sum, row) => sum + row.count, 0);
+  const weightedDwell =
+    stageBreakdown.reduce((sum, row) => sum + row.avgDwellMinutes * row.count, 0) / Math.max(1, totalBacklog);
+  const mainKpiValue = (() => {
+    if (selectedKpiKey === 'regionalQueueRisk') return totalBacklog;
+    if (selectedKpiKey === 'regionalDxDelayHotspot') return Number((weightedDwell / 60).toFixed(1));
+    if (selectedKpiKey === 'regionalSla') {
+      const riskRatio = stageBreakdown.find((row) => row.stageKey === 'recontact')?.ratio ?? stageBreakdown[0]?.ratio ?? 0;
+      return Number((100 - riskRatio).toFixed(1));
+    }
+    if (selectedKpiKey === 'regionalRecontact') {
+      return Number((causes.find((cause) => cause.causeKey === 'contact_failure')?.ratio ?? causes[0]?.ratio ?? 0).toFixed(1));
+    }
+    if (selectedKpiKey === 'regionalDataReadiness') {
+      return Number((100 - (causes.find((cause) => cause.causeKey === 'data_gap')?.ratio ?? 0)).toFixed(1));
+    }
+    if (selectedKpiKey === 'regionalGovernance') {
+      return Number((100 - coverage.unclassifiedRatio).toFixed(1));
+    }
+    if (selectedKpiKey === 'regionalAdTransitionHotspot') {
+      return Number((causes[0]?.ratio ?? 0).toFixed(1));
+    }
+    if (selectedKpiKey === 'regionalScreenToDxRate') {
+      return Number((100 - (causes.find((cause) => cause.causeKey === 'hospital_slot_delay')?.ratio ?? 0)).toFixed(1));
+    }
+    return Number((causes[0]?.ratio ?? 0).toFixed(1));
+  })();
+
+  return {
+    kpiValue: mainKpiValue,
+    backlogCount: totalBacklog,
+    avgDwellMin: Number(weightedDwell.toFixed(1)),
+    stageBreakdown,
+    causeBreakdownTop5: causes.slice(0, 5),
+    coverage,
+  };
+}
+
+async function postRegionalIntervention(payload: {
+  from: 'bottleneck';
+  queryState: Record<string, unknown>;
+  beforeSnapshot: InterventionBeforeSnapshot;
+}) {
+  const bucketKey = 'regional_bottleneck_intervention_snapshots_v1';
+  const existingRaw = window.localStorage.getItem(bucketKey);
+  const existing = existingRaw ? (JSON.parse(existingRaw) as Array<Record<string, unknown>>) : [];
+  const interventionId = `INT-${Date.now()}`;
+  const snapshotId = `SNAP-${Date.now()}`;
+  existing.unshift({
+    snapshotId,
+    interventionId,
+    createdAt: new Date().toISOString(),
+    payload,
+  });
+  window.localStorage.setItem(bucketKey, JSON.stringify(existing.slice(0, 200)));
+  return {
+    interventionId,
+    snapshotId,
+    redirectUrl: `/regional/interventions/new?interventionId=${interventionId}&snapshotId=${snapshotId}`,
+  };
 }
 
 function buildOperationRecommendations(
@@ -500,10 +754,19 @@ function metricToneByDelta(deltaVsAvg: number): string {
   return 'text-gray-700';
 }
 
+function formatSigned(value: number, unit = ''): string {
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}${unit}`;
+}
+
 function alertLabel(alert: CauseTrendAlert): string {
-  if (alert.type === 'increasing_streak') return `${alert.days}일 연속 증가`;
-  if (alert.type === 'no_decrease') return `${alert.days}일 감소 없음`;
-  return '감소 후 재상승';
+  const metric = TREND_METRIC_LABEL[alert.metric];
+  const deltaText =
+    alert.metric === 'ratio'
+      ? `${alert.delta > 0 ? '+' : ''}${alert.delta.toFixed(1)}%p`
+      : `${alert.delta > 0 ? '+' : ''}${Math.round(alert.delta)}건`;
+  if (alert.type === 'increasing_streak') return `${metric} ${alert.days}일 연속 증가(${deltaText})`;
+  if (alert.type === 'no_decrease') return `${metric} ${alert.days}일 감소 없음(${deltaText})`;
+  return `${metric} 감소 후 재상승(${deltaText})`;
 }
 
 function SectionSkeleton() {
@@ -533,8 +796,11 @@ export function RegionalCausePage({
   const [selectedCauseKey, setSelectedCauseKey] = useState<string | null>(
     initialParams.get('cause') || null,
   );
+  const [trendMetric, setTrendMetric] = useState<TrendMetric>(
+    initialParams.get('trendMetric') === 'count' ? 'count' : 'ratio',
+  );
   const [selectedArea, setSelectedArea] = useState<string | null>(
-    initialParams.get('area') || null,
+    initialParams.get('compareArea') || initialParams.get('area') || null,
   );
   const urlSyncTimerRef = useRef<number | null>(null);
   const trendSectionRef = useRef<HTMLDivElement | null>(null);
@@ -553,12 +819,14 @@ export function RegionalCausePage({
     const nextStageImpact = params.get('stageImpact') !== '0';
     const nextStage = parseStage(params.get('stage'));
     const nextCause = params.get('cause') || null;
-    const nextArea = params.get('area') || null;
+    const nextArea = params.get('compareArea') || params.get('area') || null;
+    const nextTrendMetric: TrendMetric = params.get('trendMetric') === 'count' ? 'count' : 'ratio';
 
     setStageImpactOn((prev) => (prev === nextStageImpact ? prev : nextStageImpact));
     setSelectedStage((prev) => (prev === nextStage ? prev : nextStage));
     setSelectedCauseKey((prev) => (prev === nextCause ? prev : nextCause));
     setSelectedArea((prev) => (prev === nextArea ? prev : nextArea));
+    setTrendMetric((prev) => (prev === nextTrendMetric ? prev : nextTrendMetric));
   }, [
     onSelectedKpiKeyChange,
     onSelectedRangeChange,
@@ -601,6 +869,9 @@ export function RegionalCausePage({
       else params.delete('cause');
       if (selectedArea) params.set('area', selectedArea);
       else params.delete('area');
+      if (selectedArea) params.set('compareArea', selectedArea);
+      else params.delete('compareArea');
+      params.set('trendMetric', trendMetric);
 
       const nextSearch = params.toString();
       if (`?${nextSearch}` !== url.search) {
@@ -618,6 +889,7 @@ export function RegionalCausePage({
     selectedRegionSgg,
     selectedStage,
     stageImpactOn,
+    trendMetric,
   ]);
 
   const queryState = useMemo(
@@ -628,7 +900,8 @@ export function RegionalCausePage({
       stageImpactOn,
       selectedStage,
       selectedCauseKey,
-      selectedArea,
+      selectedCompareAreaKey: selectedArea,
+      trendMetric,
     }),
     [
       selectedArea,
@@ -638,6 +911,7 @@ export function RegionalCausePage({
       selectedRegionSgg,
       selectedStage,
       stageImpactOn,
+      trendMetric,
     ],
   );
 
@@ -646,28 +920,38 @@ export function RegionalCausePage({
     [queryState.kpiKey, queryState.period, queryState.sigungu, region.id],
   );
 
-  const stageBreakdownQuery = useQuery({
-    queryKey: ['regional-cause', 'stage-breakdown', queryState.kpiKey, queryState.sigungu, queryState.period],
-    queryFn: async () => buildStageBacklogBreakdown(`${baseSeed}-stage`),
-    staleTime: 30_000,
-    placeholderData: (prev) => prev,
-  });
-
-  const causeTopNQuery = useQuery({
+  const stageBreakdownQuery = useQuery<SummaryResponse>({
     queryKey: [
       'regional-cause',
-      'cause-topn',
+      'summary',
       queryState.kpiKey,
       queryState.sigungu,
       queryState.period,
       queryState.selectedStage ?? 'all',
-      queryState.selectedArea ?? 'all',
+      queryState.selectedCauseKey ?? 'all',
+      queryState.stageImpactOn ? 'impact-on' : 'impact-off',
     ],
     queryFn: async () =>
-      buildCauseTopN(
-        `${baseSeed}-cause`,
+      buildSummaryResponse(`${baseSeed}-summary`, queryState.selectedStage, queryState.selectedCauseKey),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const causeTopNQuery = useQuery<CausesResponse>({
+    queryKey: [
+      'regional-cause',
+      'causes',
+      queryState.kpiKey,
+      queryState.sigungu,
+      queryState.period,
+      queryState.selectedStage ?? 'all',
+      queryState.selectedCompareAreaKey ?? 'all',
+    ],
+    queryFn: async () =>
+      buildCausesResponse(
+        `${baseSeed}-causes`,
         queryState.selectedStage,
-        queryState.selectedArea,
+        queryState.selectedCompareAreaKey,
       ),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -682,6 +966,7 @@ export function RegionalCausePage({
       queryState.period,
       queryState.selectedStage ?? 'all',
       queryState.selectedCauseKey ?? 'all',
+      queryState.selectedCompareAreaKey ?? 'all',
     ],
     queryFn: async () =>
       buildAreaComparison(
@@ -694,54 +979,26 @@ export function RegionalCausePage({
     placeholderData: (prev) => prev,
   });
 
-  const trendQuery = useQuery({
+  const trendQuery = useQuery<TrendResponse>({
     queryKey: [
       'regional-cause',
-      'cause-trend',
+      'trend',
       queryState.kpiKey,
       queryState.sigungu,
       queryState.period,
       queryState.selectedStage ?? 'all',
       queryState.selectedCauseKey ?? 'all',
-      queryState.selectedArea ?? 'all',
+      queryState.selectedCompareAreaKey ?? 'all',
+      queryState.trendMetric,
     ],
     queryFn: async () =>
-      buildTrendPoints(
+      buildTrendResponse(
         `${baseSeed}-trend`,
         queryState.period,
         queryState.selectedCauseKey,
         queryState.selectedStage,
-        queryState.selectedArea,
-      ),
-    staleTime: 30_000,
-    placeholderData: (prev) => prev,
-  });
-
-  const recommendationQuery = useQuery({
-    queryKey: [
-      'regional-cause',
-      'recommendation',
-      queryState.kpiKey,
-      queryState.sigungu,
-      queryState.period,
-      queryState.selectedStage ?? 'all',
-      queryState.selectedCauseKey ?? 'all',
-      queryState.selectedArea ?? 'all',
-    ],
-    queryFn: async () =>
-      buildOperationRecommendations(
-        `${baseSeed}-rec`,
-        buildCauseTopN(`${baseSeed}-rec-cause`, queryState.selectedStage, queryState.selectedArea),
-        buildStageBacklogBreakdown(`${baseSeed}-rec-stage`),
-        buildAreaComparison(
-          `${baseSeed}-rec-area`,
-          districtOptions,
-          queryState.selectedCauseKey,
-          queryState.selectedStage,
-        ),
-        queryState.selectedStage,
-        queryState.selectedCauseKey,
-        queryState.selectedArea,
+        queryState.selectedCompareAreaKey,
+        queryState.trendMetric,
       ),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -752,12 +1009,30 @@ export function RegionalCausePage({
     [baseSeed],
   );
 
-  const stageBreakdown = stageBreakdownQuery.data ?? [];
-  const causeTopN = causeTopNQuery.data ?? [];
+  const stageBreakdown = stageBreakdownQuery.data?.stageBacklogBreakdown ?? [];
+  const kpiDefinition = stageBreakdownQuery.data?.kpiDefinition ?? buildKpiDefinition(`${baseSeed}-fallback-definition`);
+  const summaryCoverage = stageBreakdownQuery.data?.classificationCoverage ?? buildClassificationCoverage(`${baseSeed}-fallback-summary-cov`, selectedStage, selectedCauseKey);
+  const causeTopN = causeTopNQuery.data?.causes ?? [];
+  const causeCoverage = causeTopNQuery.data?.coverage ?? summaryCoverage;
   const areaComparison = areaComparisonQuery.data ?? [];
-  const trendPoints = trendQuery.data ?? [];
-  const trendAlerts = useMemo(() => deriveTrendAlerts(trendPoints), [trendPoints]);
-  const recommendations = recommendationQuery.data ?? [];
+  const trendData = trendQuery.data;
+  const trendPoints = trendData?.points ?? [];
+  const trendAlerts = trendData?.alerts ?? [];
+  const recommendations = useMemo(
+    () =>
+      buildOperationRecommendations(
+        `${baseSeed}-rec`,
+        causeTopN,
+        stageBreakdown,
+        areaComparison,
+        selectedStage,
+        selectedCauseKey,
+        selectedArea,
+      ),
+    [areaComparison, baseSeed, causeTopN, selectedArea, selectedCauseKey, selectedStage, stageBreakdown],
+  );
+  const recommendationsLoading =
+    stageBreakdownQuery.isPending || causeTopNQuery.isPending || areaComparisonQuery.isPending;
 
   useEffect(() => {
     if (!causeTopN.length) return;
@@ -779,6 +1054,26 @@ export function RegionalCausePage({
   const selectedAreaItem = useMemo(
     () => areaComparison.find((item) => item.areaKey === selectedArea) ?? null,
     [areaComparison, selectedArea],
+  );
+
+  const totalBacklog = useMemo(
+    () => stageBreakdown.reduce((sum, row) => sum + row.count, 0),
+    [stageBreakdown],
+  );
+
+  const dominantStage = useMemo(() => {
+    if (!stageBreakdown.length) return null;
+    return [...stageBreakdown].sort((a, b) => b.count - a.count)[0];
+  }, [stageBreakdown]);
+
+  const dominantCause = useMemo(() => {
+    if (!causeTopN.length) return null;
+    return causeTopN[0];
+  }, [causeTopN]);
+
+  const criticalAreaCount = useMemo(
+    () => areaComparison.filter((area) => area.highlightLevel === 'critical').length,
+    [areaComparison],
   );
 
   const stageValueLabel = useCallback((props: any) => {
@@ -816,29 +1111,57 @@ export function RegionalCausePage({
   const trendInsight = useMemo(() => {
     if (!trendPoints.length) return safeOpsText('추이 데이터 수집중');
     const latest = trendPoints[trendPoints.length - 1];
+    const metricLabel = TREND_METRIC_LABEL[trendMetric];
     return safeOpsText(
-      `${latest.dateKey} 기준 ${formatCount(latest.count)} · ${formatRatio(latest.ratio)} (선택 원인 기준)`,
+      `${latest.dateKey} 기준 ${metricLabel} ${formatTrendValue(trendMetric, latest.value)} (선택 원인 기준)`,
     );
-  }, [trendPoints]);
+  }, [trendMetric, trendPoints]);
+
+  const createInterventionMutation = useMutation({
+    mutationFn: postRegionalIntervention,
+  });
 
   const createIntervention = useCallback(
     (override?: Partial<{ stage: StageKey | null; causeKey: string | null; area: string | null }>) => {
       const stage = override?.stage ?? selectedStage;
       const cause = override?.causeKey ?? selectedCauseKey;
       const area = override?.area ?? selectedArea ?? selectedRegionSgg;
-      const stageLabel = stage ? STAGE_LABEL[stage] : null;
-      onCreateIntervention?.({
-        region: area ?? null,
-        kpiKey: selectedKpiKey,
-        range: selectedRange,
-        source: 'cause',
-        primaryDriverStage: stageLabel ?? undefined,
-        selectedStage: stage ?? null,
-        selectedCauseKey: cause ?? null,
-        selectedArea: area ?? null,
-      });
+      const beforeSnapshot = buildBeforeSnapshot(selectedKpiKey, stageBreakdown, causeTopN, causeCoverage);
+      const nextQueryState = {
+        ...queryState,
+        selectedStage: stage,
+        selectedCauseKey: cause,
+        selectedCompareAreaKey: area,
+      };
+      createInterventionMutation.mutate(
+        {
+          from: 'bottleneck',
+          queryState: nextQueryState,
+          beforeSnapshot,
+        },
+        {
+          onSuccess: ({ snapshotId }) => {
+            const stageLabel = stage ? STAGE_LABEL[stage] : null;
+            onCreateIntervention?.({
+              region: area ?? null,
+              kpiKey: selectedKpiKey,
+              range: selectedRange,
+              source: 'cause',
+              primaryDriverStage: stageLabel ?? undefined,
+              selectedStage: stage ?? null,
+              selectedCauseKey: cause ?? null,
+              selectedArea: area ?? null,
+              snapshotId,
+            });
+          },
+        },
+      );
     },
     [
+      causeCoverage,
+      causeTopN,
+      createInterventionMutation,
+      queryState,
       onCreateIntervention,
       selectedCauseKey,
       selectedKpiKey,
@@ -846,6 +1169,7 @@ export function RegionalCausePage({
       selectedRegionSgg,
       selectedStage,
       selectedArea,
+      stageBreakdown,
     ],
   );
 
@@ -857,26 +1181,27 @@ export function RegionalCausePage({
   }, []);
 
   return (
-    <div className="h-full overflow-auto bg-gray-50 p-4 space-y-3">
-      <div className="bg-white border border-gray-200 rounded-lg p-3">
+    <div className="h-full overflow-auto bg-slate-50 px-4 py-3 space-y-3">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <div className="text-sm font-semibold text-gray-800">병목·원인 분석</div>
-            <div className="text-[12px] text-gray-500">병목(어디) → 원인(왜) → 조치(무엇을)을 2클릭 이내로 연결</div>
+            <div className="text-sm font-semibold text-slate-900">병목·원인 분석</div>
+            <div className="text-[12px] text-slate-500">병목(어디) → 원인(왜) → 조치(무엇을)을 2클릭 이내로 연결</div>
           </div>
           <button
             onClick={() => createIntervention()}
-            className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+            disabled={createInterventionMutation.isPending}
+            className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            개입 만들기
+            {createInterventionMutation.isPending ? '개입 생성중...' : '개입 만들기'}
           </button>
         </div>
 
-        <div className="mt-3 grid grid-cols-1 md:grid-cols-5 gap-2">
+        <div className="mt-3 grid grid-cols-1 md:grid-cols-5 gap-2.5">
           <select
             value={selectedKpiKey}
             onChange={(event) => onSelectedKpiKeyChange(event.target.value as KpiKey)}
-            className="px-2.5 py-1.5 border border-gray-300 rounded text-sm"
+            className="px-2.5 py-2 border border-slate-300 rounded-lg text-sm text-slate-700 bg-white"
           >
             {Object.entries(KPI_LABEL).map(([key, label]) => (
               <option key={key} value={key}>
@@ -888,7 +1213,7 @@ export function RegionalCausePage({
           <select
             value={selectedRegionSgg ?? ''}
             onChange={(event) => onSelectedRegionSggChange(event.target.value || null)}
-            className="px-2.5 py-1.5 border border-gray-300 rounded text-sm"
+            className="px-2.5 py-2 border border-slate-300 rounded-lg text-sm text-slate-700 bg-white"
           >
             <option value="">{region.label} 전체</option>
             {districtOptions.map((district) => (
@@ -901,7 +1226,7 @@ export function RegionalCausePage({
           <select
             value={selectedRange}
             onChange={(event) => onSelectedRangeChange(event.target.value as InternalRangeKey)}
-            className="px-2.5 py-1.5 border border-gray-300 rounded text-sm"
+            className="px-2.5 py-2 border border-slate-300 rounded-lg text-sm text-slate-700 bg-white"
           >
             <option value="week">주간</option>
             <option value="month">월간</option>
@@ -910,54 +1235,95 @@ export function RegionalCausePage({
 
           <button
             onClick={() => setStageImpactOn((prev) => !prev)}
-            className={`px-2.5 py-1.5 border rounded text-sm flex items-center justify-center gap-1 ${
+            className={`px-2.5 py-2 border rounded-lg text-sm flex items-center justify-center gap-1 ${
               stageImpactOn
                 ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
-                : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                : 'border-slate-300 text-slate-700 hover:bg-slate-50'
             }`}
           >
             Stage 영향 {stageImpactOn ? 'ON' : 'OFF'}{' '}
             {stageImpactOn ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </button>
 
-          <div className="px-2.5 py-1.5 border border-gray-200 rounded text-xs text-gray-600 flex items-center">
+          <div className="px-2.5 py-2 border border-slate-200 rounded-lg text-xs text-slate-600 flex items-center bg-slate-50">
             URL sync: {selectedRegionSgg ?? '광역 전체'} · {PERIOD_LABEL[selectedRange]}
+          </div>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
+            집계 기준: {KPI_DEFINITION_LABEL.backlogType[kpiDefinition.backlogType]} · 분모: {KPI_DEFINITION_LABEL.denominator[kpiDefinition.denominator]} · 지역기준: {KPI_DEFINITION_LABEL.areaOwnership[kpiDefinition.areaOwnership]}
+          </div>
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-indigo-700">
+            원인 분류 가능 {summaryCoverage.classifiedRatio.toFixed(1)}% / 미분류 {summaryCoverage.unclassifiedRatio.toFixed(1)}%
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-700">
+            미분류 책임: {OWNER_LABEL[summaryCoverage.unclassifiedOwner]}
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <div className="text-[11px] text-slate-500">현재 적체 총량</div>
+            <div className="text-[16px] font-semibold text-slate-900">{formatCount(totalBacklog)}</div>
+            <div className="text-[11px] text-slate-500">선택 KPI 기준 운영 대기 규모</div>
+          </div>
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+            <div className="text-[11px] text-red-600">병목 단계</div>
+            <div className="text-[16px] font-semibold text-red-700">
+              {dominantStage ? `${dominantStage.stageLabel} ${formatRatio(dominantStage.ratio)}` : '-'}
+            </div>
+            <div className="text-[11px] text-red-600">
+              {dominantStage ? `${formatCount(dominantStage.count)} · Δ ${formatSigned(dominantStage.deltaVsRegionalAvg, '%p')}` : '집계 대기 중'}
+            </div>
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <div className="text-[11px] text-amber-700">우선 원인</div>
+            <div className="text-[16px] font-semibold text-amber-800">
+              {dominantCause ? dominantCause.causeLabel : '-'}
+            </div>
+            <div className="text-[11px] text-amber-700">
+              {dominantCause ? `${formatRatio(dominantCause.ratio)} · ${formatCount(dominantCause.count)}` : '집계 대기 중'}
+            </div>
+          </div>
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+            <div className="text-[11px] text-blue-700">고위험 지역</div>
+            <div className="text-[16px] font-semibold text-blue-800">{criticalAreaCount}곳</div>
+            <div className="text-[11px] text-blue-700">관할 평균 대비 임계 초과 지역 수</div>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        <div className="bg-white border border-gray-200 rounded-lg p-3 relative">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+        <div className="xl:col-span-5 bg-white border border-slate-200 rounded-xl p-3.5 relative shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm font-semibold text-gray-700">단계별 적체 분해</div>
-            <div className="text-[11px] text-gray-500">Stage 선택 시 원인/제안 동기 갱신</div>
+            <div className="text-sm font-semibold text-slate-700">단계별 적체 분해</div>
+            <div className="text-[11px] text-slate-500">Stage 선택 시 원인/제안 동기 갱신</div>
           </div>
           {!stageBreakdown.length && stageBreakdownQuery.isPending ? (
             <SectionSkeleton />
           ) : (
-            <div style={{ height: 260 }}>
+            <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-2" style={{ height: 312 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stageBreakdown} margin={{ top: 8, right: 112, left: 0, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                  <XAxis dataKey="stageLabel" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} />
+                <BarChart data={stageBreakdown} margin={{ top: 12, right: 104, left: -4, bottom: 10 }}>
+                  <CartesianGrid strokeDasharray="2 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="stageLabel" tick={{ fontSize: 12, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} width={26} />
                   <Tooltip
                     cursor={{ fill: '#eff6ff' }}
                     content={({ active, payload }) => {
                       if (!active || !payload?.length) return null;
                       const row = payload[0].payload as StageBacklogBreakdownItem;
                       return (
-                        <div className="rounded border border-gray-200 bg-white px-2 py-1.5 text-[11px] shadow-sm">
-                          <div className="font-semibold text-gray-800">{row.stageLabel}</div>
-                          <div className="text-gray-700">
+                        <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] shadow-md">
+                          <div className="font-semibold text-slate-800">{row.stageLabel}</div>
+                          <div className="text-slate-700">
                             비율 {formatRatio(row.ratio)} · 건수 {formatCount(row.count)}
                           </div>
-                          <div className="text-gray-600">평균 체류시간: {Math.round(row.avgDwellMinutes)}분</div>
+                          <div className="text-slate-600">평균 체류시간: {Math.round(row.avgDwellMinutes)}분</div>
                           <div className={metricToneByDelta(row.deltaVsRegionalAvg)}>
                             광역 평균 대비 Δ {row.deltaVsRegionalAvg > 0 ? '+' : ''}
                             {row.deltaVsRegionalAvg.toFixed(1)}%p
                           </div>
-                          <div className="text-gray-600">
+                          <div className="text-slate-600">
                             원인 Top2:{' '}
                             {row.topCauses
                               .map((cause) => {
@@ -972,13 +1338,21 @@ export function RegionalCausePage({
                       );
                     }}
                   />
+                  <defs>
+                    <linearGradient id="stageBarFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#fb923c" />
+                      <stop offset="100%" stopColor="#f97316" />
+                    </linearGradient>
+                  </defs>
                   <Bar dataKey="count" radius={[5, 5, 0, 0]} onClick={(payload: StageBacklogBreakdownItem) => {
                     setSelectedStage((prev) => (prev === payload.stageKey ? null : payload.stageKey));
                   }}>
                     {stageBreakdown.map((item) => (
                       <Cell
                         key={item.stageKey}
-                        fill={selectedStage === item.stageKey ? '#dc2626' : '#f97316'}
+                        fill={selectedStage === item.stageKey ? '#dc2626' : 'url(#stageBarFill)'}
+                        stroke={selectedStage === item.stageKey ? '#991b1b' : '#fb923c'}
+                        strokeWidth={selectedStage === item.stageKey ? 1.2 : 0}
                       />
                     ))}
                     <LabelList content={stageValueLabel} />
@@ -994,10 +1368,10 @@ export function RegionalCausePage({
                 onClick={() =>
                   setSelectedStage((prev) => (prev === item.stageKey ? null : item.stageKey))
                 }
-                className={`px-2 py-1 rounded border text-[11px] ${
+                className={`px-2 py-1 rounded-md border text-[11px] transition-colors ${
                   selectedStage === item.stageKey
                     ? 'border-red-300 bg-red-50 text-red-700'
-                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                 }`}
               >
                 {item.stageLabel} {formatRatio(item.ratio)} · {formatCount(item.count)}
@@ -1005,25 +1379,33 @@ export function RegionalCausePage({
             ))}
           </div>
           {stageBreakdownQuery.isFetching && stageBreakdown.length ? (
-            <div className="absolute inset-0 rounded-lg bg-white/40 pointer-events-none" />
+            <div className="absolute inset-0 rounded-xl bg-white/50 backdrop-blur-[1px] pointer-events-none" />
           ) : null}
         </div>
 
-        <div className="bg-white border border-gray-200 rounded-lg p-3 relative">
+        <div className="xl:col-span-7 bg-white border border-slate-200 rounded-xl p-3.5 relative shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm font-semibold text-gray-700">병목 원인 TopN</div>
-            <div className="text-[11px] text-gray-500">원인 선택 시 지역/추이/제안 동기 갱신</div>
+            <div className="text-sm font-semibold text-slate-700">병목 원인 TopN</div>
+            <div className="text-[11px] text-slate-500">원인 선택 시 지역/추이/제안 동기 갱신</div>
+          </div>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            <span className="rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-700">
+              분류 가능 {causeCoverage.classifiedRatio.toFixed(1)}%
+            </span>
+            <span className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+              미분류 {causeCoverage.unclassifiedRatio.toFixed(1)}% · 책임 {OWNER_LABEL[causeCoverage.unclassifiedOwner]}
+            </span>
           </div>
           {!causeTopN.length && causeTopNQuery.isPending ? (
             <SectionSkeleton />
           ) : (
             <>
-              <div style={{ height: 260 }}>
+              <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-2" style={{ height: 312 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={causeTopN} layout="vertical" margin={{ top: 8, right: 110, left: 20, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" />
-                    <XAxis type="number" tick={{ fontSize: 12 }} />
-                    <YAxis dataKey="causeLabel" type="category" width={110} tick={{ fontSize: 12 }} />
+                  <BarChart data={causeTopN} layout="vertical" margin={{ top: 10, right: 114, left: 16, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="2 3" horizontal={false} stroke="#e2e8f0" />
+                    <XAxis type="number" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis dataKey="causeLabel" type="category" width={120} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                     <Tooltip
                       cursor={{ fill: '#fff7ed' }}
                       content={({ active, payload }) => {
@@ -1033,13 +1415,21 @@ export function RegionalCausePage({
                           ? '광역 즉시 개입 가능'
                           : '광역 직접 개입 어려움(센터/병원 협조 필요)';
                         return (
-                          <div className="rounded border border-gray-200 bg-white px-2 py-1.5 text-[11px] shadow-sm">
-                            <div className="font-semibold text-gray-800">{row.causeLabel}</div>
-                            <div className="text-gray-700">
+                          <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[11px] shadow-md">
+                            <div className="font-semibold text-slate-800">{row.causeLabel}</div>
+                            <div className="text-slate-700">
                               비율 {formatRatio(row.ratio)} · 건수 {formatCount(row.count)}
                             </div>
-                            <div className="text-gray-600">책임 주체: {OWNER_LABEL[row.meta.owner]}</div>
-                            <div className="text-gray-600">광역 개입 필요도: {REGIONAL_NEED_LABEL[row.meta.regionalNeed]}</div>
+                            <div className="text-slate-600">책임 주체: {OWNER_LABEL[row.meta.owner]}</div>
+                            <div className="text-slate-600">광역 개입 필요도: {REGIONAL_NEED_LABEL[row.meta.regionalNeed]}</div>
+                            <div className="text-slate-600">
+                              근거: {EVIDENCE_TYPE_LABEL[row.evidence.type]} · 신뢰도 {EVIDENCE_CONFIDENCE_LABEL[row.evidence.confidence]}
+                            </div>
+                            {row.evidence.link ? (
+                              <div className="text-blue-700">근거 링크 제공됨</div>
+                            ) : (
+                              <div className="text-amber-700">근거 없음: {row.evidence.missingReason ?? '근거 로그 미등록'}</div>
+                            )}
                             <div className={row.meta.actionable ? 'text-blue-700' : 'text-amber-700'}>{actionability}</div>
                           </div>
                         );
@@ -1047,7 +1437,7 @@ export function RegionalCausePage({
                     />
                     <Bar
                       dataKey="count"
-                      radius={[0, 5, 5, 0]}
+                      radius={[0, 6, 6, 0]}
                       onClick={(payload: CauseTopNItem) => setSelectedCauseKey(payload.causeKey)}
                     >
                       {causeTopN.map((item) => (
@@ -1062,15 +1452,23 @@ export function RegionalCausePage({
                 </ResponsiveContainer>
               </div>
 
-              <div className="mt-2 space-y-1.5">
+              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1.5">
                 {causeTopN.map((item) => (
-                  <button
+                  <div
                     key={item.causeKey}
                     onClick={() => setSelectedCauseKey(item.causeKey)}
-                    className={`w-full rounded border px-2 py-1.5 text-left ${
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedCauseKey(item.causeKey);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    className={`w-full rounded-lg border px-2 py-1.5 text-left transition-colors ${
                       selectedCauseKey === item.causeKey
                         ? 'border-orange-300 bg-orange-50'
-                        : 'border-gray-200 bg-white hover:bg-gray-50'
+                        : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -1095,35 +1493,57 @@ export function RegionalCausePage({
                       }`}>
                         광역 필요도: {REGIONAL_NEED_LABEL[item.meta.regionalNeed]}
                       </span>
+                      <span className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">
+                        근거: {EVIDENCE_TYPE_LABEL[item.evidence.type]}
+                      </span>
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] ${EVIDENCE_CONFIDENCE_STYLE[item.evidence.confidence]}`}>
+                        신뢰도: {EVIDENCE_CONFIDENCE_LABEL[item.evidence.confidence]}
+                      </span>
                     </div>
-                  </button>
+                    <div className="mt-1 text-[10px]">
+                      {item.evidence.link ? (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            window.open(item.evidence.link as string, '_blank', 'noopener,noreferrer');
+                          }}
+                          className="rounded border border-blue-200 bg-white px-1.5 py-0.5 text-blue-700 hover:bg-blue-50"
+                        >
+                          근거 보기
+                        </button>
+                      ) : (
+                        <span className="text-amber-700">근거 없음: {item.evidence.missingReason ?? '근거 로그 미등록'}</span>
+                      )}
+                    </div>
+                  </div>
                 ))}
               </div>
             </>
           )}
           {causeTopNQuery.isFetching && causeTopN.length ? (
-            <div className="absolute inset-0 rounded-lg bg-white/40 pointer-events-none" />
+            <div className="absolute inset-0 rounded-xl bg-white/50 backdrop-blur-[1px] pointer-events-none" />
           ) : null}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        <div className="bg-white border border-gray-200 rounded-lg p-3 relative">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+        <div className="xl:col-span-7 bg-white border border-slate-200 rounded-xl p-3.5 relative shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm font-semibold text-gray-700">지역 비교 (관할 평균 대비 Δ)</div>
-            <div className="text-[11px] text-gray-500">지역 선택 시 개입 대상 자동 반영</div>
+            <div className="text-sm font-semibold text-slate-700">지역 비교 (관할 평균 대비 Δ)</div>
+            <div className="text-[11px] text-slate-500">지역 선택 시 개입 대상 자동 반영</div>
           </div>
           {!areaComparison.length && areaComparisonQuery.isPending ? (
             <SectionSkeleton />
           ) : (
             <>
-              <div style={{ height: 260 }}>
+              <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-2" style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={areaComparison} margin={{ top: 8, right: 12, left: -8, bottom: 52 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                    <XAxis dataKey="areaLabel" tick={{ fontSize: 11 }} interval={0} angle={-30} textAnchor="end" height={62} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+                  <ComposedChart data={areaComparison} margin={{ top: 10, right: 8, left: -8, bottom: 64 }}>
+                    <CartesianGrid strokeDasharray="2 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="areaLabel" tick={{ fontSize: 11, fill: '#64748b' }} tickMargin={8} interval={0} angle={-30} textAnchor="end" height={64} axisLine={false} tickLine={false} />
+                    <YAxis yAxisId="left" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                     <Tooltip
                       formatter={(value: number, key: string) =>
                         key === 'deltaVsAvg'
@@ -1138,7 +1558,7 @@ export function RegionalCausePage({
                     <Bar
                       yAxisId="left"
                       dataKey="count"
-                      radius={[4, 4, 0, 0]}
+                      radius={[5, 5, 0, 0]}
                       onClick={(payload: AreaComparisonItem) =>
                         setSelectedArea((prev) => (prev === payload.areaKey ? null : payload.areaKey))
                       }
@@ -1163,7 +1583,7 @@ export function RegionalCausePage({
                         formatter={(value: number) => `${Math.round(value)}건`}
                       />
                     </Bar>
-                    <Line yAxisId="right" dataKey="deltaVsAvg" stroke="#1d4ed8" strokeWidth={2.1} dot={{ r: 3 }}>
+                    <Line yAxisId="right" dataKey="deltaVsAvg" stroke="#1d4ed8" strokeWidth={2.2} dot={{ r: 3.2 }}>
                       <LabelList
                         dataKey="deltaVsAvg"
                         position="top"
@@ -1178,7 +1598,7 @@ export function RegionalCausePage({
                   <button
                     key={item.areaKey}
                     onClick={() => setSelectedArea((prev) => (prev === item.areaKey ? null : item.areaKey))}
-                    className={`rounded border px-2 py-1 text-[11px] ${
+                    className={`rounded-md border px-2 py-1 text-[11px] ${
                       selectedArea === item.areaKey
                         ? 'border-blue-300 bg-blue-50 text-blue-700'
                         : HIGHLIGHT_STYLE[item.highlightLevel]
@@ -1202,14 +1622,29 @@ export function RegionalCausePage({
             </>
           )}
           {areaComparisonQuery.isFetching && areaComparison.length ? (
-            <div className="absolute inset-0 rounded-lg bg-white/40 pointer-events-none" />
+            <div className="absolute inset-0 rounded-xl bg-white/50 backdrop-blur-[1px] pointer-events-none" />
           ) : null}
         </div>
 
-        <div ref={trendSectionRef} className="bg-white border border-gray-200 rounded-lg p-3 relative">
+        <div ref={trendSectionRef} className="xl:col-span-5 bg-white border border-slate-200 rounded-xl p-3.5 relative shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <div className="text-sm font-semibold text-gray-700">원인 변화 추이</div>
-            <div className="text-[11px] text-gray-500">{trendInsight}</div>
+            <div className="text-sm font-semibold text-slate-700">원인 변화 추이</div>
+            <div className="text-[11px] text-slate-500">{trendInsight}</div>
+          </div>
+          <div className="mb-2 inline-flex rounded-md border border-gray-200 bg-white p-0.5">
+            {(['ratio', 'count'] as TrendMetric[]).map((metric) => (
+              <button
+                key={metric}
+                onClick={() => setTrendMetric(metric)}
+                className={`px-2 py-1 text-[11px] rounded ${
+                  trendMetric === metric
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {TREND_METRIC_LABEL[metric]}
+              </button>
+            ))}
           </div>
           <div className="mb-2 flex flex-wrap gap-1.5">
             {trendAlerts.length ? (
@@ -1231,23 +1666,35 @@ export function RegionalCausePage({
             <SectionSkeleton />
           ) : (
             <>
-              <div style={{ height: 250 }}>
+              <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-2" style={{ height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={trendPoints} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                    <XAxis dataKey="dateKey" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
+                    <CartesianGrid strokeDasharray="2 3" vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="dateKey" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: '#64748b' }}
+                      domain={trendMetric === 'ratio' ? [0, 100] : ['auto', 'auto']}
+                      axisLine={false}
+                      tickLine={false}
+                    />
                     <Tooltip
                       content={({ active, payload, label }) => {
                         if (!active || !payload?.length) return null;
-                        const point = payload[0].payload as CauseTrendPoint;
-                        const hasIncreaseAlert = trendAlerts.some((alert) => alert.type === 'increasing_streak');
+                        const point = payload[0].payload as TrendResponse['points'][number] | undefined;
+                        if (!point) return null;
+                        const hasIncreaseAlert = trendAlerts.some(
+                          (alert) => alert.type === 'increasing_streak' && alert.metric === trendMetric,
+                        );
+                        const metricLabel = TREND_METRIC_LABEL[trendMetric];
                         return (
                           <div className="rounded border border-gray-200 bg-white px-2 py-1.5 text-[11px] shadow-sm">
                             <div className="font-semibold text-gray-800">{label}</div>
-                            <div className="text-gray-700">건수 {formatCount(point.count)}</div>
-                            <div className="text-gray-700">비율 {formatRatio(point.ratio)}</div>
+                            <div className="text-gray-700">
+                              {metricLabel} {formatTrendValue(trendMetric, point.value)}
+                            </div>
+                            <div className="text-gray-600">
+                              건수 {formatCount(point.count)} · 비율 {formatRatio(point.ratio)}
+                            </div>
                             {hasIncreaseAlert ? (
                               <>
                                 <div className="text-red-700">n일 연속 증가 중</div>
@@ -1262,41 +1709,46 @@ export function RegionalCausePage({
                     />
                     <Legend
                       wrapperStyle={{ fontSize: '12px' }}
-                      formatter={(name) => (name === 'count' ? '건수' : '비율')}
+                      formatter={() => TREND_METRIC_LABEL[trendMetric]}
                     />
-                    <Line yAxisId="left" type="monotone" dataKey="count" stroke="#ef4444" strokeWidth={2.2} dot={{ r: 3 }}>
-                      <LabelList dataKey="count" position="top" formatter={(value: number) => `${Math.round(value)}`} />
-                    </Line>
-                    <Line yAxisId="right" type="monotone" dataKey="ratio" stroke="#f59e0b" strokeWidth={2.2} dot={{ r: 3 }}>
-                      <LabelList dataKey="ratio" position="bottom" formatter={(value: number) => `${Number(value).toFixed(1)}%`} />
+                    <Line type="monotone" dataKey="value" stroke="#ef4444" strokeWidth={2.3} dot={{ r: 3.2 }}>
+                      <LabelList
+                        dataKey="value"
+                        position="top"
+                        formatter={(value: number) =>
+                          trendMetric === 'count'
+                            ? `${Math.round(Number(value)).toLocaleString()}`
+                            : `${Number(value).toFixed(1)}%`
+                        }
+                      />
                     </Line>
                   </LineChart>
                 </ResponsiveContainer>
               </div>
               <div className="mt-2 text-[11px] text-gray-600">
-                {trendAlerts.some((alert) => alert.type === 'increasing_streak')
+                {trendAlerts.some((alert) => alert.type === 'increasing_streak' && alert.metric === trendMetric)
                   ? '개입 없을 경우 SLA 위험 확대 가능'
                   : '현재 추이는 단기 변동 범위 내에서 관찰 중'}
               </div>
             </>
           )}
           {trendQuery.isFetching && trendPoints.length ? (
-            <div className="absolute inset-0 rounded-lg bg-white/40 pointer-events-none" />
+            <div className="absolute inset-0 rounded-xl bg-white/50 backdrop-blur-[1px] pointer-events-none" />
           ) : null}
         </div>
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-lg p-3">
+      <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm">
         <div className="flex items-center gap-1.5 mb-2">
           <AlertTriangle className="h-4 w-4 text-orange-500" />
-          <span className="text-sm font-semibold text-gray-700">운영 제안</span>
+          <span className="text-sm font-semibold text-slate-700">운영 제안</span>
         </div>
-        {!recommendations.length && recommendationQuery.isPending ? (
+        {!recommendations.length && recommendationsLoading ? (
           <SectionSkeleton />
         ) : (
-          <div className="space-y-2">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
             {recommendations.map((rec) => (
-              <div key={rec.recId} className="p-2 rounded border border-orange-100 bg-orange-50">
+              <div key={rec.recId} className="p-3 rounded-lg border border-orange-100 bg-gradient-to-br from-orange-50 to-amber-50">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[13px] font-medium text-orange-900">{rec.action.title}</div>
                   <div className="text-[11px] text-orange-700">우선순위 {rec.priorityScore}</div>
@@ -1335,25 +1787,25 @@ export function RegionalCausePage({
       </div>
 
       {stageImpactOn && (
-        <div className="bg-white border border-gray-200 rounded-lg p-3">
-          <div className="text-sm font-semibold text-gray-700 mb-2">Stage 영향 (기본 접힘)</div>
-          <div className="space-y-2">
+        <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm">
+          <div className="text-sm font-semibold text-slate-700 mb-2">Stage 영향 (기본 접힘)</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             {stageImpactRows.map((item) => (
-              <div key={item.stage} className="p-2 rounded border border-gray-100 bg-gray-50">
-                <div className="text-[13px] font-medium text-gray-800">{item.stage}</div>
-                <div className="text-[12px] text-gray-600">
+              <div key={item.stage} className="p-2.5 rounded-lg border border-slate-100 bg-slate-50">
+                <div className="text-[13px] font-medium text-slate-800">{item.stage}</div>
+                <div className="text-[12px] text-slate-600">
                   보조 신호 {item.signal > 0 ? '증가' : '감소'} ({item.signal > 0 ? '+' : ''}
                   {item.signal}%) · 큐 {item.queue > 0 ? '증가' : '감소'} ({item.queue > 0 ? '+' : ''}
                   {item.queue}건)
                 </div>
-                <div className="text-[11px] text-gray-500">{item.desc}</div>
+                <div className="text-[11px] text-slate-500">{item.desc}</div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      <div className="text-[12px] text-gray-500">
+      <div className="text-[12px] text-slate-500 pb-2">
         기준: {region.label} · {selectedRegionSgg ?? '광역 전체'} · {KPI_LABEL[selectedKpiKey]} · {PERIOD_LABEL[selectedRange]}
         {selectedCause ? ` · 선택 원인: ${selectedCause.causeLabel}` : ''}
         {selectedAreaItem ? ` · 선택 지역: ${selectedAreaItem.areaLabel}` : ''}

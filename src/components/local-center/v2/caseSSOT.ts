@@ -4,6 +4,7 @@ import {
   type AlertTag,
   type CaseRecord,
 } from "./caseRecords";
+import { generateCases, type Case as SeedCase } from "../caseData";
 
 export type Stage = 1 | 2 | 3;
 export type Stage2Route = "HOSPITAL" | "CENTER";
@@ -155,7 +156,7 @@ export type DashboardStats = {
   pipelineData: Array<{ name: string; count: number; rate: number; drop: number; wait: number }>;
   mciDistribution: Array<{ name: string; value: number; color: string }>;
   highRiskMciList: Array<{ id: string; age: number; probability: string; period: string; nextAction: string }>;
-  priorityTasks: Array<{ id: string; age: number; stage: "Stage 1" | "Stage 2" | "Stage 3"; reason: string; action: string; sla: string }>;
+  priorityTasks: Array<{ id: string; name: string; age: number; stage: "Stage 1" | "Stage 2" | "Stage 3"; reason: string; action: string; sla: string }>;
 };
 
 const MODEL2_VERSION = "stage2-gate-v2";
@@ -340,10 +341,16 @@ function generateStage2Model(
   const mmseWeight = evidence.mmse == null ? 0.35 : clamp01((30 - evidence.mmse) / 30);
   const neuroWeight = evidence.neuroScore == null ? 0.45 : clamp01((100 - evidence.neuroScore) / 100);
 
+  // Demo baseline: make Stage2 outputs form a realistic NORMAL/MCI/AD mix.
+  const severityBase = clamp01(riskWeight * 0.42 + cdrWeight * 0.31 + mmseWeight * 0.17 + neuroWeight * 0.1);
+  const severity = clamp01(severityBase + (signalSeed - 0.5) * 0.12);
+  const normalRaw = clamp01((0.72 - severity) * 1.6);
+  const mciRaw = clamp01(1 - Math.abs(severity - 0.5) * 2.2);
+  const adRaw = clamp01((severity - 0.33) * 1.7);
   let probs = normalizeProbs({
-    NORMAL: 0.2 + (1 - riskWeight) * 0.45 + (1 - cdrWeight) * 0.2 + (1 - mmseWeight) * 0.1,
-    MCI: 0.25 + riskWeight * 0.4 + cdrWeight * 0.35 + neuroWeight * 0.25,
-    AD: 0.15 + riskWeight * 0.55 + cdrWeight * 0.45 + mmseWeight * 0.35 + signalSeed * 0.08,
+    NORMAL: 0.12 + normalRaw,
+    MCI: 0.16 + mciRaw,
+    AD: 0.1 + adRaw,
   });
 
   if (labelOverride) {
@@ -567,10 +574,116 @@ function toInternalCase(record: CaseRecord): InternalCaseEntity {
   return recomputeCase(base);
 }
 
+function mapSeedRisk(riskLevel: SeedCase["riskLevel"]): CaseRecord["risk"] {
+  if (riskLevel === "high") return "고";
+  if (riskLevel === "medium") return "중";
+  return "저";
+}
+
+function deriveStageFromSeed(seed: SeedCase): CaseRecord["stage"] {
+  if (seed.secondExamStatus === "DONE" || seed.secondExamStatus === "RESULT_CONFIRMED") return "Stage 3";
+  if (seed.consultStatus === "DONE" || seed.reservation || seed.secondExamStatus === "SCHEDULED") return "Stage 2";
+  return "Stage 1";
+}
+
+function deriveStatusFromSeed(seed: SeedCase, stage: CaseRecord["stage"]): CaseRecord["status"] {
+  if (seed.contactStatus === "UNREACHED") return "대기";
+  if (stage === "Stage 3") {
+    if (seed.secondExamStatus === "RESULT_CONFIRMED") return "완료";
+    if (seed.riskLevel === "high") return "지연";
+    return "임박";
+  }
+  if (stage === "Stage 2") {
+    if (seed.consultStatus === "DONE" && seed.secondExamStatus !== "NONE") return "임박";
+    return "진행중";
+  }
+  return seed.consultStatus === "DONE" ? "진행중" : "대기";
+}
+
+function deriveQualityFromSeed(seed: SeedCase): CaseRecord["quality"] {
+  if (seed.riskScore >= 70) return "경고";
+  if (seed.riskScore >= 45) return "주의";
+  return "양호";
+}
+
+function derivePathFromSeed(seed: SeedCase, stage: CaseRecord["stage"]): string {
+  if (stage === "Stage 1") {
+    return seed.contactStatus === "UNREACHED" ? "재접촉 강화" : "초기 접촉 집중";
+  }
+  if (stage === "Stage 2") {
+    if (seed.secondExamStatus === "NONE") return "검사결과 입력 대기";
+    if (seed.riskLevel === "high") return "High MCI 경로";
+    return "MCI 경로";
+  }
+  if (seed.secondExamStatus === "RESULT_CONFIRMED") return "정밀관리 경로";
+  return "재평가 준비";
+}
+
+function deriveActionFromSeed(seed: SeedCase, stage: CaseRecord["stage"], status: CaseRecord["status"]): string {
+  if (stage === "Stage 1") {
+    return status === "대기" ? "재연락 실행" : "상담 진행";
+  }
+  if (stage === "Stage 2") {
+    return seed.secondExamStatus === "NONE" ? "검사 결과 입력" : "분류 확정";
+  }
+  return seed.secondExamStatus === "RESULT_CONFIRMED" ? "추적 계획 확정" : "재평가 일정 생성";
+}
+
+function deriveAlertTagsFromSeed(seed: SeedCase, stage: CaseRecord["stage"], status: CaseRecord["status"]): AlertTag[] {
+  const tags = new Set<AlertTag>();
+  if (status === "대기" || status === "임박" || status === "지연") tags.add("SLA 임박");
+  if (stage !== "Stage 1" && !seed.reservation) tags.add("연계 대기");
+  if (stage === "Stage 2" && seed.secondExamStatus === "NONE") tags.add("MCI 미등록");
+  if (stage === "Stage 3" && seed.secondExamStatus !== "RESULT_CONFIRMED") tags.add("재평가 필요");
+  if (stage === "Stage 3" && seed.riskLevel === "high") tags.add("이탈 위험");
+  if (stage === "Stage 2" && seed.riskLevel === "high" && seed.secondExamStatus !== "NONE") tags.add("High MCI");
+  return [...tags];
+}
+
+function toSeedCaseRecord(seed: SeedCase, index: number): CaseRecord {
+  const stage = deriveStageFromSeed(seed);
+  const status = deriveStatusFromSeed(seed, stage);
+  const id = `CASE-2026-${String(101 + index).padStart(3, "0")}`;
+  const hour = String(9 + (index % 9)).padStart(2, "0");
+  const minute = index % 2 === 0 ? "00" : "30";
+
+  return {
+    id,
+    stage,
+    risk: mapSeedRisk(seed.riskLevel),
+    path: derivePathFromSeed(seed, stage),
+    status,
+    manager: seed.counselor,
+    action: deriveActionFromSeed(seed, stage, status),
+    updated: `${seed.registeredDate} ${hour}:${minute}`,
+    quality: deriveQualityFromSeed(seed),
+    profile: {
+      name: seed.patientName,
+      age: seed.age,
+      phone: seed.phone,
+      guardianPhone: seed.guardianPhone,
+    },
+    alertTags: deriveAlertTagsFromSeed(seed, stage, status),
+  };
+}
+
+function buildSeedCaseRecords() {
+  const records = [...CASE_RECORDS];
+  const extra = generateCases().slice(0, 36).map((seed, index) => toSeedCaseRecord(seed, index));
+  const existingIds = new Set(records.map((item) => item.id));
+
+  for (const item of extra) {
+    if (!existingIds.has(item.id)) {
+      records.push(item);
+    }
+  }
+  return records;
+}
+
 function ensureStore() {
   if (caseStore.size > 0) return;
 
-  for (const record of CASE_RECORDS) {
+  for (const record of buildSeedCaseRecords()) {
     const internal = toInternalCase(record);
     caseStore.set(internal.caseId, internal);
     eventStore.set(internal.caseId, [
@@ -1043,6 +1156,7 @@ function buildDashboardStats(cases: InternalCaseEntity[]): DashboardStats {
     .slice(0, 4)
     .map((item) => ({
       id: item.caseId,
+      name: item.patient.name,
       age: item.patient.age,
       stage: stageToLegacy(item.stage),
       reason:
@@ -1132,6 +1246,10 @@ export function applyDrilldownFilter(trigger: string) {
 export function useCaseEntities(input?: Partial<GlobalFilters>) {
   useSyncExternalStore(subscribe, getSnapshotVersion, getSnapshotVersion);
   return useMemo(() => listCaseEntities(input), [input, getSnapshotVersion()]);
+}
+
+export function useCaseStoreVersion() {
+  return useSyncExternalStore(subscribe, getSnapshotVersion, getSnapshotVersion);
 }
 
 export function useCaseEntity(caseId?: string | null) {

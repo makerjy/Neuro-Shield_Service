@@ -17,8 +17,10 @@ import {
 } from 'lucide-react';
 import type { TabContext } from '../../lib/useTabContext';
 import {
-  MOCK_POLICY_CHANGES,
-  MOCK_UNIFIED_AUDIT,
+  fetchPolicyChanges,
+  fetchUnifiedAudit,
+} from '../../lib/centralApi';
+import {
   type PolicyChangeEvent,
   type UnifiedAuditEvent,
 } from '../../mocks/mockCentralOps';
@@ -160,18 +162,40 @@ function toTimelineFromAudit(event: UnifiedAuditEvent): TimelineItem {
 }
 
 export function ComplianceAudit({ context, onNavigate }: ComplianceAuditProps) {
+  const [policyChanges, setPolicyChanges] = useState<PolicyChangeEvent[]>([]);
+  const [unifiedAudit, setUnifiedAudit] = useState<UnifiedAuditEvent[]>([]);
   const [timelineFilter, setTimelineFilter] = useState<TimelineCategory | 'all'>('all');
   const [selectedTimelineId, setSelectedTimelineId] = useState<string | null>(null);
   const [showStageLogDetail, setShowStageLogDetail] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all([fetchPolicyChanges(), fetchUnifiedAudit()])
+      .then(([policyRows, auditRows]) => {
+        if (cancelled) return;
+        setPolicyChanges(policyRows);
+        setUnifiedAudit(auditRows);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPolicyChanges([]);
+        setUnifiedAudit([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const timeline = useMemo(() => {
-    const policyTimeline = MOCK_POLICY_CHANGES.map(toTimelineFromPolicy);
-    const auditPolicyTimeline = MOCK_UNIFIED_AUDIT.filter((event) => event.type === 'policy_change').map(toTimelineFromAudit);
+    const policyTimeline = policyChanges.map(toTimelineFromPolicy);
+    const auditPolicyTimeline = unifiedAudit.filter((event) => event.type === 'policy_change').map(toTimelineFromAudit);
 
     return [...policyTimeline, ...auditPolicyTimeline].sort(
       (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
     );
-  }, []);
+  }, [policyChanges, unifiedAudit]);
 
   const timelineFiltered = useMemo(() => {
     if (timelineFilter === 'all') return timeline;
@@ -216,15 +240,15 @@ export function ComplianceAudit({ context, onNavigate }: ComplianceAuditProps) {
   );
 
   const stageLogMetrics = useMemo(() => {
-    const totalEvents = MOCK_UNIFIED_AUDIT.length;
+    const totalEvents = unifiedAudit.length;
 
-    const stage1 = MOCK_UNIFIED_AUDIT.filter(
+    const stage1 = unifiedAudit.filter(
       (event) => Boolean(event.cause) && event.kpiSnapshot.riskTop3.length > 0,
     ).length;
-    const stage2 = MOCK_UNIFIED_AUDIT.filter(
+    const stage2 = unifiedAudit.filter(
       (event) => Boolean(event.requestor) && Boolean(event.approver) && Boolean(event.rationale),
     ).length;
-    const stage3 = MOCK_UNIFIED_AUDIT.filter(
+    const stage3 = unifiedAudit.filter(
       (event) => Boolean(event.executor) && Boolean(event.approvalComment),
     ).length;
 
@@ -238,15 +262,15 @@ export function ComplianceAudit({ context, onNavigate }: ComplianceAuditProps) {
       totalEvents,
       rate: percent(totalStageLogs, expectedStageLogs),
     };
-  }, []);
+  }, [unifiedAudit]);
 
   const summary = useMemo(() => {
-    const totalEvents = MOCK_UNIFIED_AUDIT.length;
-    const ownerAssigned = MOCK_UNIFIED_AUDIT.filter((event) => Boolean(event.approver)).length;
-    const rationaleAttached = MOCK_UNIFIED_AUDIT.filter(
+    const totalEvents = unifiedAudit.length;
+    const ownerAssigned = unifiedAudit.filter((event) => Boolean(event.approver)).length;
+    const rationaleAttached = unifiedAudit.filter(
       (event) => Boolean(event.rationale) && (Boolean(event.policyRef) || Boolean(event.internalStandardId)),
     ).length;
-    const aiFinalDecisionCount = MOCK_UNIFIED_AUDIT.filter((event) =>
+    const aiFinalDecisionCount = unifiedAudit.filter((event) =>
       /ai|모델 자동 판단/i.test(event.approver || ''),
     ).length;
 
@@ -257,22 +281,22 @@ export function ComplianceAudit({ context, onNavigate }: ComplianceAuditProps) {
       aiFinalDecisionCount,
       humanDecisionCount: ownerAssigned,
     };
-  }, []);
+  }, [unifiedAudit]);
 
   const auditChecklist = useMemo<AuditChecklistItem[]>(() => {
-    const missingApproverEvents = MOCK_UNIFIED_AUDIT.filter((event) => !event.approver);
-    const missingEvidenceEvents = MOCK_UNIFIED_AUDIT.filter(
+    const missingApproverEvents = unifiedAudit.filter((event) => !event.approver);
+    const missingEvidenceEvents = unifiedAudit.filter(
       (event) => !event.rationale || (!event.policyRef && !event.internalStandardId),
     );
-    const missingExecutorEvents = MOCK_UNIFIED_AUDIT.filter((event) => !event.executor);
-    const unresolvedHighRisk = MOCK_UNIFIED_AUDIT.filter(
+    const missingExecutorEvents = unifiedAudit.filter((event) => !event.executor);
+    const unresolvedHighRisk = unifiedAudit.filter(
       (event) => event.type === 'violation' && event.severity === 'high' && event.status !== 'resolved',
     );
-    const missingStageChainEvents = MOCK_UNIFIED_AUDIT.filter(
+    const missingStageChainEvents = unifiedAudit.filter(
       (event) => !event.cause || !event.requestor || !event.approver || !event.executor,
     );
 
-    const defaultChangeId = MOCK_POLICY_CHANGES[0]?.id;
+    const defaultChangeId = policyChanges[0]?.id;
 
     return [
       {
@@ -326,7 +350,7 @@ export function ComplianceAudit({ context, onNavigate }: ComplianceAuditProps) {
         navContext: missingStageChainEvents[0] ? { auditId: missingStageChainEvents[0].id } : undefined,
       },
     ];
-  }, []);
+  }, [policyChanges, unifiedAudit]);
 
   const auditFitRate = useMemo(() => {
     const fitCount = auditChecklist.filter((item) => item.status === '적합').length;

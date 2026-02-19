@@ -235,6 +235,7 @@ export function RegionalCenterApp({
     if (draft.selectedStage) extras.stage = draft.selectedStage;
     if (draft.selectedCauseKey) extras.cause = draft.selectedCauseKey;
     if (draft.selectedArea) extras.area = draft.selectedArea;
+    if (draft.snapshotId) extras.snapshotId = draft.snapshotId;
 
     if (draft.source === 'cause') {
       setCurrentPage('interventions');

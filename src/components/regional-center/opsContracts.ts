@@ -38,6 +38,20 @@ export type KpiOverlayMode =
   | 'screen_to_dx_rate';
 
 export type MapLayer = 'RISK' | 'BOTTLENECK' | 'GAP' | 'LOAD';
+export type OwnerOrg = 'center' | 'hospital' | 'system' | 'external' | 'regional';
+export type TodoStatus = 'open' | 'acknowledged' | 'converted_to_intervention' | 'dismissed';
+export type TrendMetricKey = 'count' | 'ratio';
+
+export type RegionalQueryState = {
+  regionKey: string;
+  period: InternalRangeKey;
+  kpiKey: KpiKey;
+  areaKey: string | null;
+  layer: MapLayer;
+  selectedStage?: 'contact' | 'recontact' | 'L2' | '3rd' | null;
+  selectedCauseKey?: string | null;
+  trendMetric?: TrendMetricKey;
+};
 
 export type IssueType =
   | 'SLA'
@@ -110,10 +124,105 @@ export interface OperationalTopItem {
   ctaLabel: string;
 }
 
+export type RegionalIssue = {
+  issueId: string;
+  scope: {
+    regionKey: string;
+    areaKey?: string | null;
+  };
+  kpiKey: KpiKey;
+  period: InternalRangeKey;
+  observedAt: string;
+  severity: 'watch' | 'critical';
+  summary: {
+    value: number;
+    delta: number;
+    threshold: number;
+  };
+  linkToBottleneckQueryState: RegionalQueryState;
+};
+
+export type SnapshotBefore = {
+  snapshotId: string;
+  capturedAt: string;
+  queryState: RegionalQueryState;
+  kpis: {
+    kpiValue: number;
+    backlogCount: number;
+    avgDwellMin: number;
+  };
+  stageBreakdownTop: Array<{ stageKey: string; ratio: number; count: number }>;
+  causeBreakdownTop: Array<{ causeKey: string; ratio: number; count: number }>;
+  classificationCoverage: {
+    classifiedRatio: number;
+    unclassifiedRatio: number;
+    unclassifiedOwner: OwnerOrg;
+  };
+  evidenceSummaryTop: Array<{
+    causeKey: string;
+    confidence: 'high' | 'med' | 'low';
+    evidenceType: string;
+    evidenceLink?: string | null;
+  }>;
+};
+
+export type CausePolicy = {
+  causeKey: string;
+  ownerOrg: OwnerOrg;
+  actionable: boolean;
+  regionalNeed: 'high' | 'medium' | 'low';
+  escalationPath: Array<{
+    toOrgRole: string;
+    channel: 'internal' | 'email' | 'sms';
+    slaHours: number;
+  }>;
+  defaultActions: Array<{
+    title: string;
+    steps: string[];
+    expectedEffectTags: string[];
+  }>;
+};
+
+export type ThresholdPolicy = {
+  kpiKey: KpiKey;
+  thresholds: {
+    watch: number;
+    critical: number;
+  };
+  trendRules: Array<{
+    type: 'increasing_streak' | 'no_decrease' | 'rebound';
+    metric: TrendMetricKey;
+    days: number;
+    deltaMin?: number;
+  }>;
+};
+
+export type AssignmentPolicy = {
+  regionKey: string;
+  areaKey?: string | null;
+  causeKey?: string | null;
+  ownerOrg: OwnerOrg;
+  assigneeId: string;
+  assigneeRole: string;
+  defaultDueSlaHours: number;
+};
+
+export type OpsTodoItem = {
+  id: string;
+  title: string;
+  reason: string;
+  target: string;
+  recommendedAction: string;
+  dueSlaHours: number;
+  status: TodoStatus;
+  relatedQueryState: RegionalQueryState;
+  dismissReason?: string;
+};
+
 export type InterventionStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'BLOCKED';
 export type InterventionType = 'STAFFING' | 'RECONTACT_PUSH' | 'DATA_FIX' | 'PATHWAY_TUNE' | 'GOVERNANCE_FIX';
 export type InterventionStageKey = 'Stage1' | 'Stage2' | 'Stage3';
-export type InterventionLogType = 'instruction' | 'adjustment' | 'confirmation' | 'completion';
+export type InterventionLogType = 'instruction' | 'adjustment' | 'confirmation' | 'completion' | 'escalation';
 
 export type InterventionMetricSnapshot = {
   regionalSla: number;
@@ -136,6 +245,8 @@ export type InterventionTimelineEvent = {
 export type InterventionCreatedFrom = {
   causeKey: string;
   kpiKey: KpiKey;
+  snapshotId?: string | null;
+  queryState?: RegionalQueryState;
   snapshot: {
     kpiValue: number;
     backlogCount: number;
@@ -149,11 +260,29 @@ export type InterventionLog = {
   id: string;
   type: InterventionLogType;
   actor: string;
+  actorOrg?: OwnerOrg;
   timestamp: string;
   referenceLink?: string;
   requiresFollowup: boolean;
   followedUpAt?: string;
+  followupDueAt?: string;
   note: string;
+};
+
+export type InterventionAssignment = {
+  ownerOrg: OwnerOrg;
+  assigneeId: string;
+  assigneeName: string;
+  dueAt?: string;
+  slaHours: number;
+  escalationPolicyId?: string;
+};
+
+export type InterventionSuccessMetric = {
+  kpiKey: KpiKey;
+  metricType: TrendMetricKey;
+  targetDelta?: number;
+  evaluationWindowDays: number;
 };
 
 export type InterventionKpiComparison = {
@@ -182,9 +311,13 @@ export interface Intervention {
   type: InterventionType;
   status: InterventionStatus;
   owner: string;
+  ownerOrg?: OwnerOrg;
   createdAt: string;
   dueAt?: string;
   ruleId?: string;
+  context?: RegionalQueryState;
+  assignment?: InterventionAssignment;
+  successMetric?: InterventionSuccessMetric;
   createdFrom: InterventionCreatedFrom;
   expectedEffectTags: string[];
   logs: InterventionLog[];
@@ -206,6 +339,7 @@ export type InterventionDraft = {
   selectedStage?: 'contact' | 'recontact' | 'L2' | '3rd' | null;
   selectedCauseKey?: string | null;
   selectedArea?: string | null;
+  snapshotId?: string | null;
 };
 
 export type WorkStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'REJECTED';

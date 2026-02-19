@@ -16,6 +16,8 @@ import {
   Workflow,
 } from 'lucide-react';
 import type { TabContext } from '../../lib/useTabContext';
+import { fetchDriverAnalysis, fetchQualityAlerts } from '../../lib/centralApi';
+import type { DriverAnalysis, QualityAlert } from '../../mocks/mockCentralOps';
 
 /* ─── Props ─── */
 interface QualityMonitoringProps {
@@ -545,21 +547,89 @@ export function QualityMonitoring({ context, onNavigate }: QualityMonitoringProp
   const [openedStages, setOpenedStages] = useState<StageId[]>([initialStage]);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorDetail, setInspectorDetail] = useState<InspectorKpiDetail | null>(null);
+  const [apiAlerts, setApiAlerts] = useState<QualityAlert[]>([]);
+  const [apiDrivers, setApiDrivers] = useState<DriverAnalysis[]>([]);
   const isTouchDevice = useIsTouchDevice();
   const metricRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  const overallDataReadiness = 95.1;
-  const activeAlerts = QUALITY_ALERT_ROWS.filter((row) => row.status !== '조치 완료').length;
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all([fetchQualityAlerts(), fetchDriverAnalysis()])
+      .then(([alerts, drivers]) => {
+        if (cancelled) return;
+        setApiAlerts(alerts);
+        setApiDrivers(drivers);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setApiAlerts([]);
+        setApiDrivers([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const qualityAlertRows = useMemo<QualityAlertRow[]>(() => {
+    if (!apiAlerts.length) return QUALITY_ALERT_ROWS;
+
+    const toStage = (alert: QualityAlert): StageId => {
+      if (alert.type === 'model_drift') return 'stage3';
+      if (alert.type === 'sla_breach') return 'stage2';
+      if (alert.relatedDriver === 'data_quality') return 'stage1';
+      if (alert.relatedDriver === 'model_fitness') return 'stage3';
+      return 'stage2';
+    };
+
+    const toCause = (alert: QualityAlert): AlertCauseType => {
+      if (alert.type === 'model_drift' || alert.relatedDriver === 'model_fitness') return '모델';
+      if (alert.type === 'data_missing' || alert.type === 'update_delay' || alert.relatedDriver === 'data_quality') return '데이터';
+      return '연계';
+    };
+
+    const toStatus = (alert: QualityAlert): AlertActionStatus => {
+      if (alert.resolved) return '조치 완료';
+      if (alert.severity === 'critical') return '조치 필요';
+      return '관찰';
+    };
+
+    const toImpactKpi = (alert: QualityAlert): string => {
+      if (alert.relatedDriver === 'data_quality') return '데이터 준비도';
+      if (alert.relatedDriver === 'model_fitness') return '거버넌스';
+      if (alert.relatedDriver === 'ops_bottleneck') return '병목';
+      return '데이터 준비도';
+    };
+
+    return apiAlerts.map((alert) => ({
+      id: alert.id,
+      occurredAt: alert.detectedAt.replace('T', ' ').slice(0, 16),
+      stage: toStage(alert),
+      causeType: toCause(alert),
+      impactKpi: toImpactKpi(alert),
+      status: toStatus(alert),
+    }));
+  }, [apiAlerts]);
+
+  const overallDataReadiness = useMemo(() => {
+    const dataQuality = apiDrivers.find((driver) => driver.key === 'data_quality');
+    if (!dataQuality) return 95.1;
+    const completeness = dataQuality.indicators.find((indicator) => indicator.label.includes('완전성'));
+    return completeness?.value ?? 95.1;
+  }, [apiDrivers]);
+
+  const activeAlerts = qualityAlertRows.filter((row) => row.status !== '조치 완료').length;
   const issueByCause = useMemo(
     () =>
-      QUALITY_ALERT_ROWS.reduce(
+      qualityAlertRows.reduce(
         (acc, row) => {
           if (row.status !== '조치 완료') acc[row.causeType] += 1;
           return acc;
         },
         { 데이터: 0, 모델: 0, 연계: 0 } as Record<AlertCauseType, number>,
       ),
-    [],
+    [qualityAlertRows],
   );
 
   const stageStatusMap = useMemo(() => {
@@ -600,10 +670,10 @@ export function QualityMonitoring({ context, onNavigate }: QualityMonitoringProp
   const selectedSeverity = inspectorDetail ? SIGNAL_TO_SEVERITY[inspectorDetail.metric.signal] : null;
   const relatedAlerts = useMemo(() => {
     if (!inspectorDetail) return [];
-    return QUALITY_ALERT_ROWS.filter(
+    return qualityAlertRows.filter(
       (row) => row.stage === inspectorDetail.stage.id && row.status !== '조치 완료',
     );
-  }, [inspectorDetail]);
+  }, [inspectorDetail, qualityAlertRows]);
 
   void onNavigate;
 
@@ -896,7 +966,7 @@ export function QualityMonitoring({ context, onNavigate }: QualityMonitoringProp
                   </tr>
                 </thead>
                 <tbody>
-                  {QUALITY_ALERT_ROWS.map((row) => (
+                  {qualityAlertRows.map((row) => (
                     <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50/50">
                       <td className="py-3 px-3 text-sm text-gray-700">{row.occurredAt}</td>
                       <td className="py-3 px-3">
@@ -919,7 +989,7 @@ export function QualityMonitoring({ context, onNavigate }: QualityMonitoringProp
                       </td>
                     </tr>
                   ))}
-                  {QUALITY_ALERT_ROWS.length === 0 && (
+                  {qualityAlertRows.length === 0 && (
                     <tr>
                       <td colSpan={5} className="py-6 text-center text-sm text-gray-500">
                         활성 품질 경보가 없습니다.

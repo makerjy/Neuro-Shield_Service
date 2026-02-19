@@ -12,7 +12,7 @@ import {
   type CentralCenterPageId,
   type CentralKpiCategory,
 } from '../../lib/centralKpiStandard';
-import { fetchCentralKpis } from '../../mocks/mockCentralOps';
+import { fetchCentralKpis } from '../../lib/centralApi';
 import type { CentralKpiId, CentralKpiValue, CentralTimeWindow } from '../../lib/kpi.types';
 import type { TabContext } from '../../lib/useTabContext';
 

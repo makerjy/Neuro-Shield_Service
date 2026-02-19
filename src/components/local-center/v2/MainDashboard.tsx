@@ -25,7 +25,8 @@ import {
 import { cn, type StageType } from "./shared";
 import { GeoMapPanel } from "../../geomap/GeoMapPanel";
 import { REGIONAL_SCOPES } from "../../geomap/regions";
-import { applyDrilldownFilter, useDashboardStats } from "./caseSSOT";
+import { applyDrilldownFilter, type DashboardStats } from "./caseSSOT";
+import { useLocalCenterDashboardStatsQuery } from "./useLocalCenterApi";
 
 interface KPIProps {
   label: string;
@@ -110,12 +111,36 @@ function resolveLocalMapScope(centerName?: string) {
   };
 }
 
+const EMPTY_DASHBOARD_STATS: DashboardStats = {
+  contactNeeded: 0,
+  stage2Waiting: 0,
+  highRiskMci: 0,
+  stage3Waiting: 0,
+  churnRisk: 0,
+  stageCounts: { 1: 0, 2: 0, 3: 0 },
+  pipelineData: [
+    { name: "1차 선별", count: 0, rate: 0, drop: 0, wait: 0 },
+    { name: "2차 평가", count: 0, rate: 0, drop: 0, wait: 0 },
+    { name: "MCI", count: 0, rate: 0, drop: 0, wait: 0 },
+    { name: "High MCI", count: 0, rate: 0, drop: 0, wait: 0 },
+    { name: "3차 감별", count: 0, rate: 0, drop: 0, wait: 0 },
+  ],
+  mciDistribution: [
+    { name: "Low", value: 0, color: "#059669" },
+    { name: "Moderate", value: 0, color: "#d97706" },
+    { name: "High", value: 0, color: "#dc2626" },
+  ],
+  highRiskMciList: [],
+  priorityTasks: [],
+};
+
 export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
   onNavigateToCases: (filter: string) => void,
   onSelectCase: (id: string, stage: StageType) => void,
   centerName?: string,
 }) {
-  const stats = useDashboardStats();
+  const { data: statsResponse } = useLocalCenterDashboardStatsQuery();
+  const stats = statsResponse?.stats ?? EMPTY_DASHBOARD_STATS;
   const mapScope = resolveLocalMapScope(centerName);
   const [hoveredPipelineStep, setHoveredPipelineStep] = useState<string | null>(null);
   const mciDistribution = useMemo(
@@ -308,8 +333,18 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
               <tbody className="text-sm">
                 {priorityTasks.map((task) => (
                   <tr key={task.id} className="hover:bg-gray-50 transition-colors group">
-                    <td className="px-5 py-4 font-mono font-medium text-gray-900 group-hover:text-blue-600 cursor-pointer" onClick={() => onSelectCase(task.id, task.stage as StageType)}>
-                      {task.id}
+                    <td
+                      className="px-5 py-4 text-gray-900 group-hover:text-blue-600 cursor-pointer"
+                      onClick={() => onSelectCase(task.id, task.stage as StageType)}
+                    >
+                      {task.stage === "Stage 2" || task.stage === "Stage 3" ? (
+                        <div className="leading-tight">
+                          <div className="font-semibold">{task.name}</div>
+                          <div className="font-mono text-[11px] text-gray-500">{task.id}</div>
+                        </div>
+                      ) : (
+                        <span className="font-mono font-medium">{task.id}</span>
+                      )}
                     </td>
                     <td className="px-5 py-4 text-gray-600">{task.age}세</td>
                     <td className="px-5 py-4">

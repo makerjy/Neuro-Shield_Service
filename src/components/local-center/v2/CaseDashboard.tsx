@@ -22,7 +22,7 @@ import {
   type CaseAlertFilter,
   type CaseRecord,
 } from "./caseRecords";
-import { useCaseDashboardRecords } from "./caseSSOT";
+import { useLocalCenterCaseDashboardQuery } from "./useLocalCenterApi";
 
 type StageView = Extract<StageType, "Stage 1" | "Stage 2" | "Stage 3">;
 
@@ -811,7 +811,8 @@ export function CaseDashboard({
   onSelectCase: (id: string, stage: StageType) => void;
   initialFilter: string | null;
 }) {
-  const caseRecords = useCaseDashboardRecords();
+  const { data: casesResponse } = useLocalCenterCaseDashboardQuery();
+  const caseRecords = casesResponse?.items ?? [];
   const [activeFilterTab, setActiveFilterTab] = useState<CaseAlertFilter>("전체");
   const [stageFilter, setStageFilter] = useState<StageView>("Stage 1");
   const [searchKeyword, setSearchKeyword] = useState("");

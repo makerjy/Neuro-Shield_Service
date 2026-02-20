@@ -19,10 +19,16 @@ import {
   ALERT_FILTER_TABS,
   matchesAlertFilter,
   resolveInitialCaseFilter,
+  type AlertTag,
   type CaseAlertFilter,
   type CaseRecord,
+  type CaseRisk,
+  type CaseStatus,
 } from "./caseRecords";
 import { useLocalCenterCaseDashboardQuery } from "./useLocalCenterApi";
+import { getStage3CaseViewSync } from "../../../stores/caseStore";
+import { HERO_CASE_ID } from "../../../demo/demoConfig";
+import { getHeroCase } from "../../../demo/api";
 
 type StageView = Extract<StageType, "Stage 1" | "Stage 2" | "Stage 3">;
 
@@ -105,15 +111,25 @@ type Stage2Row = StageRowBase & {
 
 type Stage3Row = StageRowBase & {
   kind: "Stage 3";
+  stage2Result: "MCI-MID" | "MCI-HIGH" | "AD" | "-";
+  stage3Type: "예방추적" | "AD관리";
+  currentRiskLabel: string;
   trackingStatus: Stage3TrackingStatus;
-  recentEvent: string;
-  nextEvalDate: string;
   intensity: Stage3Intensity;
   intensityRank: number;
-  nextEvalMs: number;
+  riskRank: number;
 };
 
 type StageRow = Stage1Row | Stage2Row | Stage3Row;
+
+export type CaseDashboardViewState = {
+  activeFilterTab: CaseAlertFilter;
+  stageFilter: StageView;
+  ownerFilter: Stage1OwnerFilter;
+  priorityFilter: Stage1PriorityFilter;
+  statusFilter: Stage1StatusFilter;
+  sortDescending: boolean;
+};
 
 type StageAdapter<T extends StageRow> = {
   operationQuestion: string;
@@ -160,6 +176,14 @@ function parseUpdatedMs(updated: string) {
   return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
+function isoToLegacyDateTime(isoLike: string) {
+  const date = new Date(isoLike);
+  if (Number.isNaN(date.getTime())) return isoLike;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(
+    date.getHours(),
+  ).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function formatDateTime(updated: string) {
   return updated.length > 16 ? updated.slice(0, 16) : updated;
 }
@@ -177,6 +201,178 @@ function clamp01(value: number) {
 
 function clamp100(value: number) {
   return Math.max(0, Math.min(100, value));
+}
+
+function mapDemoStage(stage: "STAGE1" | "STAGE2" | "STAGE3"): StageType {
+  if (stage === "STAGE1") return "Stage 1";
+  if (stage === "STAGE2") return "Stage 2";
+  return "Stage 3";
+}
+
+function mapDemoBandToLegacyRisk(band?: "LOW" | "MID" | "HIGH"): CaseRisk {
+  if (band === "HIGH") return "고";
+  if (band === "MID") return "중";
+  return "저";
+}
+
+function mapDemoStatusToLegacyStatus(
+  stage: "STAGE1" | "STAGE2" | "STAGE3",
+  status: string,
+): CaseStatus {
+  if (status === "DONE") return "완료";
+  if (status === "IN_PROGRESS" || status === "MODEL_RUNNING" || status === "LABS_RECEIVED") return "진행중";
+  if (stage === "STAGE3" && status === "NOT_STARTED") return "임박";
+  return "대기";
+}
+
+function ageFromBirthYear(birthYear: number) {
+  const currentYear = new Date().getFullYear();
+  return Math.max(0, currentYear - birthYear);
+}
+
+function mapClassificationToLabel(label?: "NORMAL" | "MCI_LOW" | "MCI_HIGH" | "AD"): "정상" | "MCI" | "치매" | undefined {
+  if (!label) return undefined;
+  if (label === "NORMAL") return "정상";
+  if (label === "AD") return "치매";
+  return "MCI";
+}
+
+function mapClassificationToBand(label?: "NORMAL" | "MCI_LOW" | "MCI_HIGH" | "AD"): "양호" | "중간" | "위험" | undefined {
+  if (!label) return undefined;
+  if (label === "MCI_HIGH") return "위험";
+  if (label === "MCI_LOW") return "양호";
+  if (label === "AD") return "위험";
+  return undefined;
+}
+
+function inferStage3Label(prob?: number): "LOW" | "MID" | "HIGH" | undefined {
+  if (prob == null) return undefined;
+  if (prob >= 0.4) return "HIGH";
+  if (prob >= 0.25) return "MID";
+  return "LOW";
+}
+
+function deriveDemoAlertTags(stage: "STAGE1" | "STAGE2" | "STAGE3", input: {
+  stage1Done: boolean;
+  stage2Ready: boolean;
+  stage2HighMci: boolean;
+  stage3Done: boolean;
+  stage3HighRisk: boolean;
+}): AlertTag[] {
+  const tags = new Set<AlertTag>();
+  if (stage === "STAGE1" && !input.stage1Done) tags.add("SLA 임박");
+  if (stage === "STAGE2" && !input.stage2Ready) tags.add("연계 대기");
+  if (stage === "STAGE2" && !input.stage2HighMci) tags.add("MCI 미등록");
+  if (stage === "STAGE2" && input.stage2HighMci) tags.add("High MCI");
+  if (stage === "STAGE3" && !input.stage3Done) tags.add("재평가 필요");
+  if (stage === "STAGE3" && input.stage3HighRisk) tags.add("이탈 위험");
+  return [...tags];
+}
+
+function getDemoHeroCaseRecord(): CaseRecord | null {
+  const hero = getHeroCase();
+  if (!hero) {
+    return {
+      id: HERO_CASE_ID,
+      stage: "Stage 1",
+      risk: "중",
+      path: "초기 접촉 집중",
+      status: "대기",
+      manager: "이동욱",
+      action: "Stage1 모델 실행",
+      updated: isoToLegacyDateTime(new Date().toISOString()),
+      quality: "양호",
+      profile: {
+        name: "이재용",
+        age: ageFromBirthYear(1959),
+        phone: "010-****-1234",
+      },
+      alertTags: ["SLA 임박"],
+    };
+  }
+
+  const { case: targetCase, person } = hero;
+  const stage = targetCase.currentStage;
+  const stage1Done = targetCase.stage1.status === "DONE";
+  const stage2Ready = Boolean(targetCase.stage2.labs);
+  const stage2HighMci = targetCase.stage2.classification?.label === "MCI_HIGH";
+  const stage3Done = targetCase.stage3.status === "DONE";
+  const risk2y = targetCase.stage3.conversionRisk?.yearly.find((item) => item.year === 2)?.prob;
+  const stage3HighRisk = (risk2y ?? 0) >= 0.4;
+
+  const action =
+    stage === "STAGE1"
+      ? stage1Done
+        ? "Stage2 상승 대기"
+        : targetCase.stage1.status === "IN_PROGRESS"
+          ? "Stage1 모델 실행 중"
+          : "Stage1 모델 실행"
+      : stage === "STAGE2"
+        ? targetCase.stage2.status === "DONE"
+          ? "Stage3 상승 검토"
+          : targetCase.stage2.status === "LABS_RECEIVED"
+            ? "Stage2 모델 실행"
+            : "검사결과 수신"
+        : stage3Done
+          ? "케어플랜 실행"
+          : "Stage3 모델 실행";
+
+  const path =
+    stage === "STAGE1"
+      ? "초기 접촉 집중"
+      : stage === "STAGE2"
+        ? "High MCI 경로"
+        : "추적 강화";
+
+  const stage3Type = targetCase.stage2.classification?.label === "AD" ? "AD_MANAGEMENT" : "PREVENTIVE_TRACKING";
+  const stage3OriginStage2Result =
+    targetCase.stage2.classification?.label === "AD"
+      ? "AD"
+      : targetCase.stage2.classification?.label === "MCI_HIGH"
+        ? "MCI-HIGH"
+        : targetCase.stage2.classification?.label === "MCI_LOW"
+          ? "MCI-MID"
+          : undefined;
+
+  return {
+    id: HERO_CASE_ID,
+    stage: mapDemoStage(stage),
+    risk: mapDemoBandToLegacyRisk(targetCase.stage1.riskBand),
+    path,
+    status: mapDemoStatusToLegacyStatus(stage, stage === "STAGE1" ? targetCase.stage1.status : stage === "STAGE2" ? targetCase.stage2.status : targetCase.stage3.status),
+    manager: "이동욱",
+    action,
+    updated: isoToLegacyDateTime(targetCase.updatedAt),
+    quality: "양호",
+    profile: {
+      name: person.name,
+      age: ageFromBirthYear(person.birthYear),
+      phone: person.phoneMasked,
+    },
+    alertTags: deriveDemoAlertTags(stage, { stage1Done, stage2Ready, stage2HighMci, stage3Done, stage3HighRisk }),
+    computed: {
+      stage2: {
+        modelAvailable: targetCase.stage2.status === "DONE",
+        classificationConfirmed: targetCase.stage2.status === "DONE",
+        predictedLabel: mapClassificationToLabel(targetCase.stage2.classification?.label),
+        mciBand: mapClassificationToBand(targetCase.stage2.classification?.label),
+        completed: Boolean(targetCase.stage2.labs),
+        missing: targetCase.stage2.labs ? [] : ["labs"],
+      },
+      stage3: {
+        modelAvailable: stage3Done,
+        label: inferStage3Label(risk2y),
+        riskNow: risk2y,
+        stage3Type,
+        originStage2Result: stage3OriginStage2Result,
+        completed: stage3Done,
+        missing: stage3Done ? [] : ["conversionRisk"],
+      },
+      ops: {
+        dataQualityScore: 98,
+      },
+    },
+  };
 }
 
 function priorityTierFromScore(score: number): Stage1PriorityTier {
@@ -238,26 +434,48 @@ function stage1PriorityFilterMatch(priorityTier: Stage1PriorityTier, filter: Sta
   return priorityTier === "L1" || priorityTier === "L0";
 }
 
+function isStage1GateBlocked(item: CaseRecord) {
+  return item.profile.phone.trim().length === 0;
+}
+
 function resolveStage1Owner(
   item: CaseRecord,
   contactStatus: Stage1ContactStatus,
   channel: Stage1Channel
 ): Pick<Stage1Row, "ownerType" | "ownerName" | "ownerReason"> {
-  const isGateBlocked = item.quality === "경고" || item.profile.phone.trim().length === 0;
-  if (isGateBlocked) {
+  const hasAssignedManager = item.manager.trim().length > 0 && !item.manager.includes("미지정");
+  const isAutoGuidePreferred = item.path.includes("문자") || item.action.includes("문자");
+  const isGateBlocked = isStage1GateBlocked(item);
+  if (!hasAssignedManager) {
+    if (isAutoGuidePreferred && !isGateBlocked) {
+      return {
+        ownerType: "AGENT",
+        ownerName: "자동 안내 Agent",
+        ownerReason: "자동안내 경로로 실행 가능하며 담당 상담사 배정은 후속으로 진행됩니다.",
+      };
+    }
     return {
       ownerType: "UNASSIGNED",
       ownerName: undefined,
-      ownerReason: "사전 기준 점검 항목이 남아 있어 먼저 채널 검증이 필요합니다.",
+      ownerReason: isGateBlocked
+        ? "사전 기준 점검 항목이 남아 있고 담당자 배정이 없어 우선 점검이 필요합니다."
+        : "담당자가 배정되지 않아 운영자가 먼저 담당자를 지정해야 합니다.",
     };
   }
 
-  const isAutoGuidePreferred = item.path.includes("문자") || item.action.includes("문자");
+  if (isGateBlocked) {
+    return {
+      ownerType: "HUMAN",
+      ownerName: item.manager,
+      ownerReason: "연락처 누락으로 실행 전 채널 확인이 우선입니다.",
+    };
+  }
+
   if (isAutoGuidePreferred) {
     return {
       ownerType: "AGENT",
-      ownerName: "자동 안내 Agent",
-      ownerReason: "자동안내 우선 경로로 접수되어 자동 발송/상태 확인 흐름이 적용됩니다.",
+      ownerName: item.manager,
+      ownerReason: "자동안내 우선 경로이지만 담당 상담사 기준으로 자동 발송/상태 확인 흐름이 적용됩니다.",
     };
   }
 
@@ -455,11 +673,12 @@ function deriveStage1Row(item: CaseRecord): Stage1Row {
   };
 
   const lastContactMs = parseUpdatedMs(item.updated);
+  const isGateBlocked = isStage1GateBlocked(item);
   const owner = resolveStage1Owner(item, contactStatus, channel);
   const priority = computeStage1Priority(item, contactStatus, channel, lastContactMs);
 
   const nextAction: Stage1NextAction =
-    owner.ownerType === "UNASSIGNED"
+    owner.ownerType === "UNASSIGNED" || isGateBlocked
       ? "사전조건 점검"
       : owner.ownerType === "AGENT" && (priority.priorityTier === "L3" || priority.priorityTier === "L2")
         ? "상태 확인"
@@ -501,7 +720,7 @@ function deriveStage2Row(item: CaseRecord): Stage2Row {
           : "MCI"
       : "보류";
 
-  const confirmation: Stage2Confirmation = stage2?.modelAvailable ? "확정" : "임시";
+  const confirmation: Stage2Confirmation = stage2?.classificationConfirmed ? "확정" : "임시";
 
   const nextPath: Stage2NextPath =
     !stage2?.modelAvailable
@@ -542,27 +761,13 @@ function deriveStage2Row(item: CaseRecord): Stage2Row {
 }
 
 function deriveStage3Row(item: CaseRecord): Stage3Row {
-  const stage3 = item.computed?.stage3;
+  const view = getStage3CaseViewSync(item.id);
+  const stage2Result = item.computed?.stage3?.originStage2Result ?? "-";
+  const stage3Type = item.computed?.stage3?.stage3Type === "AD_MANAGEMENT" ? "AD관리" : "예방추적";
+  const riskPct = Math.round((item.computed?.stage3?.riskNow ?? 0) * 100);
   const trackingStatus: Stage3TrackingStatus =
-    stage3?.modelAvailable
-      ? stage3.label === "HIGH"
-        ? "이탈 위험"
-        : stage3.label === "MID"
-          ? "악화"
-          : "안정"
-      : item.alertTags.includes("이탈 위험") || item.status === "지연"
-        ? "이탈 위험"
-        : "악화";
-
-  const intensity: Stage3Intensity =
-    trackingStatus === "이탈 위험"
-      ? "긴급"
-      : trackingStatus === "악화"
-        ? "집중"
-        : "일반";
-
-  const nextEvalDate = addDaysText(item.updated, trackingStatus === "안정" ? 30 : trackingStatus === "악화" ? 14 : 7);
-  const nextEvalMs = new Date(`${nextEvalDate}T09:00:00`).getTime();
+    view?.display.trackingStatus ?? (item.alertTags.includes("이탈 위험") || item.status === "지연" ? "이탈 위험" : "악화");
+  const intensity: Stage3Intensity = view?.display.intensity ?? (trackingStatus === "이탈 위험" ? "긴급" : trackingStatus === "악화" ? "집중" : "일반");
 
   return {
     kind: "Stage 3",
@@ -571,12 +776,13 @@ function deriveStage3Row(item: CaseRecord): Stage3Row {
     manager: item.manager,
     updated: item.updated,
     source: item,
+    stage2Result,
+    stage3Type,
+    currentRiskLabel: stage3Type === "AD관리" ? `${riskPct} 지수` : `${riskPct}%`,
     trackingStatus,
-    recentEvent: item.action,
-    nextEvalDate,
     intensity,
     intensityRank: intensity === "긴급" ? 3 : intensity === "집중" ? 2 : 1,
-    nextEvalMs,
+    riskRank: riskPct,
   };
 }
 
@@ -641,7 +847,7 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
     },
     quickActions: (row) => {
       const stageRow = row as Stage1Row;
-      if (stageRow.ownerType === "UNASSIGNED") {
+      if (stageRow.ownerType === "UNASSIGNED" || stageRow.nextAction === "사전조건 점검") {
         return [
           { key: "precheck", label: "사전조건 점검", icon: Filter, tone: "text-gray-700 bg-gray-100 border-gray-200 hover:bg-gray-200" },
           { key: "verify-channel", label: "채널 점검", icon: MessageSquare, tone: "text-blue-700 bg-blue-50 border-blue-100 hover:bg-blue-100" },
@@ -751,18 +957,20 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
     compare: (a, b) => {
       const rowA = a as Stage3Row;
       const rowB = b as Stage3Row;
+      if (rowB.riskRank !== rowA.riskRank) return rowB.riskRank - rowA.riskRank;
       if (rowB.intensityRank !== rowA.intensityRank) return rowB.intensityRank - rowA.intensityRank;
-      return rowA.nextEvalMs - rowB.nextEvalMs;
+      return rowB.updated.localeCompare(rowA.updated);
     },
     searchBlob: (row) => {
       const target = row as Stage3Row;
       return [
         target.source.profile.name,
         target.caseId,
+        target.stage2Result,
+        target.stage3Type,
+        target.currentRiskLabel,
         target.trackingStatus,
         target.intensity,
-        target.recentEvent,
-        target.nextEvalDate,
         target.manager,
       ].join(" ");
     },
@@ -807,39 +1015,81 @@ const STAGE_VIEW_ADAPTERS: Record<StageView, StageAdapter<StageRow>> = {
 export function CaseDashboard({
   onSelectCase,
   initialFilter,
+  externalSearchKeyword,
+  onExternalSearchKeywordChange,
+  initialViewState,
+  onViewStateChange,
 }: {
   onSelectCase: (id: string, stage: StageType) => void;
   initialFilter: string | null;
+  externalSearchKeyword: string;
+  onExternalSearchKeywordChange: (value: string) => void;
+  initialViewState?: CaseDashboardViewState | null;
+  onViewStateChange?: (state: CaseDashboardViewState) => void;
 }) {
   const { data: casesResponse } = useLocalCenterCaseDashboardQuery();
   const caseRecords = casesResponse?.items ?? [];
-  const [activeFilterTab, setActiveFilterTab] = useState<CaseAlertFilter>("전체");
-  const [stageFilter, setStageFilter] = useState<StageView>("Stage 1");
-  const [searchKeyword, setSearchKeyword] = useState("");
+  const resolvedInitial = useMemo(() => resolveInitialCaseFilter(initialFilter), [initialFilter]);
+  const fallbackInitialStage = resolvedInitial.stageFilter === "all" ? "Stage 1" : resolvedInitial.stageFilter;
+  const fallbackInitialViewState = useMemo<CaseDashboardViewState>(
+    () => ({
+      activeFilterTab: resolvedInitial.alertFilter,
+      stageFilter: fallbackInitialStage,
+      ownerFilter: "ALL",
+      priorityFilter: "ALL",
+      statusFilter: "ALL",
+      sortDescending: STAGE_VIEW_ADAPTERS[fallbackInitialStage].defaultSortDescending,
+    }),
+    [fallbackInitialStage, resolvedInitial.alertFilter]
+  );
+  const effectiveInitialViewState = initialViewState ?? fallbackInitialViewState;
+
+  const [activeFilterTab, setActiveFilterTab] = useState<CaseAlertFilter>(effectiveInitialViewState.activeFilterTab);
+  const [stageFilter, setStageFilter] = useState<StageView>(effectiveInitialViewState.stageFilter);
+  const [searchKeyword, setSearchKeyword] = useState(externalSearchKeyword);
   const [ownerFilter, setOwnerFilter] = useState<Stage1OwnerFilter>("ALL");
   const [priorityFilter, setPriorityFilter] = useState<Stage1PriorityFilter>("ALL");
   const [statusFilter, setStatusFilter] = useState<Stage1StatusFilter>("ALL");
   const [isOpsFilterOpen, setIsOpsFilterOpen] = useState(false);
-  const [sortDescending, setSortDescending] = useState(true);
+  const [sortDescending, setSortDescending] = useState(effectiveInitialViewState.sortDescending);
   const [hoveredCaseId, setHoveredCaseId] = useState<string | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const opsFilterRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const resolved = resolveInitialCaseFilter(initialFilter);
-    setActiveFilterTab(resolved.alertFilter);
-    setStageFilter(resolved.stageFilter === "all" ? "Stage 1" : resolved.stageFilter);
-  }, [initialFilter]);
+  const hasMountedRef = useRef(false);
 
   const adapter = useMemo(() => STAGE_VIEW_ADAPTERS[stageFilter], [stageFilter]);
 
   useEffect(() => {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
     setSortDescending(adapter.defaultSortDescending);
   }, [adapter.defaultSortDescending, stageFilter]);
 
   useEffect(() => {
     if (stageFilter !== "Stage 1") setIsOpsFilterOpen(false);
   }, [stageFilter]);
+
+  useEffect(() => {
+    setSearchKeyword(externalSearchKeyword);
+  }, [externalSearchKeyword]);
+
+  useEffect(() => {
+    onViewStateChange?.({
+      activeFilterTab,
+      stageFilter,
+      ownerFilter,
+      priorityFilter,
+      statusFilter,
+      sortDescending,
+    });
+  }, [activeFilterTab, onViewStateChange, ownerFilter, priorityFilter, sortDescending, stageFilter, statusFilter]);
+
+  const handleSearchKeywordChange = (value: string) => {
+    setSearchKeyword(value);
+    onExternalSearchKeywordChange(value);
+  };
 
   useEffect(() => {
     if (!isOpsFilterOpen) return;
@@ -929,7 +1179,7 @@ export function CaseDashboard({
 
   const resetFilters = () => {
     setActiveFilterTab("전체");
-    setSearchKeyword("");
+    handleSearchKeywordChange("");
     resetOpsFilters();
   };
 
@@ -1156,6 +1406,15 @@ export function CaseDashboard({
                   개입 레벨/담당/상태를 한 번에 설정
                 </span>
               )}
+              {stageFilter === "Stage 1" && hasStage1OpsFilter && (
+                <button
+                  type="button"
+                  onClick={resetOpsFilters}
+                  className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700 hover:bg-amber-100"
+                >
+                  운영 필터 해제
+                </button>
+              )}
 
               <div className="group relative">
                 <span className="inline-flex h-7 w-7 cursor-help items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700 shadow-sm transition-colors hover:bg-blue-100">
@@ -1172,7 +1431,7 @@ export function CaseDashboard({
                 <Search size={14} className="text-gray-400" />
                 <input
                   value={searchKeyword}
-                  onChange={(e) => setSearchKeyword(e.target.value)}
+                  onChange={(e) => handleSearchKeywordChange(e.target.value)}
                   placeholder="이름/케이스ID/담당/상태/개입 레벨 검색"
                   className="w-full bg-transparent text-xs text-gray-700 outline-none placeholder:text-gray-400"
                 />
@@ -1285,6 +1544,7 @@ export function CaseDashboard({
                   <thead className="sticky top-0 bg-white z-20 shadow-sm">
                     <tr className="bg-gray-50/80 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
                       <th className="px-4 py-3 border-b border-gray-100">대상자 이름</th>
+                      <th className="px-4 py-3 border-b border-gray-100">담당자</th>
                       <th className="px-4 py-3 border-b border-gray-100">분류 결과</th>
                       <th className="px-4 py-3 border-b border-gray-100">분류 근거 요약</th>
                       <th className="px-4 py-3 border-b border-gray-100">분류 확정 여부</th>
@@ -1294,7 +1554,7 @@ export function CaseDashboard({
                   <tbody className="text-sm">
                     {stageRows.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-16 text-center text-xs text-gray-400">
+                        <td colSpan={6} className="px-4 py-16 text-center text-xs text-gray-400">
                           조건에 맞는 케이스가 없습니다.
                         </td>
                       </tr>
@@ -1314,7 +1574,9 @@ export function CaseDashboard({
                         >
                           <td className="px-4 py-3.5">
                             <p className="font-medium text-gray-900">{row.source.profile.name}</p>
-                            <p className="text-[10px] text-gray-400">담당자 {row.manager}</p>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <p className="text-xs font-semibold text-gray-700">{row.manager}</p>
                           </td>
                           <td className="px-4 py-3.5">
                             <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", stage2ClassificationTone(row.classification))}>
@@ -1343,17 +1605,18 @@ export function CaseDashboard({
                 <>
                   <thead className="sticky top-0 bg-white z-20 shadow-sm">
                     <tr className="bg-gray-50/80 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                      <th className="px-4 py-3 border-b border-gray-100">대상자 이름</th>
+                      <th className="px-4 py-3 border-b border-gray-100">이름</th>
+                      <th className="px-4 py-3 border-b border-gray-100">Stage2 결과</th>
+                      <th className="px-4 py-3 border-b border-gray-100">Stage3 유형</th>
+                      <th className="px-4 py-3 border-b border-gray-100">현재 위험도</th>
                       <th className="px-4 py-3 border-b border-gray-100">추적 상태</th>
-                      <th className="px-4 py-3 border-b border-gray-100">최근 추적 이벤트</th>
-                      <th className="px-4 py-3 border-b border-gray-100">다음 평가 예정일</th>
-                      <th className="px-4 py-3 border-b border-gray-100">관리 집중도</th>
+                      <th className="px-4 py-3 border-b border-gray-100">담당자</th>
                     </tr>
                   </thead>
                   <tbody className="text-sm">
                     {stageRows.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-16 text-center text-xs text-gray-400">
+                        <td colSpan={6} className="px-4 py-16 text-center text-xs text-gray-400">
                           조건에 맞는 케이스가 없습니다.
                         </td>
                       </tr>
@@ -1373,19 +1636,44 @@ export function CaseDashboard({
                         >
                           <td className="px-4 py-3.5">
                             <p className="font-medium text-gray-900">{row.source.profile.name}</p>
-                            <p className="text-[10px] text-gray-400">담당자 {row.manager}</p>
                           </td>
+                          <td className="px-4 py-3.5">
+                            <span
+                              className={cn(
+                                "rounded border px-2 py-0.5 text-[10px] font-semibold",
+                                row.stage2Result === "AD"
+                                  ? "bg-violet-50 text-violet-700 border-violet-200"
+                                  : row.stage2Result === "MCI-HIGH"
+                                    ? "bg-red-50 text-red-700 border-red-200"
+                                    : row.stage2Result === "MCI-MID"
+                                      ? "bg-orange-50 text-orange-700 border-orange-200"
+                                      : "bg-gray-100 text-gray-700 border-gray-200",
+                              )}
+                            >
+                              {row.stage2Result}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <span
+                              className={cn(
+                                "rounded border px-2 py-0.5 text-[10px] font-semibold",
+                                row.stage3Type === "AD관리"
+                                  ? "bg-violet-50 text-violet-700 border-violet-200"
+                                  : "bg-blue-50 text-blue-700 border-blue-200",
+                              )}
+                            >
+                              {row.stage3Type}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3.5 text-xs text-gray-700">{row.currentRiskLabel}</td>
                           <td className="px-4 py-3.5">
                             <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", stage3TrackingTone(row.trackingStatus))}>
                               {row.trackingStatus}
                             </span>
                           </td>
-                          <td className="px-4 py-3.5 text-xs text-gray-700">{row.recentEvent}</td>
-                          <td className="px-4 py-3.5 text-xs font-semibold text-gray-700">{row.nextEvalDate}</td>
                           <td className="px-4 py-3.5">
-                            <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", stage3IntensityTone(row.intensity))}>
-                              {row.intensity}
-                            </span>
+                            <p className="text-xs font-semibold text-gray-700">{row.manager}</p>
+                            <p className="text-[10px] text-gray-400">집중도 {row.intensity}</p>
                           </td>
                         </tr>
                       );
@@ -1433,7 +1721,7 @@ export function CaseDashboard({
                   )}
                   {hoveredRow.kind === "Stage 3" && (
                     <p>
-                      추적 {hoveredRow.trackingStatus} · 집중도 {hoveredRow.intensity} · 평가 {hoveredRow.nextEvalDate}
+                      {hoveredRow.stage2Result} · {hoveredRow.stage3Type} · 위험 {hoveredRow.currentRiskLabel} · 추적 {hoveredRow.trackingStatus}
                     </p>
                   )}
                 </div>

@@ -33,6 +33,8 @@ import {
   toAgeBand,
   type CaseRecord,
 } from "./caseRecords";
+import { toCaseDashboardRecord, useCaseEntity } from "./caseSSOT";
+import { useLocalCenterCaseQuery } from "./useLocalCenterApi";
 import { CaseDetailStage2 } from "../CaseDetailStage2";
 import { CaseDetailStage3 } from "../CaseDetailStage3";
 import { Stage1OpsDetail, type Stage1HeaderSummary } from "./stage1/Stage1OpsDetail";
@@ -68,7 +70,14 @@ function stage1SlaLabel(summary: Stage1HeaderSummary | null) {
 }
 
 export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
-  const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
+  const { data: caseResponse } = useLocalCenterCaseQuery(caseId);
+  const ssotCase = useCaseEntity(caseId);
+  const apiCaseEntity = caseResponse?.item ?? null;
+  const profile = useMemo(() => {
+    if (apiCaseEntity) return toCaseDashboardRecord(apiCaseEntity);
+    if (ssotCase) return toCaseDashboardRecord(ssotCase);
+    return getCaseRecordById(caseId);
+  }, [apiCaseEntity, caseId, ssotCase]);
   const [stage1HeaderSummary, setStage1HeaderSummary] = useState<Stage1HeaderSummary | null>(null);
   const stageLikeStage1 = stage === "Stage 1";
   const stage1IdentityLine =
@@ -106,7 +115,7 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
                 <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
                 <span className="w-px h-2 bg-gray-200"></span>
                 <span>
-                  현재 상태: <span className="font-bold text-blue-700">{profile?.status ?? "진행중"}</span>
+                  현재 상태: <span className="font-bold text-blue-700">{profile?.status ?? (apiCaseEntity?.status ?? ssotCase?.status ?? "진행중")}</span>
                 </span>
                 {stage1IdentityLine ? (
                   <>
@@ -147,6 +156,7 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
         {stageLikeStage1 ? (
           <>
             <Stage1OpsDetail
+              caseId={caseId}
               caseRecord={profile}
               onHeaderSummaryChange={setStage1HeaderSummary}
             />

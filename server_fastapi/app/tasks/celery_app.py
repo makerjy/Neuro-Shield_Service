@@ -18,6 +18,15 @@ celery_app.conf.update(
     task_serializer='json',
     result_serializer='json',
     accept_content=['json'],
+    imports=(
+        'server_fastapi.app.tasks.aggregate',
+        'server_fastapi.app.tasks.report',
+        'server_fastapi.app.tasks.escalate',
+        'server_fastapi.app.tasks.quality_check',
+        'server_fastapi.app.tasks.scheduler',
+        'server_fastapi.app.tasks.tasks',
+        'server_fastapi.app.tasks.citizen_tasks',
+    ),
     beat_schedule={
         'aggregate-kpis': {
             'task': 'server_fastapi.app.tasks.aggregate.aggregate_kpis',
@@ -34,6 +43,22 @@ celery_app.conf.update(
         'quality-check': {
             'task': 'server_fastapi.app.tasks.quality_check.run_quality_checks',
             'schedule': 900.0,
+        },
+        'citizen-reminders-due': {
+            'task': 'server_fastapi.app.tasks.citizen_tasks.reminders_due',
+            'schedule': 180.0,
+        },
+        'citizen-cleanup-expired-sessions': {
+            'task': 'server_fastapi.app.tasks.citizen_tasks.cleanup_expired_sessions',
+            'schedule': 600.0,
+        },
+        'citizen-process-submissions': {
+            'task': 'server_fastapi.app.tasks.citizen_tasks.process_citizen_submission',
+            'schedule': 300.0,
+        },
+        'citizen-data-quality-daily': {
+            'task': 'server_fastapi.app.tasks.quality_check.run_quality_checks',
+            'schedule': 86400.0,
         },
         'scan-due-local-schedules': {
             'task': 'server_fastapi.app.tasks.scheduler.scan_due_local_schedules',

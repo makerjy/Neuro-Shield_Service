@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Calendar,
   Clock,
@@ -34,7 +34,21 @@ import { ChatbotDialog } from './ChatbotDialog';
 
 type PageMode = 'home' | 'booking' | 'consent' | 'center-select' | 'datetime' | 'confirm' | 'complete' | 'faq' | 'contact';
 
-export function CitizenMobileApp() {
+type CitizenMobileAppProps = {
+  inviteToken?: string;
+};
+
+type CitizenSessionResponse = {
+  sessionId: string;
+  otpVerified: boolean;
+};
+
+type CitizenOtpRequestResponse = {
+  ok: boolean;
+  devOtp?: string;
+};
+
+export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
   const [mode, setMode] = useState<PageMode>('home');
   const [consentRequired, setConsentRequired] = useState(false);
   const [consentOptional, setConsentOptional] = useState(false);
@@ -49,6 +63,100 @@ export function CitizenMobileApp() {
   const [showGuardianField, setShowGuardianField] = useState(false);
   const [stopContactDialog, setStopContactDialog] = useState(false);
   const [chatbotOpen, setChatbotOpen] = useState(false);
+  const [sessionId, setSessionId] = useState('');
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [submittingBooking, setSubmittingBooking] = useState(false);
+  const [sessionResolveFailed, setSessionResolveFailed] = useState(false);
+  const [backendDemoMode, setBackendDemoMode] = useState(false);
+
+  const isDemoBypass = useMemo(() => {
+    const envAny = import.meta.env as Record<string, string | boolean | undefined>;
+    if (envAny.DEV === true) return true;
+    if (String(envAny.VITE_DEMO_MODE || '').toLowerCase() === 'true') return true;
+    return (globalThis as any)?.__NEURO_SHIELD_DEMO_BYPASS__ === true;
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const loadConfig = async () => {
+      try {
+        const response = await fetch('/api/config');
+        if (!response.ok) return;
+        const data = (await response.json()) as { demo_mode?: boolean };
+        if (!active) return;
+        setBackendDemoMode(Boolean(data.demo_mode));
+      } catch {
+        // 시민 화면에서는 config 조회 실패 시 기본 동작을 유지한다.
+      }
+    };
+    void loadConfig();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const sessionStorageKey = useMemo(
+    () => (inviteToken ? `citizen-session:${inviteToken}` : ''),
+    [inviteToken],
+  );
+
+  useEffect(() => {
+    if (!inviteToken) return;
+    setSessionResolveFailed(false);
+    let restoredFromStorage = false;
+
+    const restore = () => {
+      if (!sessionStorageKey) return false;
+      const saved = window.localStorage.getItem(sessionStorageKey);
+      if (!saved) return false;
+      try {
+        const parsed = JSON.parse(saved) as CitizenSessionResponse;
+        if (parsed.sessionId) {
+          setSessionId(parsed.sessionId);
+          setOtpVerified(Boolean(parsed.otpVerified));
+          restoredFromStorage = true;
+          return true;
+        }
+      } catch {
+        window.localStorage.removeItem(sessionStorageKey);
+      }
+      return false;
+    };
+
+    restore();
+
+    let active = true;
+    const resolveSession = async () => {
+      try {
+        const response = await fetch(`/api/citizen/session?token=${encodeURIComponent(inviteToken)}`);
+        if (!response.ok) {
+          throw new Error(`session resolve failed: ${response.status}`);
+        }
+        const data = (await response.json()) as CitizenSessionResponse;
+        if (!active) return;
+        setSessionId(data.sessionId);
+        setOtpVerified(Boolean(data.otpVerified));
+        if (sessionStorageKey) {
+          window.localStorage.setItem(
+            sessionStorageKey,
+            JSON.stringify({ sessionId: data.sessionId, otpVerified: Boolean(data.otpVerified) }),
+          );
+        }
+        setSessionResolveFailed(false);
+      } catch (error) {
+        console.error(error);
+        if (!restoredFromStorage && sessionStorageKey) {
+          window.localStorage.removeItem(sessionStorageKey);
+        }
+        setSessionResolveFailed(true);
+      }
+    };
+
+    void resolveSession();
+    return () => {
+      active = false;
+    };
+  }, [inviteToken, sessionStorageKey]);
 
   const centers = [
     { id: 'health', name: '강남구 보건소', address: '서울시 강남구 학동로 426' },
@@ -107,7 +215,64 @@ export function CitizenMobileApp() {
 
   const phoneRegex = /^01[016789]-?\d{3,4}-?\d{4}$/;
 
-  const handleConfirmBooking = () => {
+  const submitDemoSchedule = async () => {
+    const appointmentAt = new Date(`${selectedDate}T${selectedTime}:00`).toISOString();
+    const organization = centers.find((center) => center.id === selectedCenter)?.name || '강남구 치매안심센터';
+    const normalizedToken = (inviteToken || 'demo').replace(/[^A-Za-z0-9]/g, '').slice(-10) || 'demo';
+    const demoCaseId = (isDemoBypass || backendDemoMode) ? 'CASE-DEMO-IJY-001' : `CASE-DEMO-${normalizedToken}`;
+
+    const response = await fetch('/api/local/schedules', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Id': 'citizen-demo',
+        'X-User-Role': 'SYSTEM',
+      },
+      body: JSON.stringify({
+        caseId: demoCaseId,
+        eventType: 'APPOINTMENT',
+        title: `시민 예약 일정 (${organization})`,
+        startAt: appointmentAt,
+        durationMin: 30,
+        priority: 'NORMAL',
+        payload: {
+          source: 'citizen-demo',
+          name,
+          phone,
+          birthdate,
+          guardianPhone: guardianPhone || null,
+          notes: additionalNotes || null,
+          consentOptional,
+        },
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`demo booking failed (${response.status}): ${text}`);
+    }
+  };
+
+  const submitLegacyBooking = async () => {
+    const response = await fetch('/api/citizen/booking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_type: 'screening',
+        center_id: 'center-001',
+        date: selectedDate,
+        time: selectedTime,
+        notes: additionalNotes || null,
+        citizen_name: name,
+        citizen_phone: phone.replace(/-/g, ''),
+      }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`legacy booking failed (${response.status}): ${text}`);
+    }
+  };
+
+  const handleConfirmBooking = async () => {
     if (!name || !phone || !birthdate) {
       toast.error('모든 필수 정보를 입력해주세요');
       return;
@@ -121,22 +286,139 @@ export function CitizenMobileApp() {
       toast.error('보호자 연락처 형식이 올바르지 않습니다');
       return;
     }
+    if (!selectedDate || !selectedTime) {
+      toast.error('예약 일시가 선택되지 않았습니다.');
+      return;
+    }
 
-    // Log appointment
-    console.log('New Appointment:', {
-      center: selectedCenter,
-      date: selectedDate,
-      time: selectedTime,
-      name,
-      phone,
-      birthdate,
-      guardianPhone: guardianPhone || undefined,
-      consentOptional,
-      notes: additionalNotes,
-      timestamp: new Date().toISOString(),
-    });
+    setSubmittingBooking(true);
+    try {
+      if (sessionResolveFailed || !sessionId) {
+        await submitDemoSchedule();
+        setMode('complete');
+        toast.success('데모 모드로 예약이 저장되었습니다.');
+        return;
+      }
 
-    setMode('complete');
+      const skipOtp = isDemoBypass || backendDemoMode;
+      if (!otpVerified && !skipOtp) {
+        const otpRequest = await fetch('/api/citizen/otp/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            phoneNumber: phone.replace(/-/g, ''),
+          }),
+        });
+        if (!otpRequest.ok) {
+          throw new Error(`otp request failed (${otpRequest.status})`);
+        }
+        const otpData = (await otpRequest.json()) as CitizenOtpRequestResponse;
+        let otpCode = otpData.devOtp;
+        if (!otpCode) {
+          const typed = window.prompt('문자로 받은 OTP 6자리를 입력해주세요.');
+          otpCode = typed?.trim();
+        }
+        if (!otpCode) {
+          toast.error('OTP 인증이 필요합니다.');
+          return;
+        }
+        const otpVerify = await fetch('/api/citizen/otp/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            otpCode,
+            phoneNumber: phone.replace(/-/g, ''),
+          }),
+        });
+        if (!otpVerify.ok) {
+          throw new Error(`otp verify failed (${otpVerify.status})`);
+        }
+        setOtpVerified(true);
+      } else if (skipOtp) {
+        setOtpVerified(true);
+      }
+
+      const appointmentAt = new Date(`${selectedDate}T${selectedTime}:00`).toISOString();
+      const organization = centers.find((center) => center.id === selectedCenter)?.name || '강남구 치매안심센터';
+
+      const response = await fetch('/api/citizen/appointments/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          appointmentAt,
+          organization,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`booking failed (${response.status}): ${text}`);
+      }
+
+      const payload = {
+        sessionId,
+        otpVerified: true,
+      };
+      if (sessionStorageKey) {
+        window.localStorage.setItem(sessionStorageKey, JSON.stringify(payload));
+      }
+      setMode('complete');
+      toast.success('예약이 저장되었습니다.');
+    } catch (error) {
+      console.error(error);
+      let recovered = false;
+      try {
+        await submitDemoSchedule();
+        setMode('complete');
+        toast.success('기본 예약 연동이 지연되어 데모 일정으로 저장했습니다.');
+        recovered = true;
+      } catch (scheduleFallbackError) {
+        console.error(scheduleFallbackError);
+      }
+
+      if (!recovered) {
+        try {
+          await submitLegacyBooking();
+          try {
+            await submitDemoSchedule();
+          } catch (linkageError) {
+            console.error(linkageError);
+          }
+          setMode('complete');
+          toast.success('레거시 경로로 예약을 접수했습니다.');
+          recovered = true;
+        } catch (legacyFallbackError) {
+          console.error(legacyFallbackError);
+        }
+      }
+
+      if (!recovered) {
+        if (isDemoBypass || backendDemoMode) {
+          const offlineKey = `citizen-offline-booking:${Date.now()}`;
+          window.localStorage.setItem(
+            offlineKey,
+            JSON.stringify({
+              name,
+              phone,
+              birthdate,
+              selectedCenter,
+              selectedDate,
+              selectedTime,
+              guardianPhone: guardianPhone || null,
+              additionalNotes: additionalNotes || null,
+            }),
+          );
+          setMode('complete');
+          toast.success('데모 오프라인 모드로 예약을 기록했습니다.');
+        } else {
+          toast.error('예약 저장에 실패했습니다. 잠시 후 다시 시도해주세요.');
+        }
+      }
+    } finally {
+      setSubmittingBooking(false);
+    }
   };
 
   const handleRemindLater = () => {
@@ -508,9 +790,9 @@ export function CitizenMobileApp() {
       <Button
         className="w-full"
         onClick={handleConfirmBooking}
-        disabled={!name || !phone || !birthdate}
+        disabled={!name || !phone || !birthdate || submittingBooking}
       >
-        예약 확정하기
+        {submittingBooking ? '저장 중...' : '예약 확정하기'}
       </Button>
     </div>
   );

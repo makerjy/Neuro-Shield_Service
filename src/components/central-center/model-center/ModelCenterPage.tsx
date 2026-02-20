@@ -357,7 +357,7 @@ function buildStageHoverPayload(
         denominator: { label: "대상자", n: stage.metrics.applied },
         coverage: { receivedPct: stage.metrics.appliedRate, partial: isPartial, notes: batchMeta.notes },
         outputs: ["신규 케이스 생성 후보", "2차(진단) 검사 권고/예약 유도", "이상 신호(사유 코드)"],
-        caution: "위험도는 진단이 아니라 선별/우선순위 신호",
+        caution: "위험도는 공식 분류를 대체하지 않는 선별/우선순위 신호",
         modelChip: `ML ${stage.processing[0]?.version ?? "v-"}`,
         dispatchChip: `전송: ${dispatchLabel}`,
       },
@@ -375,7 +375,7 @@ function buildStageHoverPayload(
         denominator: { label: "기관 결과 수신", n: MOCK_STAGE2_DISTRIBUTION.receivedN },
         coverage: { receivedPct: batchMeta.receiveRate, partial: isPartial, notes: batchMeta.notes },
         outputs: ["AD/MCI/정상 분포 집계", "검증필요/주의 플래그", "센터 후속조치 대상"],
-        caution: "기관 결과가 공식 분류이며 모델 신호는 참고(비진단)",
+        caution: "기관 결과가 공식 분류이며 모델 신호는 참고(공식 분류 대체 불가)",
         modelChip: "ANN v1.0",
         dispatchChip: `전송: ${dispatchLabel}`,
       },
@@ -386,14 +386,14 @@ function buildStageHoverPayload(
     dispatchState,
     meta: {
       stage: stageTag,
-      title: "Stage3 — 3차 감별검사",
+      title: "Stage3 — 3차 감별검사 (전환위험 예측)",
       baseDate: batchMeta.baseDate,
-      definition: "MCI 추적군 중심으로 전환 위험/우선순위와 권고 액션을 갱신",
+      definition: "Stage1/2 멀티모달 데이터와 MRI(CNN) 신호를 결합해 2년 후 MCI→AD 전환확률(0–100%)을 산출",
       denominator: { label: "추적 대상", n: stage.metrics.applied },
       coverage: { receivedPct: stage.metrics.appliedRate, partial: isPartial, notes: batchMeta.notes },
-      outputs: ["우선순위 High 리스트", "권고 액션(재검/정밀검사/연계)", "추적 지연/누락 경고"],
-      caution: "우선순위는 운영 신호이며 임상 판단을 대체하지 않음",
-      modelChip: "CNN v1.0",
+      outputs: ["2년 전환위험(MCI→AD) %", "위험 구간/사유 코드", "우선순위·권고 액션·가드레일"],
+      caution: "출력은 참고용 판단 보조 신호입니다. MRI-CNN은 업스트림 입력 신호입니다.",
+      modelChip: "ANN v2.1.0 + CNN v1.0.3",
       dispatchChip: `전송: ${dispatchLabel}`,
     },
   };
@@ -546,7 +546,12 @@ function StageCard({
       </div>
       {stage.stageId === "stage2" && (
         <div className="mx-4 mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-700 font-semibold">
-          기관 결과 = 공식 분류 · 모델 신호 = 참고(비진단)
+          기관 결과 = 공식 분류 · 모델 신호 = 참고(공식 분류 대체 불가)
+        </div>
+      )}
+      {stage.stageId === "stage3" && (
+        <div className="mx-4 mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[10px] text-emerald-700 font-semibold">
+          최종 출력 = 2년 전환위험(MCI→AD, %) · 참고용 판단 보조 신호
         </div>
       )}
 
@@ -564,7 +569,7 @@ function StageCard({
         )}
         {stage.metrics.conversionRate != null && (
           <div>
-            <span className="text-slate-400">전환율</span>
+            <span className="text-slate-400">{stage.stageId === "stage3" ? "2년 전환위험" : "전환율"}</span>
             <span className="ml-1.5 font-bold text-slate-700">{stage.metrics.conversionRate}%</span>
           </div>
         )}
@@ -1272,9 +1277,9 @@ function DetailInspector({
                     ))}
                     <p className="text-slate-500">
                       {stageContext.stageId === "stage2"
-                        ? "기관 결과 = 공식 분류 / 모델 신호 = 참고(비진단)"
+                        ? "기관 결과 = 공식 분류 / 모델 신호 = 참고(공식 분류 대체 불가)"
                         : stageContext.stageId === "stage3"
-                        ? "우선순위는 운영 신호이며 임상 판단을 대체하지 않음"
+                        ? "2년 전환위험(MCI→AD, %)은 참고용 판단 보조 신호 / MRI-CNN은 업스트림 입력 신호"
                         : "위험도는 선별/우선순위 신호로 활용"}
                     </p>
                   </div>
@@ -1553,7 +1558,7 @@ export default function ModelCenterPage() {
               Stage 2 라벨 규칙 — 분리 표기 안내
             </h3>
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 mb-3 text-[11px] font-semibold text-amber-700">
-              기관 결과 = 공식 분류 · 모델 신호 = 참고(비진단)
+              기관 결과 = 공식 분류 · 모델 신호 = 참고(공식 분류 대체 불가)
             </div>
             <div className="grid grid-cols-2 gap-3 text-[11px]">
               <div className="bg-amber-50 rounded-lg p-3 border border-amber-200">
@@ -1564,7 +1569,7 @@ export default function ModelCenterPage() {
               <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
                 <p className="font-semibold text-blue-700 mb-1">모델 참고 신호</p>
                 <p className="text-blue-600">일치 / 주의 / 검증 필요</p>
-                <p className="text-blue-500 mt-1 italic">※ 참고용 보조 신호이며, 진단이 아닙니다</p>
+                <p className="text-blue-500 mt-1 italic">※ 참고용 보조 신호이며, 기관 분류 결과를 대체하지 않습니다</p>
               </div>
             </div>
             {batchMeta.status === "partial" && (

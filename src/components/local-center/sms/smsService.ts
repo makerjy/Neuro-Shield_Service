@@ -63,6 +63,7 @@ export interface SmsSendResult {
 
 const SMS_API_ENDPOINT_V2 = "/api/sms/messages";
 const SMS_API_ENDPOINT_LEGACY = "/api/outreach/send-sms";
+const DEMO_CITIZEN_TOKEN_DEFAULT = "R-2ldKkoGbDF-marBFEbgVilAXB5Tw0r";
 
 function normalizeBasePath(path: string): string {
   if (!path || !path.trim()) return "/neuro-shield/";
@@ -90,6 +91,28 @@ export function resolvePublicBaseUrl(): string {
 export function buildSmsLandingLink(token: string): string {
   const base = resolvePublicBaseUrl();
   return `${base}/p/sms?t=${encodeURIComponent(token)}`;
+}
+
+function parseTokenFromLink(link: string): string | undefined {
+  try {
+    const parsed = new URL(link, typeof window !== "undefined" ? window.location.origin : "http://localhost");
+    const token = parsed.searchParams.get("t") || "";
+    return token.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveStage1DemoLink(stage?: SmsStage): { linkUrl: string; token?: string } | null {
+  if (stage !== "STAGE1") return null;
+  const envAny = import.meta.env as Record<string, string | undefined>;
+  const explicit = (envAny.VITE_STAGE1_DEMO_LINK || "").trim();
+  const token = (envAny.VITE_CITIZEN_DEMO_TOKEN || DEMO_CITIZEN_TOKEN_DEFAULT).trim();
+  const linkUrl = explicit || buildSmsLandingLink(token);
+  return {
+    linkUrl,
+    token: parseTokenFromLink(linkUrl),
+  };
 }
 
 export function createClientSmsToken(caseId: string): string {
@@ -287,8 +310,9 @@ export function getDefaultSmsLandingLink(): string {
  * 실제 SMS 발송 API 호출
  */
 export async function sendSmsApi(request: SmsSendRequest): Promise<SmsSendResult> {
-  const token = request.linkToken || createClientSmsToken(request.caseId);
-  const linkUrl = request.linkUrl || buildSmsLandingLink(token);
+  const stage1Demo = !request.linkUrl ? resolveStage1DemoLink(request.stage) : null;
+  const token = request.linkToken || stage1Demo?.token || createClientSmsToken(request.caseId);
+  const linkUrl = request.linkUrl || stage1Demo?.linkUrl || buildSmsLandingLink(token);
 
   try {
     const v2Result = await sendViaV2(request, linkUrl, token);

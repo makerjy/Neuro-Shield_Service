@@ -5,9 +5,22 @@ import {
   type CaseRecord,
 } from "./caseRecords";
 import { generateCases, type Case as SeedCase } from "../caseData";
+import { reconcileStage3Case } from "../../../domain/stage3/reconcileStage3Case";
+import type {
+  Stage3Case as Stage3DomainCase,
+  Stage3ModelStatus as Stage3DomainModelStatus,
+  Stage3ReconcilePatch,
+  Stage3ReconcilePolicy,
+} from "../../../domain/stage3/types";
 
 export type Stage = 1 | 2 | 3;
 export type Stage2Route = "HOSPITAL" | "CENTER";
+export type OperationStep = "WAITING" | "IN_PROGRESS" | "RESULT_READY" | "CLASSIFIED" | "FOLLOW_UP" | "COMPLETED";
+export type ModelStatus = "PENDING" | "PROCESSING" | "DONE";
+export type CaseClassification = "NORMAL" | "MCI" | "AD";
+export type Stage2ResultBucket = "NORMAL" | "MCI_LOW" | "MCI_MID" | "MCI_HIGH" | "AD";
+export type Stage3Type = "PREVENTIVE_TRACKING" | "AD_MANAGEMENT";
+export type Stage3OriginStage2Result = "MCI-MID" | "MCI-HIGH" | "AD";
 
 export type CaseStatus =
   | "OPEN"
@@ -27,6 +40,10 @@ export type CaseCore = {
   region: { sido: string; sigungu: string; center: string };
   patient: { name: string; age: number; phone?: string; caregiverPhone?: string };
   status: CaseStatus;
+  operationStep: OperationStep;
+  modelStatus: ModelStatus;
+  classification?: CaseClassification;
+  riskScore?: number;
   createdAt: string;
   updatedAt: string;
   stage2Route: Stage2Route;
@@ -75,6 +92,10 @@ export type Stage3ModelOutput = {
   available: boolean;
   risk2yNow?: number;
   risk2yAt2y?: number;
+  conversionRisk1y?: number;
+  conversionRisk2y?: number;
+  conversionRisk3y?: number;
+  currentRiskIndex?: number;
   label?: "LOW" | "MID" | "HIGH";
   confidence?: "LOW" | "MID" | "HIGH";
   modelVersion?: string;
@@ -85,6 +106,22 @@ export type CaseComputed = {
   evidence: EvidenceState;
   model2: Stage2ModelOutput;
   model3: Stage3ModelOutput;
+  stage3Profile?: {
+    originStage2Result: Stage3OriginStage2Result;
+    originRiskScore: number;
+    stage3Type: Stage3Type;
+  };
+  stage3Loop?: {
+    step: 1 | 2 | 3 | 4;
+    completed: {
+      step1At?: string;
+      step2At?: string;
+      step3At?: string;
+      step4At?: string;
+    };
+    status: "IN_PROGRESS" | "ON_HOLD" | "EXCLUDED" | "DONE";
+    blockers: string[];
+  };
   ops: {
     contactMode?: "HUMAN" | "AGENT";
     lastContactAt?: string;
@@ -108,6 +145,12 @@ export type EventType =
   | "STAGE3_DIFF_SCHEDULED"
   | "STAGE3_RESULTS_RECORDED"
   | "STAGE3_RISK_UPDATED"
+  | "INFERENCE_REQUESTED"
+  | "INFERENCE_STARTED"
+  | "INFERENCE_PROGRESS"
+  | "INFERENCE_COMPLETED"
+  | "INFERENCE_FAILED"
+  | "MODEL_RESULT_APPLIED"
   | "CONTACT_SENT"
   | "CONTACT_RESULT"
   | "BOOKING_CREATED"
@@ -161,6 +204,11 @@ export type DashboardStats = {
 
 const MODEL2_VERSION = "stage2-gate-v2";
 const MODEL3_VERSION = "stage3-gate-v2";
+const DEFAULT_STAGE3_RECONCILE_POLICY: Stage3ReconcilePolicy = {
+  autoCompleteStep1: true,
+};
+export const STAGE3_RECONCILE_POLICY = DEFAULT_STAGE3_RECONCILE_POLICY;
+const PRIORITY_TASK_PINNED_CASE_IDS = new Set(["CASE-2026-175"]);
 
 const caseStore = new Map<string, InternalCaseEntity>();
 const eventStore = new Map<string, CaseEvent[]>();
@@ -236,6 +284,312 @@ function buildMciBand(score: number): "양호" | "중간" | "위험" {
   if (score >= 70) return "위험";
   if (score >= 40) return "중간";
   return "양호";
+}
+
+function toCaseClassification(label?: Stage2ModelOutput["predictedLabel"]): CaseClassification | undefined {
+  if (!label) return undefined;
+  if (label === "정상") return "NORMAL";
+  if (label === "치매") return "AD";
+  return "MCI";
+}
+
+function stage2BucketToLabel(bucket: Stage2ResultBucket): "정상" | "MCI" | "치매" {
+  if (bucket === "AD") return "치매";
+  if (bucket === "NORMAL") return "정상";
+  return "MCI";
+}
+
+function stage2BucketToMciBand(bucket: Stage2ResultBucket): "양호" | "중간" | "위험" | undefined {
+  if (bucket === "MCI_LOW") return "양호";
+  if (bucket === "MCI_MID") return "중간";
+  if (bucket === "MCI_HIGH") return "위험";
+  return undefined;
+}
+
+function deriveStage2ResultBucketFromModel(model: Stage2ModelOutput): Stage2ResultBucket {
+  if (!model.available || !model.predictedLabel) return "NORMAL";
+  if (model.predictedLabel === "치매") return "AD";
+  if (model.predictedLabel === "정상") return "NORMAL";
+  if (model.mciBand === "위험") return "MCI_HIGH";
+  if (model.mciBand === "중간") return "MCI_MID";
+  return "MCI_LOW";
+}
+
+function toStage3OriginStage2Result(bucket: Stage2ResultBucket): Stage3OriginStage2Result | null {
+  if (bucket === "MCI_MID") return "MCI-MID";
+  if (bucket === "MCI_HIGH") return "MCI-HIGH";
+  if (bucket === "AD") return "AD";
+  return null;
+}
+
+function stage3TypeFromOrigin(origin: Stage3OriginStage2Result): Stage3Type {
+  return origin === "AD" ? "AD_MANAGEMENT" : "PREVENTIVE_TRACKING";
+}
+
+function isStage3EligibleOrigin(origin: Stage3OriginStage2Result | null): origin is Stage3OriginStage2Result {
+  return origin != null;
+}
+
+function stage3RiskBase(model3: Stage3ModelOutput, stage3Type: Stage3Type): number {
+  if (stage3Type === "AD_MANAGEMENT") {
+    return clamp01(model3.currentRiskIndex ?? model3.risk2yNow ?? model3.conversionRisk2y ?? 0);
+  }
+  return clamp01(model3.conversionRisk2y ?? model3.risk2yNow ?? model3.currentRiskIndex ?? 0);
+}
+
+function mapCaseStatusToStage3LoopStatus(
+  status: CaseStatus,
+): "IN_PROGRESS" | "ON_HOLD" | "EXCLUDED" | "DONE" {
+  if (status === "ON_HOLD") return "ON_HOLD";
+  if (status === "EXCLUDED") return "EXCLUDED";
+  if (status === "CLOSED") return "DONE";
+  return "IN_PROGRESS";
+}
+
+function mapStage3DomainStatusToModelStatus(status: Stage3DomainModelStatus): ModelStatus {
+  if (status === "RUNNING" || status === "QUEUED") return "PROCESSING";
+  if (status === "READY") return "DONE";
+  return "PENDING";
+}
+
+function mapModelStatusToStage3DomainStatus(
+  status: ModelStatus,
+  hasModelResult: boolean,
+): Stage3DomainModelStatus {
+  if (hasModelResult) return "READY";
+  if (status === "PROCESSING") return "RUNNING";
+  return "NOT_READY";
+}
+
+function inferStage3LoopStepFromCompletion(completed: {
+  step1At?: string;
+  step2At?: string;
+  step3At?: string;
+  step4At?: string;
+}): 1 | 2 | 3 | 4 {
+  const step1 = Boolean(completed.step1At);
+  const step2 = step1 && Boolean(completed.step2At);
+  const step3 = step2 && Boolean(completed.step3At);
+  const step4 = step3 && Boolean(completed.step4At);
+  if (step4) return 4;
+  if (step3) return 4;
+  if (step2) return 3;
+  if (step1) return 2;
+  return 1;
+}
+
+function ensureStage3LoopShape(entity: Pick<CaseEntity, "stage" | "status" | "computed" | "operationStep" | "updatedAt">) {
+  if (entity.stage !== 3) return;
+  if (!entity.computed.stage3Loop) {
+    entity.computed.stage3Loop = {
+      step: 1,
+      completed: {},
+      status: mapCaseStatusToStage3LoopStatus(entity.status),
+      blockers: [],
+    };
+  }
+
+  entity.computed.stage3Loop.status = mapCaseStatusToStage3LoopStatus(entity.status);
+
+  const completed = entity.computed.stage3Loop.completed;
+  if (entity.computed.evidence.stage3.completed && !completed.step2At) {
+    completed.step2At = entity.computed.evidence.stage3.required.performedAt ?? entity.updatedAt;
+  }
+  if (entity.computed.model3.available && !completed.step3At) {
+    completed.step3At = entity.computed.model3.updatedAt ?? entity.updatedAt;
+  }
+  if (entity.status === "CLOSED" && !completed.step4At) {
+    completed.step4At = entity.updatedAt;
+  }
+
+  entity.computed.stage3Loop.step = inferStage3LoopStepFromCompletion(completed);
+}
+
+function toStage3DomainCaseFromInternal(entity: InternalCaseEntity): Stage3DomainCase | null {
+  if (entity.stage !== 3) return null;
+  ensureStage3LoopShape(entity);
+  const loop = entity.computed.stage3Loop;
+  if (!loop) return null;
+  const profile = entity.computed.stage3Profile;
+  const risk2y = stage3RiskBase(entity.computed.model3, profile?.stage3Type ?? "PREVENTIVE_TRACKING");
+
+  return {
+    caseId: entity.caseId,
+    updatedAt: entity.updatedAt,
+    model: {
+      status: mapModelStatusToStage3DomainStatus(entity.modelStatus, entity.computed.model3.available),
+      result: entity.computed.model3.available
+        ? {
+            risk_1y_ad: entity.computed.model3.conversionRisk1y,
+            risk_2y_ad: risk2y,
+            risk_3y_ad: entity.computed.model3.conversionRisk3y,
+            computedAt: entity.computed.model3.updatedAt ?? entity.updatedAt,
+            modelVersion: entity.computed.model3.modelVersion ?? MODEL3_VERSION,
+          }
+        : null,
+    },
+    loop: {
+      step: loop.step,
+      completed: { ...loop.completed },
+      status: loop.status,
+      blockers: [...loop.blockers],
+    },
+    profile: profile
+      ? {
+          originStage2Result: profile.originStage2Result,
+          originRiskScore: profile.originRiskScore,
+          stage3Type: profile.stage3Type,
+        }
+      : undefined,
+  };
+}
+
+export function toStage3DomainCase(entity: CaseEntity): Stage3DomainCase | null {
+  if (entity.stage !== 3) return null;
+
+  const loop = entity.computed.stage3Loop;
+  const completed = loop?.completed ?? {};
+  const profile = entity.computed.stage3Profile;
+  const risk2y = stage3RiskBase(entity.computed.model3, profile?.stage3Type ?? "PREVENTIVE_TRACKING");
+
+  return {
+    caseId: entity.caseId,
+    updatedAt: entity.updatedAt,
+    model: {
+      status: mapModelStatusToStage3DomainStatus(entity.modelStatus, entity.computed.model3.available),
+      result: entity.computed.model3.available
+        ? {
+            risk_1y_ad: entity.computed.model3.conversionRisk1y,
+            risk_2y_ad: risk2y,
+            risk_3y_ad: entity.computed.model3.conversionRisk3y,
+            computedAt: entity.computed.model3.updatedAt ?? entity.updatedAt,
+            modelVersion: entity.computed.model3.modelVersion ?? MODEL3_VERSION,
+          }
+        : null,
+    },
+    loop: {
+      step: loop?.step ?? inferStage3LoopStepFromCompletion(completed),
+      completed: { ...completed },
+      status: loop?.status ?? mapCaseStatusToStage3LoopStatus(entity.status),
+      blockers: loop?.blockers ? [...loop.blockers] : [],
+    },
+    profile: profile
+      ? {
+          originStage2Result: profile.originStage2Result,
+          originRiskScore: profile.originRiskScore,
+          stage3Type: profile.stage3Type,
+        }
+      : undefined,
+  };
+}
+
+function applyStage3DomainCaseToInternal(entity: InternalCaseEntity, stage3Domain: Stage3DomainCase) {
+  if (stage3Domain.profile) {
+    entity.computed.stage3Profile = {
+      originStage2Result: stage3Domain.profile.originStage2Result,
+      originRiskScore: stage3Domain.profile.originRiskScore,
+      stage3Type: stage3Domain.profile.stage3Type,
+    };
+  }
+
+  entity.computed.stage3Loop = {
+    step: stage3Domain.loop.step,
+    completed: { ...stage3Domain.loop.completed },
+    status: stage3Domain.loop.status,
+    blockers: [...stage3Domain.loop.blockers],
+  };
+
+  entity.modelStatus = mapStage3DomainStatusToModelStatus(stage3Domain.model.status);
+
+  if (stage3Domain.model.status !== "READY" || !stage3Domain.model.result) {
+    entity.computed.model3 = { available: false };
+    entity.riskScore = undefined;
+  } else {
+    const prev = entity.computed.model3;
+    const stage3Type = entity.computed.stage3Profile?.stage3Type ?? "PREVENTIVE_TRACKING";
+    const risk2y = clamp01(stage3Domain.model.result.risk_2y_ad);
+    const risk1y =
+      stage3Domain.model.result.risk_1y_ad == null
+        ? stage3Type === "AD_MANAGEMENT"
+          ? undefined
+          : clamp01(risk2y - 0.06)
+        : clamp01(stage3Domain.model.result.risk_1y_ad);
+    const risk3y =
+      stage3Domain.model.result.risk_3y_ad == null
+        ? stage3Type === "AD_MANAGEMENT"
+          ? undefined
+          : clamp01(risk2y + 0.09)
+        : clamp01(stage3Domain.model.result.risk_3y_ad);
+
+    entity.computed.model3 = {
+      available: true,
+      risk2yNow: risk2y,
+      risk2yAt2y: stage3Type === "AD_MANAGEMENT" ? undefined : risk3y ?? prev.risk2yAt2y,
+      conversionRisk1y: stage3Type === "AD_MANAGEMENT" ? undefined : risk1y,
+      conversionRisk2y: stage3Type === "AD_MANAGEMENT" ? undefined : risk2y,
+      conversionRisk3y: stage3Type === "AD_MANAGEMENT" ? undefined : risk3y,
+      currentRiskIndex: stage3Type === "AD_MANAGEMENT" ? risk2y : undefined,
+      label:
+        risk2y >= 0.7
+          ? "HIGH"
+          : risk2y >= 0.45
+            ? "MID"
+            : "LOW",
+      confidence: prev.confidence ?? "MID",
+      modelVersion: stage3Domain.model.result.modelVersion,
+      updatedAt: stage3Domain.model.result.computedAt,
+    };
+    entity.riskScore = Math.round(stage3RiskBase(entity.computed.model3, stage3Type) * 100);
+  }
+
+  if (stage3Domain.loop.status === "ON_HOLD") {
+    entity.status = "ON_HOLD";
+  } else if (stage3Domain.loop.status === "EXCLUDED") {
+    entity.status = "EXCLUDED";
+  } else if (stage3Domain.loop.status === "DONE") {
+    entity.status = "CLOSED";
+  } else if (entity.status === "ON_HOLD" || entity.status === "EXCLUDED") {
+    entity.status = "IN_PROGRESS";
+  }
+
+  if (entity.status === "CLOSED") {
+    entity.operationStep = "COMPLETED";
+  } else if (entity.modelStatus === "DONE") {
+    entity.operationStep = "FOLLOW_UP";
+  } else if (stage3Domain.loop.step >= 2) {
+    entity.operationStep = "IN_PROGRESS";
+  } else {
+    entity.operationStep = "WAITING";
+  }
+}
+
+function reconcileInternalStage3Case(
+  entity: InternalCaseEntity,
+  policy: Stage3ReconcilePolicy = DEFAULT_STAGE3_RECONCILE_POLICY,
+) {
+  if (entity.stage !== 3) {
+    return { nextCase: entity, patches: [] as Stage3ReconcilePatch[], inconsistencyFlags: [] as string[], auditLog: undefined };
+  }
+
+  const stage3Domain = toStage3DomainCaseFromInternal(entity);
+  if (!stage3Domain) {
+    return { nextCase: entity, patches: [] as Stage3ReconcilePatch[], inconsistencyFlags: [] as string[], auditLog: undefined };
+  }
+
+  const reconciled = reconcileStage3Case(stage3Domain, policy);
+  if (reconciled.patches.length === 0) {
+    return { ...reconciled, nextCase: entity };
+  }
+
+  const next = cloneCase(entity);
+  applyStage3DomainCaseToInternal(next, reconciled.nextCase);
+  return { ...reconciled, nextCase: next };
+}
+
+function stageModelReadyStep(stage: Stage): OperationStep {
+  if (stage === 1) return "CLASSIFIED";
+  if (stage === 2) return "RESULT_READY";
+  return "FOLLOW_UP";
 }
 
 function toLegacyDateTime(iso: string) {
@@ -379,10 +733,11 @@ function generateStage2Model(
   };
 }
 
-function generateStage3Model(entity: InternalCaseEntity): Stage3ModelOutput {
+function generateStage3Model(entity: InternalCaseEntity, riskOverride?: number): Stage3ModelOutput {
   const seed = seeded(`${entity.caseId}-model3`);
   const stage2Label = entity.computed.model2.predictedLabel;
   const required = entity.computed.evidence.stage3.required;
+  const stage3Type = entity.computed.stage3Profile?.stage3Type ?? (stage2Label === "치매" ? "AD_MANAGEMENT" : "PREVENTIVE_TRACKING");
 
   let base = stage2Label === "치매" ? 0.7 : stage2Label === "MCI" ? 0.52 : 0.28;
   if (required.biomarkerResult === "POS") base += 0.14;
@@ -396,9 +751,12 @@ function generateStage3Model(entity: InternalCaseEntity): Stage3ModelOutput {
   if (entity.status === "ON_HOLD") base += 0.06;
   if (entity.status === "CLOSED") base -= 0.05;
 
-  const risk2yNow = clamp01(base + (seed - 0.5) * 0.08);
-  const risk2yAt2y = clamp01(risk2yNow + 0.08 + (seed - 0.5) * 0.05);
-  const label: Stage3ModelOutput["label"] = risk2yNow >= 0.7 ? "HIGH" : risk2yNow >= 0.45 ? "MID" : "LOW";
+  const currentRiskIndex = riskOverride == null ? clamp01(base + (seed - 0.5) * 0.08) : clamp01(riskOverride);
+  const conversionRisk1y = clamp01(currentRiskIndex - 0.06 + (seed - 0.5) * 0.03);
+  const conversionRisk2y = currentRiskIndex;
+  const conversionRisk3y = clamp01(currentRiskIndex + 0.09 + (seed - 0.5) * 0.05);
+  const labelBase = stage3Type === "AD_MANAGEMENT" ? currentRiskIndex : conversionRisk2y;
+  const label: Stage3ModelOutput["label"] = labelBase >= 0.7 ? "HIGH" : labelBase >= 0.45 ? "MID" : "LOW";
 
   let confidence: Stage3ModelOutput["confidence"] = "HIGH";
   if (required.biomarkerResult === "UNK" || required.imagingResult === "UNK") confidence = "MID";
@@ -406,13 +764,43 @@ function generateStage3Model(entity: InternalCaseEntity): Stage3ModelOutput {
 
   return {
     available: true,
-    risk2yNow,
-    risk2yAt2y,
+    risk2yNow: stage3Type === "AD_MANAGEMENT" ? currentRiskIndex : conversionRisk2y,
+    risk2yAt2y: stage3Type === "AD_MANAGEMENT" ? undefined : conversionRisk3y,
+    conversionRisk1y: stage3Type === "AD_MANAGEMENT" ? undefined : conversionRisk1y,
+    conversionRisk2y: stage3Type === "AD_MANAGEMENT" ? undefined : conversionRisk2y,
+    conversionRisk3y: stage3Type === "AD_MANAGEMENT" ? undefined : conversionRisk3y,
+    currentRiskIndex: stage3Type === "AD_MANAGEMENT" ? currentRiskIndex : undefined,
     label,
     confidence,
-    modelVersion: MODEL3_VERSION,
+    modelVersion: stage3Type === "AD_MANAGEMENT" ? "stage3-ad-management-v1.0" : "stage3-risk-v1.3",
     updatedAt: nowIso(),
   };
+}
+
+function assignStage3ProfileFromStage2(entity: InternalCaseEntity) {
+  const bucket = deriveStage2ResultBucketFromModel(entity.computed.model2);
+  const origin = toStage3OriginStage2Result(bucket);
+  if (!isStage3EligibleOrigin(origin)) {
+    entity.computed.stage3Profile = undefined;
+    return null;
+  }
+
+  const originRiskScore = Math.round((entity.computed.model2.probs?.AD ?? 0) * 100);
+  const stage3Type = stage3TypeFromOrigin(origin);
+  entity.computed.stage3Profile = {
+    originStage2Result: origin,
+    originRiskScore,
+    stage3Type,
+  };
+  return entity.computed.stage3Profile;
+}
+
+function stage2BucketFromSeed(seedValue: number): Stage2ResultBucket {
+  if (seedValue < 0.3) return "NORMAL";
+  if (seedValue < 0.48) return "MCI_LOW";
+  if (seedValue < 0.68) return "MCI_MID";
+  if (seedValue < 0.82) return "MCI_HIGH";
+  return "AD";
 }
 
 function cloneCase(entity: InternalCaseEntity): InternalCaseEntity {
@@ -423,25 +811,19 @@ function recomputeCase(entity: InternalCaseEntity): InternalCaseEntity {
   const next = cloneCase(entity);
   const stage2Eval = evaluateStage2Evidence(next.computed.evidence.stage2.required, next.stage2Route);
   const stage3Eval = evaluateStage3Evidence(next.computed.evidence.stage3.required);
+  const stage3Profile = assignStage3ProfileFromStage2(next);
 
   next.computed.evidence.stage2.completed = stage2Eval.completed;
   next.computed.evidence.stage2.missing = stage2Eval.missing;
   next.computed.evidence.stage3.completed = stage3Eval.completed;
   next.computed.evidence.stage3.missing = stage3Eval.missing;
+  ensureStage3LoopShape(next);
 
-  if (stage2Eval.completed) {
-    if (!next.computed.model2.available || !next.computed.model2.probs) {
-      next.computed.model2 = generateStage2Model(next);
-    }
-  } else {
+  // 모델 결과는 실행 완료 이벤트로 생성되며, 증거 누락이 생겨도 기존 산출값은 유지한다.
+  if (!next.computed.model2.available) {
     next.computed.model2 = { available: false };
   }
-
-  if (stage3Eval.completed) {
-    if (!next.computed.model3.available || next.computed.model3.risk2yNow == null) {
-      next.computed.model3 = generateStage3Model(next);
-    }
-  } else {
+  if (!next.computed.model3.available) {
     next.computed.model3 = { available: false };
   }
 
@@ -458,7 +840,22 @@ function recomputeCase(entity: InternalCaseEntity): InternalCaseEntity {
     approvalsPendingCount: next.computed.ops.approvalsPendingCount ?? fallbackApprovalsPendingCount,
   };
 
-  return next;
+  if (next.stage >= 3 && next.computed.model3.available) {
+    next.modelStatus = "DONE";
+    next.operationStep = next.operationStep === "COMPLETED" ? "COMPLETED" : "FOLLOW_UP";
+    next.riskScore = Math.round(stage3RiskBase(next.computed.model3, stage3Profile?.stage3Type ?? "PREVENTIVE_TRACKING") * 100);
+  } else if (next.stage >= 2 && next.computed.model2.available) {
+    next.modelStatus = "DONE";
+    if (next.operationStep !== "CLASSIFIED" && next.operationStep !== "COMPLETED") {
+      next.operationStep = "RESULT_READY";
+    }
+    next.classification = toCaseClassification(next.computed.model2.predictedLabel);
+    next.riskScore = Math.round((next.computed.model2.probs?.AD ?? 0) * 100);
+  } else if (next.modelStatus !== "PROCESSING") {
+    next.modelStatus = "PENDING";
+  }
+
+  return reconcileInternalStage3Case(next).nextCase;
 }
 
 function initialStage2Required(record: CaseRecord, route: Stage2Route): Stage2RequiredTests {
@@ -516,6 +913,12 @@ function initialStage3Required(record: CaseRecord): Stage3RequiredTests {
   };
 }
 
+function normalizeAssigneeId(manager: string): string | undefined {
+  const normalized = manager.trim();
+  if (normalized.length === 0 || normalized.includes("미지정")) return undefined;
+  return normalized;
+}
+
 function toInternalCase(record: CaseRecord): InternalCaseEntity {
   const stage = stageFromLegacy(record.stage);
   const route = routeFromLegacy(record);
@@ -524,7 +927,7 @@ function toInternalCase(record: CaseRecord): InternalCaseEntity {
   const base: InternalCaseEntity = {
     caseId: record.id,
     stage,
-    assigneeId: record.manager,
+    assigneeId: normalizeAssigneeId(record.manager),
     region: {
       sido: "서울특별시",
       sigungu: "강남구",
@@ -537,6 +940,10 @@ function toInternalCase(record: CaseRecord): InternalCaseEntity {
       caregiverPhone: record.profile.guardianPhone,
     },
     status: statusFromLegacy(record.status),
+    operationStep: stage === 1 ? "IN_PROGRESS" : stage === 2 ? "IN_PROGRESS" : "FOLLOW_UP",
+    modelStatus: "PENDING",
+    classification: undefined,
+    riskScore: undefined,
     createdAt,
     updatedAt: parseLegacyDateTime(record.updated),
     stage2Route: route,
@@ -563,15 +970,186 @@ function toInternalCase(record: CaseRecord): InternalCaseEntity {
         available: false,
       },
       ops: {
-        contactMode: record.path.includes("문자") ? "AGENT" : "HUMAN",
+        contactMode: record.path.includes("문자") || record.action.includes("문자") ? "AGENT" : "HUMAN",
         lastContactAt: parseLegacyDateTime(record.updated),
         bookingPendingCount: record.alertTags.includes("연계 대기") ? 1 : 0,
         approvalsPendingCount: record.status === "임박" ? 1 : 0,
       },
     },
   };
+  const seededEntity = recomputeCase(base);
+  const scenarioBucket = Math.floor(seeded(`${record.id}-stage-scenario`) * 4);
 
-  return recomputeCase(base);
+  if (seededEntity.stage === 2) {
+    const bucket = stage2BucketFromSeed(seeded(`${record.id}-stage2-bucket`));
+    const targetLabel = stage2BucketToLabel(bucket);
+    const targetBand = stage2BucketToMciBand(bucket);
+    const severitySeed = seeded(`${record.id}-stage2-severity-bias`);
+    let finalLabel: "정상" | "MCI" | "치매" = targetLabel;
+    let finalBand: "양호" | "중간" | "위험" | undefined = targetBand;
+    if (targetLabel === "MCI" && severitySeed > 0.72) {
+      finalLabel = "치매";
+      finalBand = undefined;
+    } else if (targetLabel === "MCI" && severitySeed < 0.22) {
+      finalLabel = "정상";
+      finalBand = undefined;
+    }
+    const progressSeed = seeded(`${record.id}-stage2-progress`);
+    const keepPending = progressSeed < 0.14;
+    const waitingForInput = keepPending && (scenarioBucket === 0 || bucket === "MCI_LOW");
+
+    if (keepPending) {
+      seededEntity.computed.model2 = { available: false };
+      seededEntity.computed.stage3Profile = undefined;
+      seededEntity.modelStatus = "PENDING";
+      seededEntity.status = waitingForInput ? "WAITING_RESULTS" : "IN_PROGRESS";
+      seededEntity.operationStep = waitingForInput ? "WAITING" : "IN_PROGRESS";
+    } else {
+      // 완료율은 높지만 일부 케이스는 자료 누락이 남도록 유지한다.
+      seededEntity.computed.evidence.stage2.required = {
+        ...seededEntity.computed.evidence.stage2.required,
+        specialist: true,
+        mmse:
+          seededEntity.computed.evidence.stage2.required.mmse ??
+          (finalLabel === "치매" ? 20 : finalLabel === "MCI" ? 24 : 27),
+        cdrOrGds:
+          seededEntity.computed.evidence.stage2.required.cdrOrGds ??
+          (scenarioBucket === 1 ? null : finalLabel === "치매" ? 1.6 : finalLabel === "MCI" ? 0.7 : 0.2),
+      };
+      seededEntity.computed.model2 = generateStage2Model(seededEntity, finalLabel, finalBand);
+      seededEntity.modelStatus = "DONE";
+      assignStage3ProfileFromStage2(seededEntity);
+
+      if (progressSeed < 0.46) {
+        seededEntity.status = "READY_TO_CLASSIFY";
+        seededEntity.operationStep = "RESULT_READY";
+      } else if (progressSeed < 0.8) {
+        seededEntity.status = "CLASS_CONFIRMED";
+        seededEntity.operationStep = "CLASSIFIED";
+      } else {
+        seededEntity.status = "NEXT_STEP_SET";
+        seededEntity.operationStep = "COMPLETED";
+      }
+    }
+  }
+
+  if (seededEntity.stage === 3) {
+    const originRoll = seeded(`${record.id}-stage3-origin`);
+    const origin: Stage3OriginStage2Result = originRoll < 0.4 ? "MCI-MID" : originRoll < 0.75 ? "MCI-HIGH" : "AD";
+    seededEntity.computed.stage3Profile = {
+      originStage2Result: origin,
+      originRiskScore: origin === "AD" ? 82 : origin === "MCI-HIGH" ? 64 : 47,
+      stage3Type: stage3TypeFromOrigin(origin),
+    };
+    seededEntity.computed.model2 = generateStage2Model(
+      seededEntity,
+      origin === "AD" ? "치매" : "MCI",
+      origin === "MCI-HIGH" ? "위험" : origin === "MCI-MID" ? "중간" : undefined,
+    );
+
+    const riskPreset = [0.15, 0.35, 0.67, 0.88][scenarioBucket] ?? 0.35;
+    seededEntity.computed.model3 = generateStage3Model(seededEntity, riskPreset);
+    seededEntity.modelStatus = "DONE";
+    seededEntity.operationStep = "FOLLOW_UP";
+    seededEntity.riskScore = Math.round(stage3RiskBase(seededEntity.computed.model3, seededEntity.computed.stage3Profile.stage3Type) * 100);
+  }
+
+  if (seededEntity.stage === 1) {
+    if (seededEntity.status === "CLOSED") {
+      seededEntity.operationStep = "COMPLETED";
+    } else {
+      const stage1ProgressSeed = seeded(`${record.id}-stage1-progress`);
+      const shouldWait =
+        seededEntity.status === "WAITING_RESULTS" ? stage1ProgressSeed < 0.45 : stage1ProgressSeed < 0.12;
+      seededEntity.operationStep = shouldWait ? "WAITING" : "IN_PROGRESS";
+    }
+  }
+
+  if (record.id === "CASE-2026-175") {
+    seededEntity.stage = 1;
+    seededEntity.status = "WAITING_RESULTS";
+    seededEntity.operationStep = "WAITING";
+    seededEntity.modelStatus = "PENDING";
+    seededEntity.classification = undefined;
+    seededEntity.riskScore = undefined;
+    seededEntity.computed.model2 = { available: false };
+    seededEntity.computed.model3 = { available: false };
+    seededEntity.computed.stage3Profile = undefined;
+    seededEntity.computed.evidence.stage2.required = {
+      specialist: false,
+      mmse: null,
+      cdrOrGds: null,
+      neuroType: null,
+      neuroScore: null,
+    };
+    seededEntity.computed.evidence.stage3.required = {
+      biomarker: false,
+      imaging: false,
+      biomarkerResult: null,
+      imagingResult: null,
+      performedAt: null,
+    };
+    seededEntity.computed.ops.contactMode = "HUMAN";
+    seededEntity.computed.ops.bookingPendingCount = 1;
+    seededEntity.computed.ops.approvalsPendingCount = 0;
+  }
+
+  if (record.id === "CASE-2026-275") {
+    seededEntity.stage = 2;
+    seededEntity.stage2Route = "HOSPITAL";
+    seededEntity.status = "WAITING_RESULTS";
+    seededEntity.operationStep = "WAITING";
+    seededEntity.modelStatus = "PENDING";
+    seededEntity.classification = undefined;
+    seededEntity.riskScore = undefined;
+    seededEntity.computed.evidence.stage2.required = {
+      specialist: false,
+      mmse: null,
+      cdrOrGds: null,
+      neuroType: null,
+      neuroScore: null,
+    };
+    seededEntity.computed.model2 = { available: false };
+    seededEntity.computed.model3 = { available: false };
+    seededEntity.computed.stage3Profile = undefined;
+    seededEntity.computed.ops.bookingPendingCount = 1;
+    seededEntity.computed.ops.approvalsPendingCount = 0;
+  }
+
+  if (record.id === "CASE-2026-375") {
+    seededEntity.stage = 3;
+    seededEntity.stage2Route = "HOSPITAL";
+    seededEntity.status = "WAITING_RESULTS";
+    seededEntity.operationStep = "WAITING";
+    seededEntity.modelStatus = "PENDING";
+    seededEntity.classification = "MCI";
+    seededEntity.riskScore = undefined;
+    seededEntity.computed.evidence.stage2.required = {
+      specialist: true,
+      mmse: 23,
+      cdrOrGds: 1,
+      neuroType: "SNSB-II",
+      neuroScore: 58,
+    };
+    seededEntity.computed.model2 = { available: false };
+    seededEntity.computed.stage3Profile = {
+      originStage2Result: "MCI-HIGH",
+      originRiskScore: 64,
+      stage3Type: "PREVENTIVE_TRACKING",
+    };
+    seededEntity.computed.evidence.stage3.required = {
+      biomarker: false,
+      imaging: false,
+      biomarkerResult: null,
+      imagingResult: null,
+      performedAt: null,
+    };
+    seededEntity.computed.model3 = { available: false };
+    seededEntity.computed.ops.bookingPendingCount = 1;
+    seededEntity.computed.ops.approvalsPendingCount = 0;
+  }
+
+  return recomputeCase(seededEntity);
 }
 
 function mapSeedRisk(riskLevel: SeedCase["riskLevel"]): CaseRecord["risk"] {
@@ -608,25 +1186,57 @@ function deriveQualityFromSeed(seed: SeedCase): CaseRecord["quality"] {
 
 function derivePathFromSeed(seed: SeedCase, stage: CaseRecord["stage"]): string {
   if (stage === "Stage 1") {
-    return seed.contactStatus === "UNREACHED" ? "재접촉 강화" : "초기 접촉 집중";
+    const stage1Seed = seeded(`${seed.patientName}-${seed.age}-stage1-path`);
+    if (seed.contactStatus === "UNREACHED") {
+      if (stage1Seed < 0.45) return "문자 안내 우선";
+      if (seed.guardianPhone && stage1Seed < 0.75) return "보호자 우선 접촉";
+      return "재접촉 강화";
+    }
+    if (stage1Seed < 0.25) return "문자 안내 우선";
+    if (seed.guardianPhone && stage1Seed < 0.45) return "보호자 우선 접촉";
+    if (seed.riskLevel === "high") return "상담사 우선 접촉";
+    return "초기 접촉 집중";
   }
   if (stage === "Stage 2") {
     if (seed.secondExamStatus === "NONE") return "검사결과 입력 대기";
-    if (seed.riskLevel === "high") return "High MCI 경로";
+    if (seed.riskLevel === "high") return "AD 감별 경로";
+    if (seed.riskLevel === "low") return "정상(CN) 추적 경로";
     return "MCI 경로";
   }
   if (seed.secondExamStatus === "RESULT_CONFIRMED") return "정밀관리 경로";
   return "재평가 준비";
 }
 
-function deriveActionFromSeed(seed: SeedCase, stage: CaseRecord["stage"], status: CaseRecord["status"]): string {
+function deriveActionFromSeed(
+  seed: SeedCase,
+  stage: CaseRecord["stage"],
+  status: CaseRecord["status"],
+  path: CaseRecord["path"],
+): string {
   if (stage === "Stage 1") {
+    if (path.includes("문자")) {
+      return status === "대기" ? "문자 안내 발송" : status === "완료" ? "문자 발송 결과 확인" : "문자 리마인드 발송";
+    }
+    if (path.includes("보호자")) {
+      return status === "대기" ? "보호자 연락 시도" : "보호자 안내 연락";
+    }
+    if (seed.riskLevel === "high") {
+      return status === "대기" ? "1차 전화 재시도" : "상담사 직접 연락";
+    }
     return status === "대기" ? "재연락 실행" : "상담 진행";
   }
   if (stage === "Stage 2") {
     return seed.secondExamStatus === "NONE" ? "검사 결과 입력" : "분류 확정";
   }
   return seed.secondExamStatus === "RESULT_CONFIRMED" ? "추적 계획 확정" : "재평가 일정 생성";
+}
+
+function deriveManagerFromSeed(seed: SeedCase): string {
+  const ownerSeed = seeded(`${seed.patientName}-${seed.registeredDate}-owner`);
+  if (ownerSeed < 0.08) {
+    return "담당자 미지정";
+  }
+  return seed.counselor;
 }
 
 function deriveAlertTagsFromSeed(seed: SeedCase, stage: CaseRecord["stage"], status: CaseRecord["status"]): AlertTag[] {
@@ -643,6 +1253,8 @@ function deriveAlertTagsFromSeed(seed: SeedCase, stage: CaseRecord["stage"], sta
 function toSeedCaseRecord(seed: SeedCase, index: number): CaseRecord {
   const stage = deriveStageFromSeed(seed);
   const status = deriveStatusFromSeed(seed, stage);
+  const path = derivePathFromSeed(seed, stage);
+  const manager = deriveManagerFromSeed(seed);
   const id = `CASE-2026-${String(101 + index).padStart(3, "0")}`;
   const hour = String(9 + (index % 9)).padStart(2, "0");
   const minute = index % 2 === 0 ? "00" : "30";
@@ -651,10 +1263,10 @@ function toSeedCaseRecord(seed: SeedCase, index: number): CaseRecord {
     id,
     stage,
     risk: mapSeedRisk(seed.riskLevel),
-    path: derivePathFromSeed(seed, stage),
+    path,
     status,
-    manager: seed.counselor,
-    action: deriveActionFromSeed(seed, stage, status),
+    manager,
+    action: deriveActionFromSeed(seed, stage, status, path),
     updated: `${seed.registeredDate} ${hour}:${minute}`,
     quality: deriveQualityFromSeed(seed),
     profile: {
@@ -667,17 +1279,154 @@ function toSeedCaseRecord(seed: SeedCase, index: number): CaseRecord {
   };
 }
 
+function normalizePhoneNumber(value?: string) {
+  return (value ?? "").replace(/\D/g, "");
+}
+
+function caseIdentityKey(record: CaseRecord) {
+  const name = record.profile.name.trim().toLowerCase();
+  const age = String(record.profile.age);
+  const phone = normalizePhoneNumber(record.profile.phone);
+  const guardianPhone = normalizePhoneNumber(record.profile.guardianPhone);
+  if (phone.length > 0) return `${name}|${phone}`;
+  if (guardianPhone.length > 0) return `${name}|g:${guardianPhone}`;
+  return `${name}|age:${age}`;
+}
+
+function isAssignedManagerName(manager: string) {
+  const normalized = manager.trim();
+  return normalized.length > 0 && !normalized.includes("미지정");
+}
+
+function harmonizeCaseManagers(records: CaseRecord[]) {
+  const managerByIdentity = new Map<string, string>();
+
+  for (const record of records) {
+    if (!isAssignedManagerName(record.manager)) continue;
+    const key = caseIdentityKey(record);
+    if (!managerByIdentity.has(key)) {
+      managerByIdentity.set(key, record.manager);
+    }
+  }
+
+  return records.map((record) => {
+    const normalizedManager = managerByIdentity.get(caseIdentityKey(record));
+    if (!normalizedManager || normalizedManager === record.manager) return record;
+    return {
+      ...record,
+      manager: normalizedManager,
+    };
+  });
+}
+
+function buildStage1VarietyRecords(): CaseRecord[] {
+  return [
+    {
+      id: "CASE-2026-901",
+      stage: "Stage 1",
+      risk: "저",
+      path: "문자 안내 우선",
+      status: "대기",
+      manager: "박민지",
+      action: "문자 안내 발송",
+      updated: "2026-02-19 09:05",
+      quality: "양호",
+      profile: { name: "데모대상 A", age: 68, phone: "010-8801-1101", guardianPhone: "010-9922-3301" },
+      alertTags: ["SLA 임박"],
+    },
+    {
+      id: "CASE-2026-902",
+      stage: "Stage 1",
+      risk: "중",
+      path: "문자 안내 우선",
+      status: "임박",
+      manager: "이동욱",
+      action: "문자 리마인드 발송",
+      updated: "2026-02-19 08:40",
+      quality: "주의",
+      profile: { name: "데모대상 B", age: 74, phone: "010-8801-1102" },
+      alertTags: ["SLA 임박", "연계 대기"],
+    },
+    {
+      id: "CASE-2026-903",
+      stage: "Stage 1",
+      risk: "고",
+      path: "사전 기준 점검",
+      status: "임박",
+      manager: "담당자 미지정",
+      action: "채널 검증 필요",
+      updated: "2026-02-19 08:20",
+      quality: "경고",
+      profile: { name: "데모대상 C", age: 81, phone: "", guardianPhone: "010-9922-3303" },
+      alertTags: ["SLA 임박", "연계 대기"],
+    },
+    {
+      id: "CASE-2026-904",
+      stage: "Stage 1",
+      risk: "중",
+      path: "사전 기준 점검",
+      status: "대기",
+      manager: "담당자 미지정",
+      action: "담당 배정 필요",
+      updated: "2026-02-19 07:55",
+      quality: "주의",
+      profile: { name: "데모대상 D", age: 72, phone: "010-8801-1104" },
+      alertTags: ["SLA 임박"],
+    },
+    {
+      id: "CASE-2026-905",
+      stage: "Stage 1",
+      risk: "고",
+      path: "상담사 우선 접촉",
+      status: "지연",
+      manager: "서지윤",
+      action: "1차 전화 재시도",
+      updated: "2026-02-19 07:25",
+      quality: "경고",
+      profile: { name: "데모대상 E", age: 84, phone: "010-8801-1105", guardianPhone: "010-9922-3305" },
+      alertTags: ["SLA 임박", "재평가 필요"],
+    },
+    {
+      id: "CASE-2026-906",
+      stage: "Stage 1",
+      risk: "중",
+      path: "보호자 우선 접촉",
+      status: "진행중",
+      manager: "한수민",
+      action: "보호자 통화 완료 후 안내",
+      updated: "2026-02-19 06:50",
+      quality: "주의",
+      profile: { name: "데모대상 F", age: 76, phone: "010-8801-1106", guardianPhone: "010-9922-3306" },
+      alertTags: ["연계 대기"],
+    },
+    {
+      id: "CASE-2026-907",
+      stage: "Stage 1",
+      risk: "저",
+      path: "문자 안내 우선",
+      status: "완료",
+      manager: "최유리",
+      action: "문자 발송 결과 확인",
+      updated: "2026-02-19 06:10",
+      quality: "양호",
+      profile: { name: "데모대상 G", age: 65, phone: "010-8801-1107" },
+      alertTags: [],
+    },
+  ];
+}
+
 function buildSeedCaseRecords() {
   const records = [...CASE_RECORDS];
-  const extra = generateCases().slice(0, 36).map((seed, index) => toSeedCaseRecord(seed, index));
+  const extra = generateCases().slice(0, 50).map((seed, index) => toSeedCaseRecord(seed, index));
+  const stage1Variety = buildStage1VarietyRecords();
   const existingIds = new Set(records.map((item) => item.id));
 
-  for (const item of extra) {
+  for (const item of [...extra, ...stage1Variety]) {
     if (!existingIds.has(item.id)) {
       records.push(item);
     }
   }
-  return records;
+  return harmonizeCaseManagers(records);
 }
 
 function ensureStore() {
@@ -701,6 +1450,100 @@ function ensureStore() {
   }
 }
 
+function hasEvent(events: CaseEvent[], ...types: EventType[]) {
+  return events.some((event) => types.includes(event.type));
+}
+
+function syncCaseLifecycle(draft: InternalCaseEntity, events: CaseEvent[]): InternalCaseEntity {
+  const next = cloneCase(draft);
+
+  const inferenceRequested = hasEvent(events, "INFERENCE_REQUESTED");
+  const inferenceStarted = hasEvent(events, "INFERENCE_STARTED", "INFERENCE_PROGRESS");
+  const inferenceCompleted = hasEvent(events, "INFERENCE_COMPLETED", "MODEL_RESULT_APPLIED");
+  const inferenceFailed = hasEvent(events, "INFERENCE_FAILED");
+  const stage2ResultReceived = hasEvent(events, "STAGE2_RESULTS_RECORDED");
+  const stage3ResultReceived = hasEvent(events, "STAGE3_RESULTS_RECORDED");
+  const stage2ClassConfirmed = hasEvent(events, "STAGE2_CLASS_CONFIRMED");
+  const nextStepDecided = hasEvent(events, "STAGE2_NEXT_STEP_SET");
+  const closedByEvent = hasEvent(events, "CASE_CLOSED");
+
+  if (next.computed.model3.available || (next.stage >= 3 && inferenceCompleted)) {
+    next.modelStatus = "DONE";
+    if (next.operationStep !== "COMPLETED") {
+      next.operationStep = "FOLLOW_UP";
+    }
+  } else if (next.computed.model2.available || (next.stage >= 2 && inferenceCompleted)) {
+    next.modelStatus = "DONE";
+    if (next.operationStep !== "CLASSIFIED" && next.operationStep !== "COMPLETED") {
+      next.operationStep = "RESULT_READY";
+    }
+  } else if ((inferenceRequested || inferenceStarted) && !inferenceFailed) {
+    next.modelStatus = "PROCESSING";
+  } else {
+    next.modelStatus = "PENDING";
+  }
+
+  if (next.stage === 1) {
+    if (closedByEvent || next.status === "CLOSED") {
+      next.operationStep = "COMPLETED";
+    } else if (hasEvent(events, "CONTACT_RESULT", "CONTACT_SENT")) {
+      next.operationStep = "IN_PROGRESS";
+    }
+  } else if (next.stage === 2) {
+    if (nextStepDecided || next.status === "NEXT_STEP_SET") {
+      next.operationStep = "COMPLETED";
+    } else if (stage2ClassConfirmed || next.status === "CLASS_CONFIRMED") {
+      next.operationStep = "CLASSIFIED";
+    } else if (next.computed.model2.available || inferenceCompleted) {
+      next.operationStep = "RESULT_READY";
+    } else if (stage2ResultReceived || next.computed.evidence.stage2.completed) {
+      next.operationStep = "IN_PROGRESS";
+    } else {
+      next.operationStep = "WAITING";
+    }
+  } else {
+    if (closedByEvent || next.status === "CLOSED") {
+      next.operationStep = "COMPLETED";
+    } else if (next.computed.model3.available || inferenceCompleted) {
+      next.operationStep = "FOLLOW_UP";
+    } else if (stage3ResultReceived || next.computed.evidence.stage3.completed) {
+      next.operationStep = "IN_PROGRESS";
+    } else {
+      next.operationStep = "WAITING";
+    }
+  }
+
+  if (next.computed.model2.available) {
+    next.classification = toCaseClassification(next.computed.model2.predictedLabel);
+    next.riskScore = Math.round((next.computed.model2.probs?.AD ?? 0) * 100);
+    if (next.status === "WAITING_RESULTS" || next.status === "IN_PROGRESS") {
+      next.status = "READY_TO_CLASSIFY";
+    }
+  }
+
+  if (next.computed.model3.available) {
+    next.riskScore = Math.round(
+      stage3RiskBase(next.computed.model3, next.computed.stage3Profile?.stage3Type ?? "PREVENTIVE_TRACKING") * 100,
+    );
+    if (next.status === "WAITING_RESULTS") {
+      next.status = "IN_PROGRESS";
+    }
+  }
+
+  if (stage2ClassConfirmed) {
+    next.status = "CLASS_CONFIRMED";
+  }
+  if (nextStepDecided) {
+    next.status = next.stage === 3 ? "IN_PROGRESS" : "NEXT_STEP_SET";
+  }
+  if (closedByEvent) {
+    next.status = "CLOSED";
+    next.operationStep = "COMPLETED";
+  }
+
+  return next;
+}
+
 function patchCase(caseId: string, patcher: (draft: InternalCaseEntity) => void) {
   ensureStore();
   const current = caseStore.get(caseId);
@@ -710,7 +1553,8 @@ function patchCase(caseId: string, patcher: (draft: InternalCaseEntity) => void)
   patcher(draft);
   draft.updatedAt = nowIso();
   const recomputed = recomputeCase(draft);
-  caseStore.set(caseId, recomputed);
+  const synced = syncCaseLifecycle(recomputed, eventStore.get(caseId) ?? []);
+  caseStore.set(caseId, synced);
   emitChange();
 }
 
@@ -734,7 +1578,16 @@ export function recordCaseEvent(
   ensureStore();
   const event = makeEvent(caseId, type, payload, actorId);
   const prev = eventStore.get(caseId) ?? [];
-  eventStore.set(caseId, [event, ...prev]);
+  const nextEvents = [event, ...prev];
+  eventStore.set(caseId, nextEvents);
+  const current = caseStore.get(caseId);
+  if (current) {
+    const recomputed = recomputeCase({
+      ...current,
+      updatedAt: event.at,
+    });
+    caseStore.set(caseId, syncCaseLifecycle(recomputed, nextEvents));
+  }
   emitChange();
   return event;
 }
@@ -750,6 +1603,8 @@ export function updateCaseStage2Evidence(
       draft.stage2Route = options.route;
     }
     draft.status = "WAITING_RESULTS";
+    draft.operationStep = "IN_PROGRESS";
+    draft.modelStatus = "PENDING";
     draft.computed.evidence.stage2.required = {
       ...draft.computed.evidence.stage2.required,
       ...payload,
@@ -773,6 +1628,38 @@ function mapLabelToProbs(label: "정상" | "MCI" | "치매") {
   return normalizeProbs({ NORMAL: 0.08, MCI: 0.2, AD: 0.72 });
 }
 
+export function runCaseStage2Model(
+  caseId: string,
+  actorId = "system",
+  options?: { labelOverride?: "정상" | "MCI" | "치매"; mciBandOverride?: "양호" | "중간" | "위험" },
+) {
+  ensureStore();
+  const target = caseStore.get(caseId);
+  if (!target || !target.computed.evidence.stage2.completed) return false;
+
+  const now = nowIso();
+  patchCase(caseId, (draft) => {
+    const model = generateStage2Model(draft, options?.labelOverride, options?.mciBandOverride);
+    draft.stage = 2;
+    draft.computed.model2 = model;
+    draft.modelStatus = "DONE";
+    draft.operationStep = stageModelReadyStep(2);
+    draft.status = "READY_TO_CLASSIFY";
+    draft.classification = toCaseClassification(model.predictedLabel);
+    draft.riskScore = Math.round((model.probs?.AD ?? 0) * 100);
+
+    const profile = assignStage3ProfileFromStage2(draft);
+    if (draft.stage === 3 && profile && draft.computed.model3.available) {
+      draft.computed.model3 = generateStage3Model(draft);
+    }
+  });
+
+  recordCaseEvent(caseId, "INFERENCE_COMPLETED", { stage: 2, at: now }, actorId);
+  recordCaseEvent(caseId, "MODEL_RESULT_APPLIED", { stage: 2, at: now }, actorId);
+  recordCaseEvent(caseId, "APPROVAL_PENDING", { stage: 2, target: "CLASSIFICATION_CONFIRMED" }, actorId);
+  return true;
+}
+
 export function confirmCaseStage2Model(
   caseId: string,
   label: "정상" | "MCI" | "치매",
@@ -781,13 +1668,17 @@ export function confirmCaseStage2Model(
   ensureStore();
   const target = caseStore.get(caseId);
   if (!target) return false;
-  if (!target.computed.evidence.stage2.completed) return false;
+  if (!target.computed.model2.available && !target.computed.evidence.stage2.completed) return false;
 
   patchCase(caseId, (draft) => {
     const probs = mapLabelToProbs(label);
     const mciScore = Math.round((probs.MCI + probs.AD * 0.3) * 100);
 
     draft.status = "CLASS_CONFIRMED";
+    draft.operationStep = "CLASSIFIED";
+    draft.modelStatus = "DONE";
+    draft.classification = toCaseClassification(label);
+    draft.riskScore = Math.round((probs.AD ?? 0) * 100);
     draft.computed.model2 = {
       available: true,
       probs,
@@ -797,6 +1688,18 @@ export function confirmCaseStage2Model(
       modelVersion: MODEL2_VERSION,
       updatedAt: nowIso(),
     };
+
+    const profile = assignStage3ProfileFromStage2(draft);
+    if (draft.stage === 3) {
+      if (!profile) {
+        draft.stage = 2;
+        draft.status = "CLASS_CONFIRMED";
+        draft.operationStep = "CLASSIFIED";
+        draft.computed.model3 = { available: false };
+      } else if (draft.computed.model3.available) {
+        draft.computed.model3 = generateStage3Model(draft);
+      }
+    }
   });
 
   recordCaseEvent(
@@ -808,6 +1711,7 @@ export function confirmCaseStage2Model(
     },
     options?.actorId ?? "system",
   );
+  recordCaseEvent(caseId, "APPROVAL_RESOLVED", { stage: 2, target: "CLASSIFICATION_CONFIRMED" }, options?.actorId ?? "system");
 
   return true;
 }
@@ -817,27 +1721,46 @@ export function setCaseNextStep(
   nextStep: "FOLLOWUP_2Y" | "STAGE3" | "DIFF_PATH",
   options?: { actorId?: string; summary?: string },
 ) {
+  let stage3Transitioned = false;
+  let stage3BlockedReason: string | null = null;
+
   patchCase(caseId, (draft) => {
     draft.status = "NEXT_STEP_SET";
+    draft.operationStep = "COMPLETED";
 
     if (nextStep === "STAGE3") {
+      const profile = assignStage3ProfileFromStage2(draft);
+      if (!profile) {
+        stage3BlockedReason = "Stage3 전이는 MCI-MID/MCI-HIGH/AD 결과에서만 가능합니다.";
+        draft.status = "CLASS_CONFIRMED";
+        draft.operationStep = "CLASSIFIED";
+        return;
+      }
+
+      stage3Transitioned = true;
       draft.stage = 3;
       draft.status = "IN_PROGRESS";
+      draft.operationStep = "IN_PROGRESS";
+      if (draft.computed.evidence.stage3.completed) {
+        draft.computed.model3 = generateStage3Model(draft);
+      }
+      draft.modelStatus = draft.computed.model3.available ? "DONE" : "PENDING";
     }
 
     if (nextStep === "FOLLOWUP_2Y") {
       draft.status = "CLOSED";
+      draft.operationStep = "COMPLETED";
     }
   });
 
-  if (nextStep === "STAGE3") {
+  if (nextStep === "STAGE3" && stage3Transitioned) {
     recordCaseEvent(
       caseId,
       "STAGE_CHANGE",
       {
         from: 2,
         to: 3,
-        reason: "MCI_CONFIRMED",
+        reason: "STAGE2_CLASS_ELIGIBLE",
       },
       options?.actorId ?? "system",
     );
@@ -848,10 +1771,15 @@ export function setCaseNextStep(
     "STAGE2_NEXT_STEP_SET",
     {
       nextStep,
+      applied: nextStep === "STAGE3" ? stage3Transitioned : true,
+      blockedReason: stage3BlockedReason,
       summary: options?.summary,
     },
     options?.actorId ?? "system",
   );
+  recordCaseEvent(caseId, "APPROVAL_RESOLVED", { stage: 2, target: "NEXT_STEP_DECIDED" }, options?.actorId ?? "system");
+
+  return nextStep === "STAGE3" ? stage3Transitioned : true;
 }
 
 export function setCaseBookingPending(caseId: string, pendingCount: number, actorId = "system") {
@@ -859,6 +1787,9 @@ export function setCaseBookingPending(caseId: string, pendingCount: number, acto
     draft.computed.ops.bookingPendingCount = Math.max(0, pendingCount);
     if (pendingCount > 0) {
       draft.status = "WAITING_RESULTS";
+      if (draft.operationStep === "WAITING") {
+        draft.operationStep = "IN_PROGRESS";
+      }
     } else if (draft.status === "WAITING_RESULTS") {
       draft.status = "IN_PROGRESS";
     }
@@ -875,6 +1806,8 @@ export function updateCaseStage3Evidence(
   patchCase(caseId, (draft) => {
     draft.stage = 3;
     draft.status = "WAITING_RESULTS";
+    draft.operationStep = "IN_PROGRESS";
+    draft.modelStatus = "PENDING";
     draft.computed.evidence.stage3.required = {
       ...draft.computed.evidence.stage3.required,
       ...payload,
@@ -896,13 +1829,59 @@ export function runCaseStage3Model(caseId: string, actorId = "system") {
   const target = caseStore.get(caseId);
   if (!target || !target.computed.evidence.stage3.completed) return false;
 
+  const now = nowIso();
   patchCase(caseId, (draft) => {
+    assignStage3ProfileFromStage2(draft);
     draft.computed.model3 = generateStage3Model(draft);
+    draft.modelStatus = "DONE";
+    draft.operationStep = stageModelReadyStep(3);
+    draft.riskScore = Math.round(stage3RiskBase(draft.computed.model3, draft.computed.stage3Profile?.stage3Type ?? "PREVENTIVE_TRACKING") * 100);
     draft.status = "IN_PROGRESS";
   });
 
+  recordCaseEvent(caseId, "INFERENCE_COMPLETED", { stage: 3, at: now }, actorId);
+  recordCaseEvent(caseId, "MODEL_RESULT_APPLIED", { stage: 3, at: now }, actorId);
+  recordCaseEvent(caseId, "APPROVAL_PENDING", { stage: 3, target: "NEXT_STEP_DECIDED" }, actorId);
   recordCaseEvent(caseId, "STAGE3_RISK_UPDATED", {}, actorId);
   return true;
+}
+
+export function reconcileCaseStage3(
+  caseId: string,
+  policy: Stage3ReconcilePolicy = DEFAULT_STAGE3_RECONCILE_POLICY,
+  actorId = "system",
+) {
+  ensureStore();
+  const current = caseStore.get(caseId);
+  if (!current) return null;
+
+  const reconciled = reconcileInternalStage3Case(current, policy);
+  if (reconciled.patches.length === 0) return reconciled;
+
+  const nextEvents = [...(eventStore.get(caseId) ?? [])];
+  if (reconciled.auditLog) {
+    nextEvents.unshift(
+      makeEvent(
+        caseId,
+        "DATA_SYNCED",
+        {
+          reason: "STAGE3_RECONCILED",
+          message: reconciled.auditLog.message,
+          patches: reconciled.patches.map((patch) => ({ code: patch.code, path: patch.path })),
+        },
+        actorId,
+      ),
+    );
+    eventStore.set(caseId, nextEvents);
+  }
+
+  const recomputed = recomputeCase({
+    ...reconciled.nextCase,
+    updatedAt: nowIso(),
+  });
+  caseStore.set(caseId, syncCaseLifecycle(recomputed, nextEvents));
+  emitChange();
+  return reconciled;
 }
 
 export function listCaseEvents(caseId: string) {
@@ -1078,6 +2057,14 @@ export function toCaseDashboardRecord(entity: CaseEntity): CaseRecord {
     computed: {
       stage2: {
         modelAvailable: internal.computed.model2.available,
+        classificationConfirmed:
+          internal.status === "CLASS_CONFIRMED" ||
+          internal.status === "NEXT_STEP_SET" ||
+          internal.status === "CLOSED" ||
+          internal.operationStep === "CLASSIFIED" ||
+          internal.operationStep === "FOLLOW_UP" ||
+          internal.operationStep === "COMPLETED" ||
+          internal.stage >= 3,
         predictedLabel: internal.computed.model2.predictedLabel,
         mciBand: internal.computed.model2.mciBand,
         completed: internal.computed.evidence.stage2.completed,
@@ -1086,6 +2073,13 @@ export function toCaseDashboardRecord(entity: CaseEntity): CaseRecord {
       stage3: {
         modelAvailable: internal.computed.model3.available,
         label: internal.computed.model3.label,
+        riskNow:
+          stage3RiskBase(
+            internal.computed.model3,
+            internal.computed.stage3Profile?.stage3Type ?? "PREVENTIVE_TRACKING",
+          ),
+        stage3Type: internal.computed.stage3Profile?.stage3Type,
+        originStage2Result: internal.computed.stage3Profile?.originStage2Result,
         completed: internal.computed.evidence.stage3.completed,
         missing: internal.computed.evidence.stage3.missing,
       },
@@ -1115,13 +2109,15 @@ function buildDashboardStats(cases: InternalCaseEntity[]): DashboardStats {
     (item) => item.stage === 1 && (item.status === "OPEN" || item.status === "IN_PROGRESS" || item.status === "WAITING_RESULTS"),
   ).length;
 
-  const stage2Waiting = stage2Cases.filter((item) => !item.computed.evidence.stage2.completed).length;
+  const stage2Waiting = stage2Cases.filter((item) => item.operationStep === "WAITING" || item.operationStep === "IN_PROGRESS").length;
   const highRiskMciCases = stage2Cases.filter(
     (item) => item.computed.model2.available && item.computed.model2.predictedLabel === "MCI" && item.computed.model2.mciBand === "위험",
   );
 
-  const stage3Waiting = stage3Cases.filter((item) => !item.computed.evidence.stage3.completed).length;
-  const churnRisk = stage3Cases.filter((item) => item.computed.model3.available && item.computed.model3.label === "HIGH").length;
+  const stage3Waiting = stage3Cases.filter((item) => item.operationStep === "WAITING" || item.operationStep === "IN_PROGRESS").length;
+  const churnRisk = stage3Cases.filter(
+    (item) => (item.computed.model3.available && item.computed.model3.label === "HIGH") || (item.riskScore ?? 0) >= 67,
+  ).length;
 
   const stage2Mci = stage2Cases.filter(
     (item) => item.computed.model2.available && item.computed.model2.predictedLabel === "MCI",
@@ -1146,28 +2142,36 @@ function buildDashboardStats(cases: InternalCaseEntity[]): DashboardStats {
     nextAction: "Stage3 진입 검토",
   }));
 
-  const priorityTasks = [...cases]
+  const toPriorityTask = (item: InternalCaseEntity, pinned = false) => ({
+    id: item.caseId,
+    name: item.patient.name,
+    age: item.patient.age,
+    stage: stageToLegacy(item.stage),
+    reason:
+      pinned
+        ? "예약/연계 후속 처리 시급"
+        : item.stage === 2 && !item.computed.evidence.stage2.completed
+          ? "필수 검사 입력 누락"
+          : item.stage === 3 && !item.computed.evidence.stage3.completed
+            ? "감별검사 결과 입력 필요"
+            : "예약/연계 후속 처리 필요",
+    action: item.stage >= 2 ? "연계" : "전화",
+    sla: pinned ? "즉시" : item.status === "ON_HOLD" || item.status === "WAITING_RESULTS" ? "지연" : "1h 임박",
+  });
+
+  const sortedPriorityCandidates = [...cases]
     .sort((a, b) => {
       const aWeight = (a.computed.ops.missingFieldCount ?? 0) + (a.computed.ops.bookingPendingCount ?? 0) * 2;
       const bWeight = (b.computed.ops.missingFieldCount ?? 0) + (b.computed.ops.bookingPendingCount ?? 0) * 2;
       if (bWeight !== aWeight) return bWeight - aWeight;
       return b.updatedAt.localeCompare(a.updatedAt);
-    })
+    });
+
+  const pinnedPriorityCases = sortedPriorityCandidates.filter((item) => PRIORITY_TASK_PINNED_CASE_IDS.has(item.caseId));
+  const regularPriorityCases = sortedPriorityCandidates.filter((item) => !PRIORITY_TASK_PINNED_CASE_IDS.has(item.caseId));
+  const priorityTasks = [...pinnedPriorityCases, ...regularPriorityCases]
     .slice(0, 4)
-    .map((item) => ({
-      id: item.caseId,
-      name: item.patient.name,
-      age: item.patient.age,
-      stage: stageToLegacy(item.stage),
-      reason:
-        item.stage === 2 && !item.computed.evidence.stage2.completed
-          ? "필수 검사 입력 누락"
-          : item.stage === 3 && !item.computed.evidence.stage3.completed
-            ? "감별검사 결과 입력 필요"
-            : "예약/연계 후속 처리 필요",
-      action: item.stage >= 2 ? "연계" : "전화",
-      sla: item.status === "ON_HOLD" || item.status === "WAITING_RESULTS" ? "지연" : "1h 임박",
-    }));
+    .map((item) => toPriorityTask(item, PRIORITY_TASK_PINNED_CASE_IDS.has(item.caseId)));
 
   const stage1Count = Math.max(stageCounts[1], 1);
   const stage2Rate = Math.round((stageCounts[2] / stage1Count) * 100);

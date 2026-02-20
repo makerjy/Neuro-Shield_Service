@@ -252,9 +252,8 @@ export function PublicSmsLanding() {
   }
 
   if (payload.stage === "STAGE1") {
-    return <CitizenMobileApp />;
+    return <CitizenMobileApp inviteToken={token} />;
   }
 
   return <StageHub token={token} data={payload} />;
 }
-

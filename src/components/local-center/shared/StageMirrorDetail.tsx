@@ -2,7 +2,9 @@ import React, { useMemo, useState } from "react";
 import { ChevronLeft, Activity } from "lucide-react";
 import { Stage1OpsDetail, type Stage1HeaderSummary } from "../v2/stage1/Stage1OpsDetail";
 import { getCaseRecordById, maskPhone, toAgeBand, type CaseRecord } from "../v2/caseRecords";
+import { toCaseDashboardRecord, useCaseEntity } from "../v2/caseSSOT";
 import type { StageType } from "../v2/shared";
+import { useStage3CaseView } from "../../../stores/caseStore";
 
 interface StageMirrorDetailProps {
   caseId: string;
@@ -50,6 +52,14 @@ function stage3StatusLabel(status?: string) {
   return "종결";
 }
 
+function stage3LoopStatusLabel(status?: "IN_PROGRESS" | "ON_HOLD" | "EXCLUDED" | "DONE") {
+  if (!status) return "-";
+  if (status === "IN_PROGRESS") return "추적중";
+  if (status === "ON_HOLD") return "보류";
+  if (status === "EXCLUDED") return "제외";
+  return "종결";
+}
+
 function stage3DiffPathLabel(status?: string) {
   if (!status) return "-";
   if (status === "NONE") return "없음";
@@ -87,21 +97,37 @@ function summarizeMissingEvidence(missing?: string[]) {
 }
 
 export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMirrorDetailProps) {
-  const profile = useMemo(() => getCaseRecordById(caseId), [caseId]);
+  const ssotCase = useCaseEntity(caseId);
+  const profile = useMemo(() => {
+    const legacy = getCaseRecordById(caseId);
+    if (legacy) return legacy;
+    return ssotCase ? toCaseDashboardRecord(ssotCase) : undefined;
+  }, [caseId, ssotCase]);
   const [headerSummary, setHeaderSummary] = useState<Stage1HeaderSummary | null>(null);
   const isStage2 = stage === "Stage 2";
   const effectiveMode = forceMode ?? (isStage2 ? "stage2" : "stage3");
   const isStage3View = effectiveMode === "stage3";
   const isStage2OpsView = isStage2 && isStage3View;
-  const phoneLabel = profile?.profile.phone ?? "-";
-  const subjectName = profile?.profile.name ?? "이름 미확인";
-  const subjectAge = profile?.profile.age;
+  const stage3View = useStage3CaseView(isStage3View ? caseId : null);
+  const stage3OriginResult = stage3View?.source.profile?.originStage2Result ?? headerSummary?.stage3Meta?.originStage2Result;
+  const stage3Type =
+    stage3View?.source.profile?.stage3Type ??
+    headerSummary?.stage3Meta?.stage3Type ??
+    (stage3OriginResult === "AD" ? "AD_MANAGEMENT" : "PREVENTIVE_TRACKING");
+  const phoneLabel = profile?.profile.phone ?? ssotCase?.patient.phone ?? "-";
+  const subjectName = profile?.profile.name ?? ssotCase?.patient.name ?? "이름 미확인";
+  const subjectAge = profile?.profile.age ?? ssotCase?.patient.age;
   const subjectTitle = isStage3View ? subjectName : caseId;
+  const assigneeName = profile?.manager ?? ssotCase?.assigneeId ?? "김성실 매니저";
   const identityLine =
     profile
       ? isStage3View
         ? `이름 ${subjectName} · 연령 ${subjectAge ?? "-"}세 · 연락처 ${phoneLabel}`
         : `연령대 ${toAgeBand(profile.profile.age)} · 연락처 ${isStage2 ? phoneLabel : maskPhone(profile.profile.phone)} · 케이스키 ${profile.id}`
+      : ssotCase
+        ? isStage3View
+          ? `이름 ${subjectName} · 연령 ${subjectAge ?? "-"}세 · 연락처 ${phoneLabel}`
+          : `연령대 ${toAgeBand(ssotCase.patient.age)} · 연락처 ${isStage2 ? phoneLabel : maskPhone(phoneLabel)} · 케이스키 ${ssotCase.caseId}`
       : isStage3View
         ? "이름/연령 정보 없음"
         : `케이스키 ${caseId}`;
@@ -125,7 +151,7 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                 </span>
               </div>
               <p className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
-                <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
+                <span className="font-bold text-gray-700">담당자: {assigneeName}</span>
                 <span className="h-2 w-px bg-gray-200" />
                 <span>
                   현재 상태:{" "}
@@ -133,7 +159,9 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                     {isStage2OpsView
                       ? stage2OpsStatusLabelFromStage3(headerSummary?.stage3Meta?.opsStatus)
                       : isStage3View
-                      ? headerSummary?.stage3Meta
+                      ? stage3View
+                        ? stage3LoopStatusLabel(stage3View.source.loop.status)
+                        : headerSummary?.stage3Meta
                         ? stage3StatusLabel(headerSummary.stage3Meta.opsStatus)
                         : resolveStatus(profile)
                       : isStage2
@@ -200,12 +228,32 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
             ) : isStage3View && headerSummary.stage3Meta ? (
               <>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold">
-                  <span className="rounded-md bg-white/15 px-2 py-1" title="2년 내 AD 전환 위험의 운영 참고 지표입니다.">
-                    2년 전환위험{" "}
-                    {headerSummary.stage3Meta.modelAvailable && headerSummary.stage3Meta.risk2yNowPct != null
-                      ? `${headerSummary.stage3Meta.risk2yNowPct}% (${headerSummary.stage3Meta.risk2yLabel ?? "-"})`
-                      : "결과대기"}
+                  <span
+                    className="rounded-md bg-white/15 px-2 py-1"
+                    title={
+                      stage3Type === "AD_MANAGEMENT"
+                        ? "현재 위험지수의 운영 참고 지표입니다."
+                        : "2년 내 AD 전환 위험의 운영 참고 지표입니다."
+                    }
+                  >
+                    {stage3View?.display.riskBadge.kind === "ready"
+                      ? stage3View.display.riskBadge.label
+                      : stage3Type === "AD_MANAGEMENT"
+                        ? `현재 위험지수 ${headerSummary.stage3Meta.modelAvailable && headerSummary.stage3Meta.risk2yNowPct != null
+                            ? `${headerSummary.stage3Meta.risk2yNowPct}% (${headerSummary.stage3Meta.risk2yLabel ?? "-"})`
+                            : "결과대기"}`
+                        : `2년 전환위험 ${headerSummary.stage3Meta.modelAvailable && headerSummary.stage3Meta.risk2yNowPct != null
+                            ? `${headerSummary.stage3Meta.risk2yNowPct}% (${headerSummary.stage3Meta.risk2yLabel ?? "-"})`
+                            : "결과대기"}`}
                   </span>
+                  <span className="rounded-md bg-white/15 px-2 py-1" title="Stage2 결과 기반 Stage3 운영 유형입니다.">
+                    유형 {stage3Type === "AD_MANAGEMENT" ? "AD관리" : "예방추적"}
+                  </span>
+                  {headerSummary.stage3Meta.originStage2Result ? (
+                    <span className="rounded-md bg-white/15 px-2 py-1" title="Stage3 생성 시의 Stage2 분류 결과입니다.">
+                      Stage2 결과 {headerSummary.stage3Meta.originStage2Result}
+                    </span>
+                  ) : null}
                   <span className="rounded-md bg-white/15 px-2 py-1" title="재평가 일정 기준일입니다.">
                     다음 재평가 {formatDateTime(headerSummary.stage3Meta.nextReevalAt)}
                   </span>
@@ -228,7 +276,9 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
                   ) : null}
                 </div>
                 <p className="mt-1 text-[11px] text-slate-200">
-                  운영 참고: 전환 위험 신호는 정렬용이며 재평가/플랜/연계 실행은 담당자 검토 후 진행합니다.
+                  운영 참고: {stage3Type === "AD_MANAGEMENT"
+                    ? "현재 위험지수는 관리 우선순위 정렬용이며 실행은 담당자 검토 후 진행합니다."
+                    : "전환 위험 신호는 정렬용이며 재평가/플랜/연계 실행은 담당자 검토 후 진행합니다."}
                 </p>
                 <details className="mt-1 text-[10px] text-slate-300">
                   <summary className="cursor-pointer">더보기</summary>
@@ -302,6 +352,7 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         <Stage1OpsDetail
+          caseId={caseId}
           caseRecord={profile}
           onHeaderSummaryChange={setHeaderSummary}
           mode={effectiveMode}

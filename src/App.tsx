@@ -32,6 +32,15 @@ function isPublicSmsPathname(pathname: string): boolean {
   return stripped === '/p/sms' || stripped === '/p/sms/';
 }
 
+function isCitizenLegacyPathname(pathname: string): boolean {
+  const legacyPaths = new Set(['/citizen', '/citizen/', '/p/citizen', '/p/citizen/', '/citizen-portal', '/citizen-portal/']);
+  if (legacyPaths.has(pathname)) return true;
+  const basePath = normalizeBasePath(import.meta.env.VITE_BASE_PATH || '/neuro-shield/');
+  if (!pathname.startsWith(basePath)) return false;
+  const stripped = pathname.slice(basePath.length - 1);
+  return legacyPaths.has(stripped);
+}
+
 /** URL 해시가 #citizen 이면 로그인 없이 시민 화면 직접 접근 */
 function useCitizenDirectAccess() {
   const [isCitizen, setIsCitizen] = useState(() => window.location.hash === '#citizen');
@@ -43,6 +52,22 @@ function useCitizenDirectAccess() {
   }, []);
 
   return isCitizen;
+}
+
+function useCitizenLegacyPathAccess() {
+  const [isCitizenPath, setIsCitizenPath] = useState(() => isCitizenLegacyPathname(window.location.pathname));
+
+  useEffect(() => {
+    const onRouteChange = () => setIsCitizenPath(isCitizenLegacyPathname(window.location.pathname));
+    window.addEventListener('popstate', onRouteChange);
+    window.addEventListener('hashchange', onRouteChange);
+    return () => {
+      window.removeEventListener('popstate', onRouteChange);
+      window.removeEventListener('hashchange', onRouteChange);
+    };
+  }, []);
+
+  return isCitizenPath;
 }
 
 /** URL 경로가 /p/sms 이면 공개 링크 랜딩 화면 접근 */
@@ -64,7 +89,9 @@ function usePublicSmsLandingAccess() {
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const isCitizenDirect = useCitizenDirectAccess();
+  const isCitizenDirectByHash = useCitizenDirectAccess();
+  const isCitizenLegacyPath = useCitizenLegacyPathAccess();
+  const isCitizenDirect = isCitizenDirectByHash || isCitizenLegacyPath;
   const isPublicSmsLanding = usePublicSmsLandingAccess();
 
   const handleLogin = (userData: User) => {

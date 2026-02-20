@@ -39,3 +39,30 @@ def upload_bytes(*, key: str, content: bytes, content_type: str) -> str:
     ensure_bucket()
     client.upload_fileobj(io.BytesIO(content), settings.s3_bucket, key, ExtraArgs={'ContentType': content_type})
     return key
+
+
+def create_presigned_put_url(*, key: str, content_type: str, expires_in: int = 600) -> str:
+    client = _client()
+    ensure_bucket()
+    return client.generate_presigned_url(
+        ClientMethod='put_object',
+        Params={
+            'Bucket': settings.s3_bucket,
+            'Key': key,
+            'ContentType': content_type,
+        },
+        ExpiresIn=expires_in,
+    )
+
+
+def create_presigned_get_url(*, key: str, expires_in: int = 300) -> str:
+    client = _client()
+    ensure_bucket()
+    return client.generate_presigned_url(
+        ClientMethod='get_object',
+        Params={
+            'Bucket': settings.s3_bucket,
+            'Key': key,
+        },
+        ExpiresIn=expires_in,
+    )

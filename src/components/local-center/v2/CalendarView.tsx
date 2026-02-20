@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   BellRing,
@@ -112,8 +112,25 @@ type ScheduleFormState = {
   notes: string;
 };
 
+type RemoteCalendarEvent = {
+  eventId: string;
+  caseId: string;
+  type: string;
+  title: string;
+  startAt: string;
+  durationMin?: number;
+  priority?: string;
+  status?: string;
+  payload?: Record<string, unknown>;
+};
+
 function pad(value: number) {
   return String(value).padStart(2, "0");
+}
+
+function timeKey(iso: string) {
+  const parsed = new Date(iso);
+  return `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
 }
 
 function dateKey(date: Date) {
@@ -156,6 +173,25 @@ function inferPriority(riskLevel: RiskLevel, status: ScheduleStatus): PriorityLe
   if (status === "지연" || riskLevel === "high") return "긴급";
   if (riskLevel === "medium") return "높음";
   return "보통";
+}
+
+function mapRemoteType(type: string): ScheduleType {
+  const upper = (type || "").toUpperCase();
+  if (upper.includes("APPOINT")) return "예약";
+  if (upper.includes("RECONTACT") || upper.includes("CALL")) return "연락";
+  if (upper.includes("FOLLOWUP")) return "방문";
+  if (upper.includes("REFERRAL")) return "의뢰";
+  if (upper.includes("EXAM")) return "검사";
+  return "예약";
+}
+
+function mapRemoteStatus(status: string): ScheduleStatus {
+  const upper = (status || "").toUpperCase();
+  if (upper.includes("DONE") || upper.includes("COMPLETED")) return "완료";
+  if (upper.includes("CANCEL")) return "취소";
+  if (upper.includes("QUEUED") || upper.includes("WAIT")) return "대기";
+  if (upper.includes("DELAY") || upper.includes("OVERDUE")) return "지연";
+  return "예정";
 }
 
 function typeMeta(type: ScheduleType) {
@@ -385,6 +421,78 @@ export function CalendarView() {
   const todayKey = dateKey(today);
 
   const [schedules, setSchedules] = useState<ScheduleItem[]>(() => buildInitialSchedules(today));
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let timer: number | null = null;
+    let consecutiveFailures = 0;
+
+    const syncRemoteSchedules = async () => {
+      try {
+        const response = await fetch(`/api/local-center/calendar/events?_=${Date.now()}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error(`remote calendar fetch failed (${response.status})`);
+        }
+        const data = (await response.json()) as { items?: RemoteCalendarEvent[]; degraded?: boolean };
+        const remoteItems = (data.items ?? []).map((item): ScheduleItem => {
+          const eventDate = new Date(item.startAt);
+          return {
+            id: `REMOTE-${item.eventId}`,
+            caseId: item.caseId,
+            patientName: `대상자-${item.caseId.slice(-4)}`,
+            patientAge: 0,
+            date: dateKey(eventDate),
+            time: timeKey(item.startAt),
+            durationMinutes: item.durationMin ?? 30,
+            type: mapRemoteType(item.type),
+            status: mapRemoteStatus(item.status ?? "SCHEDULED"),
+            priority: (item.priority?.toUpperCase() === "HIGH" ? "높음" : "보통"),
+            riskLevel: "medium",
+            title: item.title || "예약 일정",
+            assignee: "센터 연동",
+            location: undefined,
+            reminderSent: false,
+            reminderChannel: "SMS",
+            followUpRequired: false,
+            notes: "API 동기화 일정",
+          };
+        });
+
+        if (!active) return;
+        setSchedules((prev) => {
+          const nonRemote = prev.filter((row) => !row.id.startsWith("REMOTE-"));
+          return [...nonRemote, ...remoteItems].sort((a, b) =>
+            `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`)
+          );
+        });
+        consecutiveFailures = 0;
+        setSyncError(data.degraded ? "일부 일정이 지연 반영될 수 있습니다." : null);
+      } catch (error) {
+        if (!active) return;
+        consecutiveFailures += 1;
+        console.error("calendar sync failed", error);
+        if (consecutiveFailures >= 3) {
+          setSyncError("원격 일정 연동이 지연되고 있습니다. 잠시 후 자동 복구됩니다.");
+        }
+      } finally {
+        if (active) {
+          timer = window.setTimeout(syncRemoteSchedules, 20000);
+        }
+      }
+    };
+
+    void syncRemoteSchedules();
+
+    return () => {
+      active = false;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
 
   const selectedSchedule = useMemo(
     () => schedules.find((item) => item.id === selectedScheduleId) ?? null,
@@ -586,6 +694,12 @@ export function CalendarView() {
 
   return (
     <div className="space-y-5">
+      {syncError ? (
+        <section className="rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-xs font-semibold text-red-700">원격 일정 동기화 오류: {syncError}</p>
+        </section>
+      ) : null}
+
       {remindersDue.length > 0 && (
         <section className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <div className="flex items-center justify-between gap-3">

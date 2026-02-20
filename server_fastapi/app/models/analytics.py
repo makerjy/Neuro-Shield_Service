@@ -66,8 +66,8 @@ class FactModelRunDaily(Base):
     org_unit_id: Mapped[str] = mapped_column(String(64), nullable=False)
     stage: Mapped[str] = mapped_column(String(8), nullable=False)
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    avg_score: Mapped[float | None] = mapped_column(Numeric(6, 3))
-    drift_score: Mapped[float | None] = mapped_column(Numeric(6, 3))
+    avg_score: Mapped[float] = mapped_column(Numeric(6, 3), nullable=True)
+    drift_score: Mapped[float] = mapped_column(Numeric(6, 3), nullable=True)
 
 
 class FactWorkitemDaily(Base):
@@ -101,7 +101,7 @@ class KpiSnapshot(Base):
     numerator: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
     denominator: Mapped[float] = mapped_column(Numeric(12, 3), nullable=False)
     delta7d: Mapped[float] = mapped_column(Numeric(8, 3), nullable=False)
-    auxiliary_json: Mapped[dict | None] = mapped_column(JSON)
+    auxiliary_json: Mapped[dict] = mapped_column(JSON, nullable=True)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     kpi_version: Mapped[str] = mapped_column(String(64), nullable=False, default='v1')
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False, default='v1')

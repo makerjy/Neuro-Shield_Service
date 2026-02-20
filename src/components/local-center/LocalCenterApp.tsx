@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MainDashboard } from './v2/MainDashboard';
-import { CaseDashboard } from './v2/CaseDashboard';
+import { CaseDashboard, type CaseDashboardViewState } from './v2/CaseDashboard';
 import { CalendarView } from './v2/CalendarView';
 import { ReportsView } from './v2/ReportsView';
 import { SettingsView } from './v2/SettingsView';
@@ -32,26 +32,49 @@ export function LocalCenterApp({
   const [selectedCaseStage, setSelectedCaseStage] = useState<StageType>('Stage 1');
   const [currentFilter, setCurrentFilter] = useState<string | null>(null);
   const [caseSubView, setCaseSubView] = useState<'detail' | 'consultation' | 'sms' | 'stage-workflow'>('detail');
+  const [caseSearchKeyword, setCaseSearchKeyword] = useState('');
+  const [caseDashboardViewState, setCaseDashboardViewState] = useState<CaseDashboardViewState | null>(null);
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+  const caseDashboardScrollTopRef = useRef(0);
+  const shouldRestoreDashboardScrollRef = useRef(false);
 
-  const handleCaseSelect = (caseId: string, stage: StageType) => {
+  const handleCaseSelect = useCallback((caseId: string, stage: StageType) => {
+    caseDashboardScrollTopRef.current = mainScrollRef.current?.scrollTop ?? 0;
     setSelectedCaseId(caseId);
     setSelectedCaseStage(stage);
     setCaseSubView('detail');
     setActiveTab('cases');
-  };
+  }, []);
 
-  const handleNavigateToCases = (filter: string) => {
+  const handleNavigateToCases = useCallback((filter: string) => {
     applyDrilldownFilter(filter);
     setCurrentFilter(filter);
+    setCaseDashboardViewState(null);
+    shouldRestoreDashboardScrollRef.current = false;
     setSelectedCaseId(null);
     setCaseSubView('detail');
     setActiveTab('cases');
-  };
+  }, []);
 
-  const resetCaseSelection = () => {
+  const resetCaseSelection = useCallback(() => {
+    shouldRestoreDashboardScrollRef.current = true;
     setSelectedCaseId(null);
     setCaseSubView('detail');
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!shouldRestoreDashboardScrollRef.current) return;
+    if (activeTab !== 'cases' || selectedCaseId !== null) return;
+
+    const rafId = window.requestAnimationFrame(() => {
+      if (mainScrollRef.current) {
+        mainScrollRef.current.scrollTop = caseDashboardScrollTopRef.current;
+      }
+      shouldRestoreDashboardScrollRef.current = false;
+    });
+
+    return () => window.cancelAnimationFrame(rafId);
+  }, [activeTab, selectedCaseId]);
 
   const renderContent = () => {
     if (selectedCaseId && activeTab === 'cases') {
@@ -117,6 +140,10 @@ export function LocalCenterApp({
           <CaseDashboard
             onSelectCase={handleCaseSelect}
             initialFilter={currentFilter}
+            externalSearchKeyword={caseSearchKeyword}
+            onExternalSearchKeywordChange={setCaseSearchKeyword}
+            initialViewState={caseDashboardViewState}
+            onViewStateChange={setCaseDashboardViewState}
           />
         );
       case 'calendar':
@@ -147,6 +174,7 @@ export function LocalCenterApp({
             setGlobalFilters({ stage: 'ALL', status: 'ALL', keyword: '' });
           }
           setActiveTab(tab);
+          shouldRestoreDashboardScrollRef.current = false;
           setSelectedCaseId(null);
           setCurrentFilter(null);
           setCaseSubView('detail');
@@ -159,10 +187,14 @@ export function LocalCenterApp({
 
       <div className="flex-1 flex flex-col min-w-0">
         {!isCaseDetailView && (
-          <Header activeTab={activeTab} />
+          <Header
+            activeTab={activeTab}
+            caseSearchKeyword={caseSearchKeyword}
+            onCaseSearchKeywordChange={setCaseSearchKeyword}
+          />
         )}
 
-        <main className="flex-1 overflow-y-auto p-6">
+        <main ref={mainScrollRef} className="flex-1 overflow-y-auto p-6">
           {renderContent()}
         </main>
       </div>

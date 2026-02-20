@@ -10,6 +10,7 @@ import {
 
 const QUERY_STALE_TIME_MS = 15_000;
 const QUERY_GC_TIME_MS = 30 * 60_000;
+const QUERY_REFETCH_INTERVAL_MS = 10_000;
 
 function mergeFilters(base: GlobalFilters, override?: Partial<GlobalFilters>) {
   return {
@@ -29,6 +30,8 @@ export function useLocalCenterDashboardStatsQuery(override?: Partial<GlobalFilte
     placeholderData: keepPreviousData,
     staleTime: QUERY_STALE_TIME_MS,
     gcTime: QUERY_GC_TIME_MS,
+    refetchInterval: QUERY_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
   });
 }
@@ -44,6 +47,8 @@ export function useLocalCenterCaseDashboardQuery(override?: Partial<GlobalFilter
     placeholderData: keepPreviousData,
     staleTime: QUERY_STALE_TIME_MS,
     gcTime: QUERY_GC_TIME_MS,
+    refetchInterval: QUERY_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
   });
 }
@@ -57,6 +62,8 @@ export function useLocalCenterCaseQuery(caseId?: string | null) {
     placeholderData: keepPreviousData,
     staleTime: QUERY_STALE_TIME_MS,
     gcTime: QUERY_GC_TIME_MS,
+    refetchInterval: QUERY_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
   });
 }
@@ -70,6 +77,8 @@ export function useLocalCenterCaseEventsQuery(caseId?: string | null) {
     placeholderData: keepPreviousData,
     staleTime: QUERY_STALE_TIME_MS,
     gcTime: QUERY_GC_TIME_MS,
+    refetchInterval: QUERY_REFETCH_INTERVAL_MS,
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
   });
 }

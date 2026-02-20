@@ -15,9 +15,10 @@
       return value;
     };
 
-    const basePath = normalizeBasePath(env.VITE_BASE_PATH ?? env.BASE_PATH ?? '/neuro-shield/');
-    const devPortRaw = Number(env.FRONT_DEV_PORT ?? env.VITE_DEV_PORT ?? 5173);
-    const devPort = Number.isFinite(devPortRaw) ? devPortRaw : 5173;
+  const basePath = normalizeBasePath(env.VITE_BASE_PATH ?? env.BASE_PATH ?? '/neuro-shield/');
+  const devPortRaw = Number(env.FRONT_DEV_PORT ?? env.VITE_DEV_PORT ?? 5173);
+  const devPort = Number.isFinite(devPortRaw) ? devPortRaw : 5173;
+  const apiProxyTarget = env.VITE_API_PROXY_TARGET ?? env.API_PROXY_TARGET ?? 'http://localhost:8000';
 
     return {
       base: basePath,
@@ -70,11 +71,17 @@
         target: 'esnext',
         outDir: 'build',
       },
-      server: {
-        host: true,
-        port: devPort,
-        open: false,
+    server: {
+      host: true,
+      port: devPort,
+      open: false,
+      proxy: {
+        '/api': {
+          target: apiProxyTarget,
+          changeOrigin: true,
+        },
       },
+    },
       test: {
         environment: "jsdom",
         globals: true,

@@ -114,6 +114,60 @@ class Stage3ModelRunCreatePayload(BaseModel):
     score: float
 
 
+class Stage2Step2AutoFillReceivedMeta(BaseModel):
+    linkageStatus: Literal['WAITING', 'RECEIVED', 'FAILED'] = 'WAITING'
+    receivedAt: str | None = None
+    providerName: str | None = None
+
+
+class Stage2Step2AutoFillPayload(BaseModel):
+    caseId: str
+    source: Literal['RECEIVED', 'MAPPED', 'SEEDED']
+    syncedAt: str
+    mmse: int | None = None
+    gds: int | None = None
+    cdr: float | None = None
+    cogTestType: Literal['CERAD-K', 'SNSB-II', 'SNSB-C', 'LICA'] | None = None
+    specialistOpinionStatus: Literal['MISSING', 'DONE'] | None = None
+    receivedMeta: Stage2Step2AutoFillReceivedMeta
+    missingRequiredCount: int
+    filledFields: list[str] = Field(default_factory=list)
+
+
+class Stage2Step2ManualEditPayload(BaseModel):
+    changedFields: dict[str, Any] = Field(default_factory=dict)
+    reason: str
+    editor: str | None = None
+
+
+class InferenceRunPayload(BaseModel):
+    stage: Literal[2, 3]
+    modelVersion: str | None = None
+
+
+class InferenceRunResponse(BaseModel):
+    jobId: str
+    caseId: str
+    stage: Literal[2, 3]
+    status: Literal['PENDING', 'RUNNING', 'DONE', 'FAILED']
+    progress: int
+    etaSeconds: int | None = None
+    startedAt: str | None = None
+    updatedAt: str
+    completedAt: str | None = None
+
+
+class OpsLoopReconcileResponse(BaseModel):
+    caseId: str
+    stage: int
+    doneCount: int
+    readyCount: int
+    totalCount: int
+    mismatch: bool
+    steps: list[dict[str, Any]]
+    mismatchReasons: list[str] = Field(default_factory=list)
+
+
 class WorkItemCreatePayload(BaseModel):
     caseId: str
     title: str

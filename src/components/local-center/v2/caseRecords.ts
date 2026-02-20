@@ -43,6 +43,7 @@ export type CaseRecord = {
   computed?: {
     stage2?: {
       modelAvailable?: boolean;
+      classificationConfirmed?: boolean;
       predictedLabel?: "정상" | "MCI" | "치매";
       mciBand?: "양호" | "중간" | "위험";
       completed?: boolean;
@@ -51,6 +52,9 @@ export type CaseRecord = {
     stage3?: {
       modelAvailable?: boolean;
       label?: "LOW" | "MID" | "HIGH";
+      riskNow?: number;
+      stage3Type?: "PREVENTIVE_TRACKING" | "AD_MANAGEMENT";
+      originStage2Result?: "MCI-MID" | "MCI-HIGH" | "AD";
       completed?: boolean;
       missing?: string[];
     };
@@ -301,6 +305,45 @@ export const CASE_RECORDS: CaseRecord[] = [
     quality: "주의",
     profile: { name: "권정순", age: 76, phone: "010-1002-4451", guardianPhone: "010-9001-1112" },
     alertTags: ["이탈 위험", "SLA 임박"],
+  },
+  {
+    id: "CASE-2026-175",
+    stage: "Stage 1",
+    risk: "고",
+    path: "초기 접촉 집중",
+    status: "대기",
+    manager: "이동욱",
+    action: "Stage1 모델 실행",
+    updated: "2026-02-19 09:00",
+    quality: "양호",
+    profile: { name: "이재용", age: 67, phone: "010-****-1234" },
+    alertTags: ["SLA 임박"],
+  },
+  {
+    id: "CASE-2026-275",
+    stage: "Stage 2",
+    risk: "중",
+    path: "High MCI 경로",
+    status: "진행중",
+    manager: "이동욱",
+    action: "Stage2 모델 결과 리뷰",
+    updated: "2026-02-19 10:20",
+    quality: "양호",
+    profile: { name: "이재용", age: 67, phone: "010-****-1234" },
+    alertTags: ["High MCI", "연계 대기"],
+  },
+  {
+    id: "CASE-2026-375",
+    stage: "Stage 3",
+    risk: "중",
+    path: "추가관리 집중",
+    status: "진행중",
+    manager: "이동욱",
+    action: "Stage3 위험도 확인",
+    updated: "2026-02-19 11:10",
+    quality: "양호",
+    profile: { name: "이재용", age: 67, phone: "010-****-1234" },
+    alertTags: ["재평가 필요"],
   },
   {
     id: "CASE-2026-016",

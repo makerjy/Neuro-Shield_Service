@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -11,6 +12,7 @@ from server_fastapi.app.schemas.local_center import CalendarEventCreatePayload, 
 from server_fastapi.app.services.local_case_service import create_calendar_event, list_calendar_events
 
 router = APIRouter(tags=['local-calendar'])
+logger = logging.getLogger(__name__)
 
 
 @router.post('/api/calendar/events', response_model=CalendarEventCreateResponse)
@@ -29,5 +31,10 @@ def get_calendar_events(
     assignee: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
-    rows = list_calendar_events(db, from_at=from_at, to_at=to_at, assignee=assignee)
-    return {'items': rows, 'total': len(rows)}
+    try:
+        rows = list_calendar_events(db, from_at=from_at, to_at=to_at, assignee=assignee)
+        return {'items': rows, 'total': len(rows)}
+    except Exception:
+        logger.exception('Calendar events fetch failed (degraded response)')
+        # 데모/운영 화면 안정성을 위해 500 대신 안전 응답을 반환한다.
+        return {'items': [], 'total': 0, 'degraded': True}

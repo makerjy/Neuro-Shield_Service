@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, X } from 'lucide-react';
+import { Bot, Send } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { ScrollArea } from '../ui/scroll-area';
@@ -10,6 +10,17 @@ interface Message {
   type: 'user' | 'bot';
   content: string;
   timestamp: Date;
+}
+
+interface Citation {
+  title?: string;
+  snippet?: string;
+}
+
+interface ChatApiResponse {
+  conversation_id?: string;
+  assistant_message?: string;
+  citations?: Citation[];
 }
 
 interface ChatbotDialogProps {
@@ -27,6 +38,8 @@ export function ChatbotDialog({ open, onOpenChange }: ChatbotDialogProps) {
     },
   ]);
   const [inputValue, setInputValue] = useState('');
+  const [conversationId, setConversationId] = useState<string>('');
+  const [isSending, setIsSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Knowledge base for RAG
@@ -41,6 +54,7 @@ export function ChatbotDialog({ open, onOpenChange }: ChatbotDialogProps) {
     '가족': '네, 가족분과 함께 오셔도 됩니다. 오히려 가족분이 동반하시면 더 정확한 상담이 가능합니다.',
     '주차': '센터에 무료 주차 공간이 마련되어 있습니다. 대중교통 이용도 편리합니다.',
     '결과': '검사 후 즉시 결과를 확인하실 수 있으며, 필요한 경우 추가 검사나 의료기관 연계를 안내해 드립니다.',
+    '치매': '상담봇은 진단을 할 수 없습니다. 정확한 평가는 치매안심센터 선별검사 또는 의료진 상담이 필요합니다. 예약 절차를 안내해드릴 수 있어요.',
   };
 
   const quickQuestions = [
@@ -69,34 +83,71 @@ export function ChatbotDialog({ open, onOpenChange }: ChatbotDialogProps) {
     return '죄송합니다. 해당 질문에 대한 답변을 찾지 못했습니다. 자주 묻는 질문을 참고하시거나, 센터로 직접 문의해 주세요. (전화: 02-1234-5678)';
   };
 
-  const handleSendMessage = () => {
-    if (!inputValue.trim()) return;
+  const requestRagAnswer = async (userMessage: string): Promise<string | null> => {
+    try {
+      const response = await fetch('/api/outreach/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_message: userMessage,
+          conversation_id: conversationId || undefined,
+          context: { current_view: 'citizen_portal' },
+        }),
+      });
+      if (!response.ok) {
+        return null;
+      }
+      const data = (await response.json()) as ChatApiResponse;
+      if (data.conversation_id) {
+        setConversationId(data.conversation_id);
+      }
+      const message = String(data.assistant_message || '').trim();
+      if (!message) {
+        return null;
+      }
+      const citations = (data.citations || [])
+        .map((item) => [item.title, item.snippet].filter(Boolean).join(': '))
+        .filter(Boolean)
+        .slice(0, 2);
+      if (!citations.length) {
+        return message;
+      }
+      return `${message}\n\n참고: ${citations.join(' | ')}`;
+    } catch {
+      return null;
+    }
+  };
 
+  const sendUserMessage = async (rawMessage: string) => {
+    const userText = rawMessage.trim();
+    if (!userText || isSending) return;
     const userMessage: Message = {
       id: Date.now().toString(),
       type: 'user',
-      content: inputValue,
+      content: userText,
       timestamp: new Date(),
     };
-
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
+    setIsSending(true);
+    const ragAnswer = await requestRagAnswer(userText);
+    const finalAnswer = ragAnswer || getBotResponse(userText);
+    const botResponse: Message = {
+      id: (Date.now() + 1).toString(),
+      type: 'bot',
+      content: finalAnswer,
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, botResponse]);
+    setIsSending(false);
+  };
 
-    // Simulate bot thinking
-    setTimeout(() => {
-      const botResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        type: 'bot',
-        content: getBotResponse(inputValue),
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, botResponse]);
-    }, 500);
+  const handleSendMessage = () => {
+    void sendUserMessage(inputValue);
   };
 
   const handleQuickQuestion = (question: string) => {
-    setInputValue(question);
-    setTimeout(() => handleSendMessage(), 100);
+    void sendUserMessage(question);
   };
 
   return (
@@ -168,7 +219,7 @@ export function ChatbotDialog({ open, onOpenChange }: ChatbotDialogProps) {
               placeholder="질문을 입력하세요..."
               className="flex-1"
             />
-            <Button onClick={handleSendMessage} disabled={!inputValue.trim()}>
+            <Button onClick={handleSendMessage} disabled={!inputValue.trim() || isSending}>
               <Send className="h-4 w-4" />
             </Button>
           </div>

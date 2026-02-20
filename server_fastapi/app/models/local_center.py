@@ -66,10 +66,12 @@ class LocalCase(Base):
     __table_args__ = (
         Index('ix_local_cases_stage_status', 'stage', 'status'),
         Index('ix_local_cases_alert_priority', 'alert_level', 'priority_tier'),
+        Index('ix_local_cases_case_key', 'case_key'),
         {'schema': 'local_center'},
     )
 
     case_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_key: Mapped[str] = mapped_column(String(96), unique=True, nullable=False)
     center_id: Mapped[str] = mapped_column(ForeignKey('local_center.centers.id'), nullable=False)
     owner_id: Mapped[str | None] = mapped_column(ForeignKey('local_center.users.id'))
     owner_type: Mapped[str] = mapped_column(String(32), nullable=False, default='counselor')
@@ -167,6 +169,7 @@ class LocalAuditEvent(Base):
     __tablename__ = 'audit_events'
     __table_args__ = (
         Index('ix_local_audit_case_at', 'case_id', 'at'),
+        Index('ix_local_audit_entity_at', 'entity_type', 'entity_id', 'at'),
         {'schema': 'local_center'},
     )
 
@@ -178,6 +181,8 @@ class LocalAuditEvent(Base):
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(String(16), nullable=False, default='info')
+    entity_type: Mapped[str | None] = mapped_column(String(64))
+    entity_id: Mapped[str | None] = mapped_column(String(96))
     before_json: Mapped[dict | None] = mapped_column(JSON)
     after_json: Mapped[dict | None] = mapped_column(JSON)
 
@@ -188,8 +193,10 @@ class Attachment(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     case_id: Mapped[str] = mapped_column(ForeignKey('local_center.cases.case_id'), nullable=False)
+    file_key: Mapped[str | None] = mapped_column(String(255))
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -214,6 +221,38 @@ class Stage1Contact(Base):
     template_id: Mapped[str | None] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default='NOT_STARTED')
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Contact(Base):
+    __tablename__ = 'contacts'
+    __table_args__ = (
+        Index('ix_local_contacts_case_created', 'case_id', 'created_at'),
+        {'schema': 'local_center'},
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey('local_center.cases.case_id'), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False, default='CALL')
+    template_id: Mapped[str | None] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default='PENDING')
+    payload_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class ContactResult(Base):
+    __tablename__ = 'contact_results'
+    __table_args__ = (
+        Index('ix_local_contact_results_contact_created', 'contact_id', 'created_at'),
+        {'schema': 'local_center'},
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    contact_id: Mapped[str] = mapped_column(ForeignKey('local_center.contacts.id'), nullable=False)
+    case_id: Mapped[str] = mapped_column(ForeignKey('local_center.cases.case_id'), nullable=False)
+    outcome_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    payload_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Stage1ContactResult(Base):
@@ -299,6 +338,7 @@ class ExamResult(Base):
     case_id: Mapped[str] = mapped_column(ForeignKey('local_center.cases.case_id'), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default='pending')
     result_json: Mapped[dict | None] = mapped_column(JSON)
+    validated_by: Mapped[str | None] = mapped_column(String(64))
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

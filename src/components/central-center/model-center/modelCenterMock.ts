@@ -12,6 +12,8 @@ import type {
   DispatchLog,
   Stage2Distribution,
   Stage3Enrollment,
+  Stage3CaseResult,
+  RiskBand,
 } from "./modelCenter.types";
 
 const BASE_DATE = "2026-02-12";
@@ -44,6 +46,213 @@ export const MOCK_STAGE3_ENROLLMENT: Stage3Enrollment = {
   mciEnrollPct: 78.6,
   adEnrollPct: 64.2,
 };
+
+const STAGE3_MODEL_VERSION = {
+  cnn_mri_extractor: "v1.0.3",
+  ann_multimodal_conversion: "v2.1.0",
+  guardrails: "v1.0.0",
+};
+
+const STAGE3_INPUTS_SUMMARY = {
+  stage1_sources: ["health_check", "survey_lifestyle", "admin_info", "history"],
+  stage2_sources: ["cognition_summary", "blood_biomarker", "pre_questionnaire", "medication_dx_history"],
+  mri_cnn_used: true,
+};
+
+const DEFAULT_STAGE3_ACTIONS = ["3개월 추적", "보호자 동반 상담"];
+
+export const MOCK_STAGE3_CASES: Stage3CaseResult[] = [
+  {
+    case_id: "C-2026-000101",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "OK", cnn_risk_score: 0.18, key_rois: ["hippocampus_stable"] },
+    outputs: {
+      conversion_risk_2y: 0.14,
+      conversion_risk_band_2y: "Low",
+      conversion_reason_codes: ["MMSE_STABLE", "BIO_LOW_RISK", "MRI_STABLE"],
+      conversion_top_features: [{ name: "MMSE trend", contribution: 0.11 }, { name: "p-tau", contribution: 0.08 }],
+      followup_priority: "Low",
+      recommended_actions: ["6개월 추적", "생활습관 교육"],
+      guardrail_flags: [],
+    },
+  },
+  {
+    case_id: "C-2026-000102",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "WARN", cnn_risk_score: 0.42, key_rois: ["temporal_cortex_thinning"] },
+    outputs: {
+      conversion_risk_2y: 0.33,
+      conversion_risk_band_2y: "Med",
+      conversion_reason_codes: ["MMSE_DROP", "MRI_TEMPORAL_THINNING", "FAMILY_HISTORY"],
+      conversion_top_features: [{ name: "MMSE trend", contribution: 0.17 }, { name: "CNN MRI risk", contribution: 0.14 }],
+      followup_priority: "Med",
+      recommended_actions: DEFAULT_STAGE3_ACTIONS,
+      guardrail_flags: ["MRI_QUALITY_WARN"],
+    },
+  },
+  {
+    case_id: "C-2026-000103",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "OK", cnn_risk_score: 0.63, key_rois: ["hippocampus_volume_low"] },
+    outputs: {
+      conversion_risk_2y: 0.58,
+      conversion_risk_band_2y: "High",
+      conversion_reason_codes: ["MRI_HIPPOCAMPUS_LOW", "BIO_PTAU_HIGH", "MMSE_DROP"],
+      conversion_top_features: [{ name: "p-tau", contribution: 0.21 }, { name: "CNN MRI risk", contribution: 0.15 }],
+      followup_priority: "High",
+      recommended_actions: ["MRI 재촬영 검토", "3개월 추적", "보호자 동반 상담"],
+      guardrail_flags: [],
+    },
+  },
+  {
+    case_id: "C-2026-000104",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "OK", cnn_risk_score: 0.48, key_rois: ["parietal_atrophy_index_high"] },
+    outputs: {
+      conversion_risk_2y: 0.41,
+      conversion_reason_codes: ["IADL_DECLINE", "MRI_PARIETAL_ATROPHY", "BIO_BORDERLINE"],
+      conversion_top_features: [{ name: "IADL change", contribution: 0.16 }, { name: "CNN MRI risk", contribution: 0.13 }],
+      followup_priority: "Med",
+      recommended_actions: DEFAULT_STAGE3_ACTIONS,
+      guardrail_flags: [],
+    },
+  },
+  {
+    case_id: "C-2026-000105",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "WARN", cnn_risk_score: 0.54, key_rois: ["temporal_cortex_thinning"] },
+    outputs: {
+      conversion_risk_2y: 0.47,
+      conversion_risk_band_2y: "Med",
+      conversion_reason_codes: ["MMSE_DROP", "APOE4_POSITIVE", "MRI_TEMPORAL_THINNING"],
+      conversion_top_features: [{ name: "APOE4", contribution: 0.18 }, { name: "MMSE trend", contribution: 0.16 }],
+      followup_priority: "High",
+      recommended_actions: ["정밀검사 경로 재검토", "3개월 추적"],
+      guardrail_flags: ["PARTIAL_STAGE2_RECEIVED"],
+    },
+  },
+  {
+    case_id: "C-2026-000106",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "OK", cnn_risk_score: 0.22, key_rois: ["hippocampus_stable"] },
+    outputs: {
+      conversion_risk_2y: 0.19,
+      conversion_risk_band_2y: "Low",
+      conversion_reason_codes: ["MMSE_STABLE", "BIO_LOW_RISK", "FOLLOWUP_ADHERENT"],
+      conversion_top_features: [{ name: "Follow-up adherence", contribution: 0.12 }, { name: "MMSE trend", contribution: 0.1 }],
+      followup_priority: "Low",
+      recommended_actions: ["6개월 추적", "전화 모니터링"],
+      guardrail_flags: [],
+    },
+  },
+  {
+    case_id: "C-2026-000107",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "OK", cnn_risk_score: 0.67, key_rois: ["hippocampus_volume_low", "temporal_cortex_thinning"] },
+    outputs: {
+      conversion_risk_2y: 0.62,
+      conversion_risk_band_2y: "High",
+      conversion_reason_codes: ["BIO_PTAU_HIGH", "MMSE_DROP", "MRI_HIPPOCAMPUS_LOW"],
+      conversion_top_features: [{ name: "p-tau", contribution: 0.22 }, { name: "CNN MRI risk", contribution: 0.16 }],
+      followup_priority: "High",
+      recommended_actions: ["MRI 재촬영 검토", "3개월 추적", "보호자 동반 상담"],
+      guardrail_flags: [],
+    },
+  },
+  {
+    case_id: "C-2026-000108",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "WARN", cnn_risk_score: 0.39, key_rois: ["frontal_cortex_borderline"] },
+    outputs: {
+      conversion_risk_2y: 0.29,
+      conversion_reason_codes: ["SLEEP_ISSUE", "MMSE_MINOR_DROP", "MRI_BORDERLINE"],
+      conversion_top_features: [{ name: "Sleep quality", contribution: 0.12 }, { name: "CNN MRI risk", contribution: 0.11 }],
+      followup_priority: "Med",
+      recommended_actions: DEFAULT_STAGE3_ACTIONS,
+      guardrail_flags: ["MRI_QUALITY_WARN"],
+    },
+  },
+  {
+    case_id: "C-2026-000109",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "OK", cnn_risk_score: 0.71, key_rois: ["hippocampus_volume_low", "parietal_atrophy_index_high"] },
+    outputs: {
+      conversion_risk_2y: 0.69,
+      conversion_risk_band_2y: "High",
+      conversion_reason_codes: ["MRI_HIPPOCAMPUS_LOW", "MMSE_SHARP_DROP", "BIO_PTAU_HIGH"],
+      conversion_top_features: [{ name: "CNN MRI risk", contribution: 0.2 }, { name: "MMSE trend", contribution: 0.18 }],
+      followup_priority: "High",
+      recommended_actions: ["정밀검사 우선 배정", "3개월 추적", "가족 상담"],
+      guardrail_flags: ["PARTIAL_STAGE2_RECEIVED"],
+    },
+  },
+  {
+    case_id: "C-2026-000110",
+    stage: 3,
+    model_version: STAGE3_MODEL_VERSION,
+    inputs_summary: STAGE3_INPUTS_SUMMARY,
+    upstream_cnn_signal: { mri_quality: "OK", cnn_risk_score: 0.31, key_rois: ["temporal_cortex_mild_change"] },
+    outputs: {
+      conversion_risk_2y: 0.24,
+      conversion_risk_band_2y: "Med",
+      conversion_reason_codes: ["MMSE_MINOR_DROP", "BIO_BORDERLINE", "MRI_MILD_CHANGE"],
+      conversion_top_features: [{ name: "MMSE trend", contribution: 0.14 }, { name: "Biomarker", contribution: 0.12 }],
+      followup_priority: "Med",
+      recommended_actions: ["6개월 추적", "인지훈련 프로그램 연계"],
+      guardrail_flags: [],
+    },
+  },
+];
+
+function resolveRiskBand(risk: number, band?: RiskBand): RiskBand {
+  if (band) return band;
+  if (risk < 0.2) return "Low";
+  if (risk < 0.5) return "Med";
+  return "High";
+}
+
+const STAGE3_CASES_WITH_BAND = MOCK_STAGE3_CASES.map((item) => ({
+  ...item,
+  outputs: {
+    ...item.outputs,
+    conversion_risk_band_2y: resolveRiskBand(item.outputs.conversion_risk_2y, item.outputs.conversion_risk_band_2y),
+  },
+}));
+
+const STAGE3_AVG_RISK_PCT = Number(
+  (
+    (STAGE3_CASES_WITH_BAND.reduce((acc, item) => acc + item.outputs.conversion_risk_2y, 0) /
+      STAGE3_CASES_WITH_BAND.length) *
+    100
+  ).toFixed(1),
+);
+
+const STAGE3_BAND_COUNTS = STAGE3_CASES_WITH_BAND.reduce(
+  (acc, item) => {
+    const band = item.outputs.conversion_risk_band_2y as RiskBand;
+    acc[band] += 1;
+    return acc;
+  },
+  { Low: 0, Med: 0, High: 0 } as Record<RiskBand, number>,
+);
 
 export const MOCK_DISPATCH_LOGS: DispatchLog[] = [
   {
@@ -159,24 +368,23 @@ export const MOCK_KPIS: PipelineKpi[] = [
   },
   {
     key: "s3-enrollment-rate",
-    label: "MCI/AD 편입률",
-    value: MOCK_STAGE3_ENROLLMENT.mciEnrollPct,
-    valuePrefix: "MCI",
-    secondaryValueLine: `AD ${MOCK_STAGE3_ENROLLMENT.adEnrollPct}%`,
+    label: "2년 전환위험(MCI→AD)",
+    value: STAGE3_AVG_RISK_PCT,
+    secondaryValueLine: "멀티모달 ANN (S1/2 + MRI-CNN)",
     unit: "%",
-    delta: 5.2,
+    delta: 1.8,
     baseDate: BASE_DATE,
     partialStages: ["S3"],
     scopeLine: D1_SCOPE_LINE,
-    status: "good",
+    status: "warn",
     help: {
-      title: "MCI/AD 편입률",
+      title: "2년 전환위험(MCI→AD)",
       body:
-        `기준일(D-1): ${MOCK_STAGE3_ENROLLMENT.baseDate}\n` +
-        `분모: Stage2 결과 수신 ${MOCK_STAGE3_ENROLLMENT.stage2ReceivedN.toLocaleString()}명\n` +
-        `분자: MCI 편입 ${MOCK_STAGE3_ENROLLMENT.mciEnrollPct}% / AD 관리 경로 편입 ${MOCK_STAGE3_ENROLLMENT.adEnrollPct}%\n` +
-        "정의: Stage2 결과 중 트래킹 경로 편입 비율 (기관 결과 기반)\n" +
-        "주의: 일부 기관 지연으로 부분 집계",
+        `기준일(D-1): ${BASE_DATE}\n` +
+        "정의: 2년 후 MCI에서 AD로 전환될 확률(0–100%)\n" +
+        "산출: Stage1/2 멀티모달 데이터 + MRI(CNN) 신호를 결합한 최종 ANN 예측\n" +
+        `분포: Low ${STAGE3_BAND_COUNTS.Low} · Med ${STAGE3_BAND_COUNTS.Med} · High ${STAGE3_BAND_COUNTS.High}\n` +
+        "주의: 본 값은 참고용 판단 보조 신호입니다",
     },
     jumpTo: "stage3",
     modeOverride: {
@@ -288,29 +496,35 @@ export const MOCK_STAGES: StageOverview[] = [
   {
     stageId: "stage3",
     examLabel: "3차 감별검사",
-    title: "3차 감별·추적 관리",
-    purposeLine: "MCI/AD 경로별 편입 이후 감별·추적·재평가 운영",
+    title: "3차 전환위험 예측",
+    purposeLine: "Stage1/2 멀티모달 데이터와 MRI(CNN) 신호를 융합해 2년 후 MCI→AD 전환위험(%)을 산출",
     inputs: [
-      { name: "2차 분류 결과", desc: "diagnosis_class=MCI/AD, 기관 결과" },
-      { name: "3차 추적 이력", desc: "방문/상담/검사 완료 이력" },
+      { name: "Stage1/2 멀티모달 벡터", desc: "인지검사/바이오마커/문진/진료이력 결합 피처" },
+      { name: "MRI 기반 CNN 신호", desc: "영상 위험 점수·ROI 요약·촬영 품질" },
+      { name: "추적 이력", desc: "방문/상담/검사 완료 이력" },
     ],
     processing: [
-      { name: "MCI Follow-up Prioritizer", desc: "추적 우선순위 추천 모델", version: "v2.0" },
+      { name: "S3 MRI Feature Extractor (CNN)", desc: "MRI 기반 영상 파생 피처/위험 점수 생성", version: "v1.0.3" },
+      { name: "S3 Conversion Risk Predictor (멀티모달 ANN)", desc: "2년 후 MCI→AD 전환위험(%) 산출", version: "v2.1.0" },
       { name: "Transition Policy", desc: "편입/이탈/재평가 정책 규칙", version: "v1.3" },
     ],
     outputs: [
+      { name: "conversion_risk_2y", desc: "2년 후 MCI→AD 전환확률 (%)" },
+      { name: "conversion_risk_band_2y", desc: "Low / Med / High" },
+      { name: "conversion_reason_codes", desc: "전환위험 상위 사유 코드(3–5)" },
+      { name: "conversion_top_features", desc: "주요 기여 피처와 기여도" },
+      { name: "upstream_cnn_signal", desc: "MRI 품질/위험점수/핵심 ROI 요약" },
       { name: "followup_priority", desc: "High / Med / Low" },
       { name: "recommended_actions", desc: "추가검사/추적콜/교육프로그램 등 권고" },
-      { name: "adherence_metrics", desc: "이행률 집계" },
-      { name: "drop_off_reason", desc: "중도이탈 사유 코드" },
+      { name: "guardrail_flags", desc: "부분수신/이상치/보정 경고" },
     ],
     transition: [
-      { to: "end", ruleLine: "재평가 완료 / 이탈 / 전문 의료 연계 / AD 관리 경로 이관" },
+      { to: "end", ruleLine: "위험구간/우선순위에 따른 추적·정밀검사·자원배분 실행" },
     ],
     metrics: {
       applied: 60_234,
       appliedRate: 78.6,
-      conversionRate: 71.4,
+      conversionRate: STAGE3_AVG_RISK_PCT,
       avgLatencyDays: 14.7,
       topIssues: [
         { code: "FU-01", label: "추적 일정 지연", count: 3_891 },
@@ -345,7 +559,7 @@ export const MOCK_NODES: ModelUseNode[] = [
   /* ══════ Feature Builders ══════ */
   { id: "ft-builder",  group: "feature", label: "S1 Feature Builder", shortDesc: "1차 입력 전처리·변환",    stageTag: "stage1" },
   { id: "ft-s2-vec",   group: "feature", label: "S2 Vectorizer",     shortDesc: "인지+바이오+설문 벡터화",   stageTag: "stage2" },
-  { id: "ft-s3-enc",   group: "feature", label: "S3 Encoder",        shortDesc: "MRI/PET 피처 인코딩",     stageTag: "stage3" },
+  { id: "ft-s3-enc",   group: "feature", label: "S3 MRI Encoder",    shortDesc: "MRI 기반 영상 피처 인코딩", stageTag: "stage3" },
 
   /* ══════ Models & Rules ══════ */
   // Stage 1
@@ -355,8 +569,8 @@ export const MOCK_NODES: ModelUseNode[] = [
   { id: "md-s2-ann",     group: "model", label: "S2 ANN Classifier",  shortDesc: "ANN 분류 보조 모델 v1.0",   stageTag: "stage2" },
   { id: "md-s2-consist", group: "model", label: "Consistency Check",  shortDesc: "모델↔기관 일관성 검증 v1.2", stageTag: "stage2" },
   // Stage 3
-  { id: "md-s3-cnn",     group: "model", label: "S3 CNN Classifier",  shortDesc: "CNN 분류 보조 모델 v1.0",   stageTag: "stage3" },
-  { id: "md-s3-prio",    group: "model", label: "MCI Prioritizer",    shortDesc: "추적 우선순위 추천 v2.0",   stageTag: "stage3" },
+  { id: "md-s3-cnn",     group: "model", label: "S3 MRI Feature Extractor (CNN)", shortDesc: "영상 파생 피처/위험점수 생성 v1.0.3", stageTag: "stage3" },
+  { id: "md-s3-prio",    group: "model", label: "S3 Conversion Risk Predictor (멀티모달 ANN)", shortDesc: "2년 후 MCI→AD 전환위험(%) 산출 v2.1.0", stageTag: "stage3" },
   // Cross-stage
   { id: "md-guardrail",  group: "model", label: "Post-Model Guardrails", shortDesc: "신뢰구간·이상치 보정 v1.0", stageTag: "common" },
   { id: "md-transition", group: "model", label: "Transition Policy",  shortDesc: "단계 전환 정책 규칙 v1.3", stageTag: "common" },
@@ -374,10 +588,12 @@ export const MOCK_NODES: ModelUseNode[] = [
   // Stage 2 기관 결과 (isExternal)
   { id: "out-diag",     group: "output", label: "diagnosis_class",   shortDesc: "AD/MCI/정상 (기관 결과)",    stageTag: "stage2", isExternal: true },
   { id: "out-signal",   group: "output", label: "model_support_signal", shortDesc: "일치/주의/검증필요 (참고)", stageTag: "stage2" },
-  // Stage 3 모델 보조 신호
-  { id: "out-s3-class", group: "output", label: "s3_support_class",   shortDesc: "모델 보조 분류 (참고)",     stageTag: "stage3" },
-  { id: "out-s3-conf",  group: "output", label: "s3_support_confidence", shortDesc: "모델 보조 신뢰도",      stageTag: "stage3" },
-  { id: "out-s3-reason",group: "output", label: "s3_reason_codes",   shortDesc: "S3 모델 사유 코드",          stageTag: "stage3" },
+  // Stage 3 최종 산출물 (멀티모달 ANN)
+  { id: "out-s3-class", group: "output", label: "conversion_risk_2y", shortDesc: "2년 후 MCI→AD 전환확률(%)", stageTag: "stage3" },
+  { id: "out-s3-conf",  group: "output", label: "conversion_risk_band_2y", shortDesc: "Low/Med/High 위험 구간", stageTag: "stage3" },
+  { id: "out-s3-reason",group: "output", label: "conversion_reason_codes", shortDesc: "전환위험 상위 사유 코드", stageTag: "stage3" },
+  { id: "out-s3-top",   group: "output", label: "conversion_top_features", shortDesc: "기여 피처 Top", stageTag: "stage3" },
+  { id: "out-s3-cnn",   group: "output", label: "upstream_cnn_signal", shortDesc: "MRI 품질/위험점수/ROI 요약", stageTag: "stage3" },
   // Stage 3 운영 산출물
   { id: "out-priority", group: "output", label: "followup_priority", shortDesc: "High/Med/Low",              stageTag: "stage3" },
   { id: "out-actions",  group: "output", label: "recommended_actions", shortDesc: "권고 액션 목록",           stageTag: "stage3" },
@@ -387,7 +603,7 @@ export const MOCK_NODES: ModelUseNode[] = [
   /* ══════ Dispatch ══════ */
   { id: "dispatch-s1", group: "dispatch", label: "S1 Dispatch", shortDesc: "신규 케이스 목록 / 예약 유도 대상", stageTag: "stage1" },
   { id: "dispatch-s2", group: "dispatch", label: "S2 Dispatch", shortDesc: "기관 결과 반영 목록 / 검증필요 플래그", stageTag: "stage2" },
-  { id: "dispatch-s3", group: "dispatch", label: "S3 Dispatch", shortDesc: "추적 우선순위 High / 권고 액션", stageTag: "stage3" },
+  { id: "dispatch-s3", group: "dispatch", label: "S3 Dispatch", shortDesc: "전환위험 구간 / 우선순위 / 권고 액션", stageTag: "stage3" },
 
   /* ══════ Downstream Ops ══════ */
   // Stage 1 OPS
@@ -396,7 +612,7 @@ export const MOCK_NODES: ModelUseNode[] = [
   // Stage 2 OPS
   { id: "ops-s2-prio",   group: "ops", label: "2차 검사 우선순위", shortDesc: "2차 검사 우선순위 조정",    stageTag: "stage2" },
   // Stage 3 OPS
-  { id: "ops-s3-route",  group: "ops", label: "정밀검사 경로추천",  shortDesc: "3차 정밀검사 경로 추천",    stageTag: "stage3" },
+  { id: "ops-s3-route",  group: "ops", label: "정밀검사 경로추천",  shortDesc: "전환위험 기반 경로 추천",    stageTag: "stage3" },
   { id: "ops-s3-resched",group: "ops", label: "재검/추적 재조정",  shortDesc: "재검·추적 일정 재조정",     stageTag: "stage3" },
   { id: "ops-resource",  group: "ops", label: "자원 배분",        shortDesc: "센터별 자원 최적화",        stageTag: "common" },
   { id: "ops-tracking",  group: "ops", label: "MCI 추적",        shortDesc: "추적 일정 관리",           stageTag: "stage3" },
@@ -458,24 +674,33 @@ export const MOCK_EDGES: ModelUseEdge[] = [
   { from: "in-mri",       to: "ft-s3-enc", label: "MRI 피처" },
   { from: "in-pet",       to: "ft-s3-enc", label: "PET 피처" },
   { from: "in-imgderiv",  to: "ft-s3-enc", label: "파생 지표" },
-  // 추적이력 → MCI Prioritizer
+  // Stage1/2 멀티모달 입력 + 추적이력 → S3 ANN
+  { from: "ft-s2-vec",    to: "md-s3-prio", label: "S1/2 멀티모달 벡터", style: "dashed" },
+  { from: "out-diag",     to: "md-s3-prio", label: "기관 분류 결과", style: "dashed" },
+  { from: "out-signal",   to: "md-s3-prio", label: "일관성 신호", style: "dashed" },
   { from: "in-followup",  to: "md-s3-prio", label: "추적 이력" },
-  // S3 Encoder → S3 CNN
-  { from: "ft-s3-enc",    to: "md-s3-cnn", label: "S3 텐서" },
-  // S3 CNN → S3 Outputs
-  { from: "md-s3-cnn",    to: "out-s3-class",   label: "보조 분류" },
-  { from: "md-s3-cnn",    to: "out-s3-conf",    label: "신뢰도" },
-  { from: "md-s3-cnn",    to: "out-s3-reason",   label: "사유 코드" },
-  // S3 Outputs → Guardrails
-  { from: "out-s3-class", to: "md-guardrail", label: "S3 검증" },
-  // MCI Prioritizer → Outputs
+  // S3 Encoder → S3 MRI Feature Extractor (CNN)
+  { from: "ft-s3-enc",    to: "md-s3-cnn", label: "MRI 텐서" },
+  // CNN 출력 → 업스트림 신호
+  { from: "md-s3-cnn",    to: "out-s3-cnn", label: "MRI 위험 신호" },
+  // CNN 신호 → S3 최종 ANN
+  { from: "out-s3-cnn",   to: "md-s3-prio", label: "업스트림 CNN 신호" },
+  // S3 최종 ANN → S3 Outputs
+  { from: "md-s3-prio",   to: "out-s3-class",  label: "전환위험(2년)" },
+  { from: "md-s3-prio",   to: "out-s3-conf",   label: "위험 구간" },
+  { from: "md-s3-prio",   to: "out-s3-reason", label: "사유 코드" },
+  { from: "md-s3-prio",   to: "out-s3-top",    label: "기여 피처" },
   { from: "md-s3-prio",   to: "out-priority",  label: "우선순위" },
   { from: "md-s3-prio",   to: "out-actions",   label: "권고 액션" },
+  // S3 Outputs → Guardrails
+  { from: "out-s3-class", to: "md-guardrail", label: "S3 전환위험 검증" },
   // Transition
   { from: "md-transition", to: "md-s3-prio",   label: "MCI 편입" },
   // Guardrails → Output
   { from: "md-guardrail", to: "out-guardrail",  label: "보정 플래그" },
   // S3 Outputs → Dispatch → Ops
+  { from: "out-s3-class", to: "dispatch-s3",    label: "전환위험(%)" },
+  { from: "out-s3-conf",  to: "dispatch-s3",    label: "위험 구간" },
   { from: "out-priority", to: "dispatch-s3",    label: "High 추적 우선순위" },
   { from: "out-actions",  to: "dispatch-s3",    label: "권고 액션 목록" },
   { from: "out-guardrail",to: "dispatch-s3",    label: "재처리 필요 플래그" },
@@ -516,7 +741,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
       receiveRate: MOCK_BATCH_META.receiveRate,
       missingInstitutionCount: MOCK_BATCH_META.missingInstitutionCount,
       expectedRetryAt: MOCK_BATCH_META.expectedRetryAt,
-      impactedMetrics: ["2차 분류 분포(MCI/AD)", "MCI/AD 편입률", "3차 추적 이행률"],
+      impactedMetrics: ["2차 분류 분포(MCI/AD)", "2년 전환위험(MCI→AD)", "3차 추적 이행률"],
       dispatchLogs: MOCK_DISPATCH_LOGS,
     },
   },
@@ -575,7 +800,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
       ],
       outputs: [
         { field: "diagnosis_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "기관 결과 = 공식 분류" },
-        { field: "model_support_signal", type: "enum(일치|주의|검증필요)", nullable: false, note: "모델 신호 = 참고(비진단)" },
+        { field: "model_support_signal", type: "enum(일치|주의|검증필요)", nullable: false, note: "모델 신호 = 참고(공식 분류 대체 불가)" },
         { field: "next_step_policy", type: "enum(3차편입|종결|재평가)", nullable: false },
       ],
       refreshCadence: "일 1회 배치 (D-1 결과 집계)",
@@ -598,27 +823,33 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
       receiveRate: 76.4,
       missingInstitutionCount: 7,
       expectedRetryAt: "2026-02-13 11:30",
-      impactedMetrics: ["2차 분류 분포(MCI/AD)", "MCI/AD 편입률", "3차 추적 이행률"],
+      impactedMetrics: ["2차 분류 분포(MCI/AD)", "2년 전환위험(MCI→AD)", "3차 추적 이행률"],
     },
   },
   stage3: {
     id: "stage3",
     definition: {
-      what: "MCI/AD 경로별 편입 이후 추적/관리/재평가를 운영합니다.",
-      why: "MCI Track/AD 관리 경로 편입률을 분리 모니터링해 배치 기반 운영 의사결정 정확도를 높입니다.",
-      whereUsed: ["MCI 추적 일정 관리", "AD 관리 경로 이관", "자원 배분", "재평가 일정 수립"],
+      what: "Stage1/2 멀티모달 데이터와 MRI(CNN) 신호를 결합해 2년 후 MCI→AD 전환확률(0–100%)을 산출하는 최종 단계입니다.",
+      why: "고위험 대상에 추적·정밀검사 자원을 우선 배분하고, 부분 집계 상황에서도 일관된 운영 기준을 제공하기 위해 필요합니다.",
+      whereUsed: ["정밀검사 경로 추천", "추적 우선순위(High/Med/Low) 산정", "재검/추적 재조정", "품질 보고(드리프트/누락/가드레일 경고)"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
       inputs: [
-        { field: "diagnosis_class", type: "enum(MCI|AD)", nullable: false, note: "2차 분류 결과" },
+        { field: "stage12_feature_vector", type: "number[96]", nullable: false, note: "Stage1/2 멀티모달 결합 피처" },
+        { field: "diagnosis_class", type: "enum(MCI|AD)", nullable: false, note: "기관 분류 결과" },
+        { field: "upstream_cnn_signal", type: "object", nullable: false, note: "MRI 품질/위험점수/핵심 ROI 요약" },
         { field: "followup_history", type: "array", nullable: true, note: "방문/상담/검사 이력" },
       ],
       outputs: [
+        { field: "conversion_risk_2y", type: "number(0-1)", nullable: false, note: "UI 표시: 0–100%" },
+        { field: "conversion_risk_band_2y", type: "enum(Low|Med|High)", nullable: false },
+        { field: "conversion_reason_codes", type: "string[]", nullable: false, note: "상위 3–5개 사유 코드" },
+        { field: "conversion_top_features", type: "object[]", nullable: true, note: "name/contribution" },
+        { field: "upstream_cnn_signal", type: "object", nullable: false, note: "mri_quality/cnn_risk_score/key_rois" },
         { field: "followup_priority", type: "enum(High|Med|Low)", nullable: false },
         { field: "recommended_actions", type: "string[]", nullable: false },
-        { field: "adherence_metrics", type: "object", nullable: false },
-        { field: "drop_off_reason", type: "string", nullable: true },
+        { field: "guardrail_flags", type: "string[]", nullable: true },
       ],
       refreshCadence: "일 1회 배치 (D-1 결과 집계)",
     },
@@ -728,9 +959,9 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
   "ft-s3-enc": {
     id: "ft-s3-enc",
     definition: {
-      what: "MRI/PET 정량 피처를 CNN 모델 입력 텐서로 인코딩합니다.",
-      why: "영상 피처를 3D 텐서 형태로 변환하여 CNN 모델이 공간 패턴을 학습할 수 있게 합니다.",
-      whereUsed: ["S3 CNN Classifier 입력"],
+      what: "MRI 정량 피처를 Stage3 업스트림 CNN 입력 텐서로 인코딩합니다.",
+      why: "영상 신호를 표준화해 해마 체적/피질두께 기반 위험 점수가 안정적으로 계산되도록 지원합니다.",
+      whereUsed: ["S3 MRI Feature Extractor (CNN) 입력"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
@@ -967,8 +1198,8 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     id: "in-mri",
     definition: {
       what: "구조적 MRI에서 추출한 해마 체적, 피질 두께, 뇌실 비율 등 정량 피처입니다.",
-      why: "3차 CNN 모델의 핵심 입력으로, 뇌 구조 변화를 정량화한 참고 데이터입니다.",
-      whereUsed: ["S3 Encoder 입력", "CNN Classifier 입력"],
+      why: "Stage3 최종 ANN이 참조하는 업스트림 CNN 신호를 생성하기 위한 핵심 영상 원천 데이터입니다.",
+      whereUsed: ["S3 MRI Encoder 입력", "S3 MRI Feature Extractor(CNN) 입력"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
@@ -991,8 +1222,8 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     id: "in-pet",
     definition: {
       what: "아밀로이드/타우 PET에서 추출한 SUVR, Centiloid 등 정량 피처입니다.",
-      why: "뇌 내 병리 단백질 축적 정도를 정량화하여 CNN 모델 입력으로 활용됩니다.",
-      whereUsed: ["S3 Encoder 입력"],
+      why: "뇌 내 병리 단백질 축적 신호를 보조적으로 반영해 Stage3 전환위험 추정의 안정성을 높입니다.",
+      whereUsed: ["S3 MRI Encoder 입력"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
@@ -1016,7 +1247,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     definition: {
       what: "MRI/PET 원시 피처에서 파생된 복합 지표(ROI 비율, 위축 지수 등)입니다.",
       why: "단일 피처보다 높은 판별력을 가진 복합 지표를 생성하여 모델 정확도를 높입니다.",
-      whereUsed: ["S3 Encoder 입력"],
+      whereUsed: ["S3 MRI Encoder 입력"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
@@ -1038,8 +1269,8 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     id: "in-followup",
     definition: {
       what: "MCI 대상자의 추적 방문/상담/검사 이행 이력 데이터입니다.",
-      why: "추적 이행률을 모니터링하고, 우선순위 추천 모델의 입력으로 활용됩니다.",
-      whereUsed: ["MCI Prioritizer 입력", "이행률 집계"],
+      why: "추적 이행률을 모니터링하고, Stage3 최종 전환위험 예측(멀티모달 ANN)의 입력으로 활용됩니다.",
+      whereUsed: ["S3 Conversion Risk Predictor 입력", "이행률 집계"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
@@ -1165,9 +1396,9 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
   "md-s3-cnn": {
     id: "md-s3-cnn",
     definition: {
-      what: "MRI/PET 인코딩 텐서를 입력받아 3차 분류 보조 신호를 산출하는 CNN 모델입니다.",
-      why: "영상 기반 분류 보조 신호를 제공하여, 기관 결과 해석 시 참고 정보를 부여합니다.",
-      whereUsed: ["S3 분류 보조 신호 생성", "Post-Model Guardrails 입력"],
+      what: "MRI 인코딩 텐서를 입력받아 Stage3 최종 ANN이 사용할 영상 파생 피처와 CNN 위험 점수를 생성하는 업스트림 모델입니다.",
+      why: "영상 기반 변화를 정량화해 최종 전환위험 예측(멀티모달 ANN)의 입력 신호 품질을 보강합니다.",
+      whereUsed: ["upstream_cnn_signal 생성", "S3 Conversion Risk Predictor 입력"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
@@ -1175,46 +1406,52 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
         { field: "s3_tensor", type: "tensor[1,208]", nullable: false, note: "S3 Encoder 출력" },
       ],
       outputs: [
-        { field: "s3_support_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "보조 분류 (참고)" },
-        { field: "s3_support_confidence", type: "number(0-1)", nullable: false, note: "분류 신뢰도" },
-        { field: "s3_reason_codes", type: "string[3-5]", nullable: false, note: "상위 기여 영역" },
+        { field: "upstream_cnn_signal.mri_quality", type: "enum(OK|WARN|FAIL)", nullable: false },
+        { field: "upstream_cnn_signal.cnn_risk_score", type: "number(0-1)", nullable: false },
+        { field: "upstream_cnn_signal.key_rois", type: "string[]", nullable: false, note: "상위 기여 ROI" },
       ],
       refreshCadence: "영상 수신 시점",
     },
     qualityAudit: {
       missingRate: 0.8,
       driftSignals: [{ name: "텐서 분포 변화", level: "low", note: "KL divergence 0.02 (안정)" }],
-      biasAlerts: [{ group: "1.5T 스캐너", level: "mid", note: "3T 대비 신뢰도 -0.08 편차" }],
+      biasAlerts: [{ group: "1.5T 스캐너", level: "mid", note: "3T 대비 cnn_risk_score -0.08 편차" }],
       changeLog: [
-        { version: "v1.0", date: "2026-02-01", summary: "CNN Classifier 초기 배포" },
+        { version: "v1.0.3", date: "2026-02-01", summary: "S3 MRI Feature Extractor(CNN) 배포" },
       ],
     },
   },
   "md-s3-prio": {
     id: "md-s3-prio",
     definition: {
-      what: "MCI 대상자의 추적 우선순위를 추천하는 판단 보조 모델입니다.",
-      why: "제한된 추적 자원을 높은 이탈 위험 대상자에게 우선 배분합니다.",
-      whereUsed: ["MCI 추적 일정 관리", "자원 배분 최적화"],
+      what: "Stage1/2 멀티모달 데이터와 MRI(CNN) 신호를 결합해 2년 후 MCI→AD 전환확률(%)을 산출하는 Stage3 최종 모델(멀티모달 ANN)입니다.",
+      why: "전환위험이 높은 대상에 추적·정밀검사 자원을 우선 배분하도록 지원합니다.",
+      whereUsed: ["2년 전환위험(MCI→AD) 산출", "followup_priority 생성", "recommended_actions 생성"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
       inputs: [
-        { field: "diagnosis_class", type: "enum(MCI)", nullable: false },
+        { field: "stage12_feature_vector", type: "number[96]", nullable: false, note: "Stage1/2 결합 피처" },
+        { field: "diagnosis_class", type: "enum(MCI|AD)", nullable: false },
+        { field: "upstream_cnn_signal", type: "object", nullable: false },
         { field: "followup_history", type: "array", nullable: true },
       ],
       outputs: [
+        { field: "conversion_risk_2y", type: "number(0-1)", nullable: false, note: "UI 표시: 0–100%" },
+        { field: "conversion_risk_band_2y", type: "enum(Low|Med|High)", nullable: false },
+        { field: "conversion_reason_codes", type: "string[]", nullable: false },
+        { field: "conversion_top_features", type: "object[]", nullable: true, note: "{name, contribution}" },
         { field: "followup_priority", type: "enum(High|Med|Low)", nullable: false },
         { field: "recommended_actions", type: "string[]", nullable: false },
       ],
-      refreshCadence: "주 1회 배치",
+      refreshCadence: "일 1회 배치 (D-1 집계)",
     },
     qualityAudit: {
       missingRate: 0.5,
-      driftSignals: [{ name: "우선순위 분포 변화", level: "low", note: "High 비율 +1.2%p" }],
+      driftSignals: [{ name: "전환위험 분포 변화", level: "low", note: "평균 +0.9%p (안정)" }],
       biasAlerts: [{ group: "독거 가구", level: "high", note: "High 과대표현 +12%p" }],
       changeLog: [
-        { version: "v2.0", date: "2026-01-10", summary: "모델 전면 교체", impact: "High 정밀도 +4.2%p" },
+        { version: "v2.1.0", date: "2026-01-10", summary: "멀티모달 ANN 전환위험 예측 모델 배포", impact: "2년 전환위험 예측 AUC +3.9%p" },
       ],
     },
   },
@@ -1378,41 +1615,73 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
   "out-s3-class": {
     id: "out-s3-class",
     definition: {
-      what: "CNN 모델의 3차 분류 보조 신호(AD/MCI/NORMAL)입니다. 기관 결과가 아닌 모델 참고 신호입니다.",
-      why: "정밀 검사 후 기관 결과와의 비교 참고 자료로 활용됩니다.",
-      whereUsed: ["3차 품질 모니터링", "Guardrails 검증"],
+      what: "2년 후 MCI에서 AD로 전환될 확률(0–100%)을 나타내는 예측값입니다.",
+      why: "추적/정밀검사 자원을 높은 위험 대상에 우선 배분하기 위한 운영 신호로 사용됩니다.",
+      whereUsed: ["정밀검사 경로 추천", "추적 우선순위 산정", "Guardrails 검증"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
-      outputs: [{ field: "s3_support_class", type: "enum(AD|MCI|NORMAL)", nullable: false, note: "모델 보조 분류 (참고)" }],
-      refreshCadence: "영상 수신 시점",
+      outputs: [{ field: "conversion_risk_2y", type: "number(0-1)", nullable: false, note: "UI 표시: 0–100%" }],
+      refreshCadence: "일 1회 배치 (D-1 집계)",
     },
     qualityAudit: { missingRate: 0.8, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
   "out-s3-conf": {
     id: "out-s3-conf",
     definition: {
-      what: "CNN 모델의 분류 신뢰도(0–1)입니다.",
-      why: "모델 보조 신호의 확신 정도를 수치화합니다.",
-      whereUsed: ["정밀검사 경로 추천 참고", "품질 보고"],
+      what: "2년 전환위험(%)을 운영 구간(Low/Med/High)으로 구분한 값입니다.",
+      why: "센터가 위험군별 대응 강도를 빠르게 정하는 기준으로 활용됩니다.",
+      whereUsed: ["추적 우선순위 정책", "센터 배치 기준"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
-      outputs: [{ field: "s3_support_confidence", type: "number(0-1)", nullable: false }],
-      refreshCadence: "영상 수신 시점",
+      outputs: [{ field: "conversion_risk_band_2y", type: "enum(Low|Med|High)", nullable: false }],
+      refreshCadence: "일 1회 배치 (D-1 집계)",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
   },
   "out-s3-reason": {
     id: "out-s3-reason",
     definition: {
-      what: "CNN 모델의 상위 3–5개 기여 영역 코드입니다.",
-      why: "모델이 왜 해당 보조 분류를 산출했는지 영상 ROI 근거를 제공합니다.",
+      what: "전환위험 산출에 크게 기여한 상위 3–5개 사유 코드입니다.",
+      why: "예측 근거를 확인해 운영자가 추적/재검 우선순위를 설명할 수 있도록 지원합니다.",
       whereUsed: ["Inspector 상세", "품질 감사"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
-      outputs: [{ field: "s3_reason_codes", type: "string[3-5]", nullable: false }],
+      outputs: [{ field: "conversion_reason_codes", type: "string[3-5]", nullable: false }],
+      refreshCadence: "일 1회 배치 (D-1 집계)",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "out-s3-top": {
+    id: "out-s3-top",
+    definition: {
+      what: "전환위험 산출에 반영된 상위 기여 피처와 기여도입니다.",
+      why: "모델 근거를 수치로 확인해 배치 점검·설명 책임을 보강합니다.",
+      whereUsed: ["Inspector 상세", "품질 감사"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [{ field: "conversion_top_features", type: "object[]", nullable: true, note: "{name, contribution}" }],
+      refreshCadence: "일 1회 배치 (D-1 집계)",
+    },
+    qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
+  },
+  "out-s3-cnn": {
+    id: "out-s3-cnn",
+    definition: {
+      what: "MRI 기반 CNN 업스트림 신호 요약입니다(mri_quality, cnn_risk_score, key_rois).",
+      why: "영상 단독 판단이 아니라 최종 ANN 입력 신호로 활용되는 중간 결과를 투명하게 제공합니다.",
+      whereUsed: ["S3 Conversion Risk Predictor 입력", "품질 모니터링"],
+      responsibility: RESPONSIBILITY_LINE,
+    },
+    dataContract: {
+      outputs: [
+        { field: "upstream_cnn_signal.mri_quality", type: "enum(OK|WARN|FAIL)", nullable: false },
+        { field: "upstream_cnn_signal.cnn_risk_score", type: "number(0-1)", nullable: false },
+        { field: "upstream_cnn_signal.key_rois", type: "string[]", nullable: false },
+      ],
       refreshCadence: "영상 수신 시점",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
@@ -1430,7 +1699,7 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
       inputs: [
         { field: "risk_score", type: "number", nullable: true, note: "S1 출력" },
         { field: "s2_support_class", type: "enum", nullable: true, note: "S2 출력" },
-        { field: "s3_support_class", type: "enum", nullable: true, note: "S3 출력" },
+        { field: "conversion_risk_2y", type: "number", nullable: true, note: "S3 출력" },
       ],
       outputs: [
         { field: "guardrail_flags", type: "string[]", nullable: false, note: "보정/이상치 경고" },
@@ -1510,18 +1779,20 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
   "dispatch-s3": {
     id: "dispatch-s3",
     definition: {
-      what: "S3 추적 우선순위 High 목록과 권고 액션 리스트를 일 단위 배치로 전송하는 노드입니다.",
-      why: "추적/자원 배분 실행의 기준 데이터를 중앙/센터에 동기화합니다.",
+      what: "S3 전환위험(2년) 구간과 추적 우선순위/권고 액션을 일 단위 배치로 전송하는 노드입니다.",
+      why: "전환위험 기반 운영 지시를 중앙/광역/센터에 일관되게 전달합니다.",
       whereUsed: ["S3 Dispatch 로그", "MCI/AD 추적 운영", "자원 배분"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
       inputs: [
+        { field: "conversion_risk_2y", type: "number(0-1)", nullable: false, note: "UI 표시: 0–100%" },
+        { field: "conversion_risk_band_2y", type: "enum(Low|Med|High)", nullable: false },
         { field: "followup_priority", type: "enum(High|Med|Low)", nullable: false },
         { field: "recommended_actions", type: "string[]", nullable: false },
       ],
       outputs: [
-        { field: "dispatch_payload", type: "object[]", nullable: false, note: "High 추적 목록 / 권고 액션" },
+        { field: "dispatch_payload", type: "object[]", nullable: false, note: "전환위험 구간 / High 추적 목록 / 권고 액션" },
       ],
       refreshCadence: "일 1회 배치 전송",
     },
@@ -1607,12 +1878,16 @@ export const MOCK_INSPECTOR: Record<string, InspectorContent> = {
     id: "ops-s3-route",
     definition: {
       what: "3차 정밀검사 대상자의 검사 경로(PET/MRI/기타)를 추천하는 운영 프로세스입니다.",
-      why: "CNN 모델 보조 신뢰도와 가용 장비를 참고하여 검사 경로를 제안합니다.",
+      why: "2년 전환위험(%)과 위험 구간, 업스트림 CNN 신호를 참고해 검사 경로를 제안합니다.",
       whereUsed: ["3차 정밀검사 경로 배정"],
       responsibility: RESPONSIBILITY_LINE,
     },
     dataContract: {
-      inputs: [{ field: "s3_support_confidence", type: "number(0-1)", nullable: false }],
+      inputs: [
+        { field: "conversion_risk_2y", type: "number(0-1)", nullable: false },
+        { field: "conversion_risk_band_2y", type: "enum(Low|Med|High)", nullable: false },
+        { field: "upstream_cnn_signal.cnn_risk_score", type: "number(0-1)", nullable: true },
+      ],
       refreshCadence: "일 1회 배치 반영",
     },
     qualityAudit: { missingRate: 0, driftSignals: [], biasAlerts: [], changeLog: [] },
@@ -1643,6 +1918,7 @@ export function buildMockViewModel(viewMode: "ops" | "quality" | "audit" = "ops"
     dispatchLogs: MOCK_DISPATCH_LOGS,
     stage2Distribution: MOCK_STAGE2_DISTRIBUTION,
     stage3Enrollment: MOCK_STAGE3_ENROLLMENT,
+    stage3Cases: STAGE3_CASES_WITH_BAND,
     viewMode,
     kpis: MOCK_KPIS,
     stages: MOCK_STAGES,

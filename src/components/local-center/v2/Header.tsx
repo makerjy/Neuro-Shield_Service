@@ -22,11 +22,14 @@ const TAB_ICONS: Record<string, React.ElementType> = {
 
 interface HeaderProps {
   activeTab: TabType;
+  caseSearchKeyword: string;
+  onCaseSearchKeywordChange: (value: string) => void;
 }
 
-export function Header({ activeTab }: HeaderProps) {
+export function Header({ activeTab, caseSearchKeyword, onCaseSearchKeywordChange }: HeaderProps) {
   const Icon = TAB_ICONS[activeTab] || LayoutDashboard;
   const mapped = HEADER_TITLE_MAP[activeTab as keyof typeof HEADER_TITLE_MAP];
+  const isCaseTab = activeTab === "cases";
 
   return (
     <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shrink-0 z-10">
@@ -45,8 +48,14 @@ export function Header({ activeTab }: HeaderProps) {
           </div>
           <input 
             type="text" 
-            placeholder="케이스 ID, 성함 검색..." 
-            className="bg-gray-100 border-none rounded-full pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 w-64 transition-all focus:w-80 outline-none"
+            value={isCaseTab ? caseSearchKeyword : ""}
+            onChange={(event) => {
+              if (!isCaseTab) return;
+              onCaseSearchKeywordChange(event.target.value);
+            }}
+            placeholder={isCaseTab ? "케이스 ID, 성함 검색..." : "케이스 대시보드에서 검색 가능"}
+            disabled={!isCaseTab}
+            className="bg-gray-100 border-none rounded-full pl-10 pr-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 w-64 transition-all focus:w-80 outline-none disabled:cursor-not-allowed disabled:opacity-60"
           />
         </div>
 

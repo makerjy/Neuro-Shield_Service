@@ -42,6 +42,48 @@ export type LocalCenterCaseEventsResponse = {
   source: LocalCenterApiSource;
 };
 
+export type Stage2AutoFillSource = "RECEIVED" | "MAPPED" | "SEEDED";
+
+export type Stage2Step2AutoFillPayload = {
+  caseId: string;
+  source: Stage2AutoFillSource;
+  syncedAt: string;
+  mmse?: number;
+  gds?: number;
+  cdr?: number;
+  cogTestType?: "CERAD-K" | "SNSB-II" | "SNSB-C" | "LICA";
+  specialistOpinionStatus?: "MISSING" | "DONE";
+  receivedMeta: {
+    linkageStatus: "WAITING" | "RECEIVED" | "FAILED";
+    receivedAt?: string;
+    providerName?: string;
+  };
+  missingRequiredCount: number;
+  filledFields?: string[];
+};
+
+export type Stage2Step2AutoFillResponse = {
+  item: Stage2Step2AutoFillPayload;
+  fetchedAt: string;
+  source: LocalCenterApiSource;
+};
+
+export type Stage2Step2ManualEditPayload = {
+  changedFields: Record<string, unknown>;
+  reason: string;
+  editor?: string;
+};
+
+export type Stage2Step2ManualEditResponse = {
+  ok: boolean;
+  caseId: string;
+  changedFields: Record<string, unknown>;
+  reason?: string;
+  editor?: string;
+  editedAt?: string;
+  source: LocalCenterApiSource;
+};
+
 function withQuery(path: string, params: Record<string, string | number | boolean | null | undefined>) {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -68,6 +110,86 @@ function toFilterQuery(filters?: Partial<GlobalFilters>): Record<string, string 
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function seedHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (Math.imul(31, hash) + value.charCodeAt(index)) | 0;
+  }
+  return hash >>> 0;
+}
+
+function seedInt(caseId: string, suffix: string, min: number, max: number) {
+  if (min >= max) return min;
+  const span = max - min + 1;
+  return min + (seedHash(`${caseId}:${suffix}`) % span);
+}
+
+function seedPick<T>(caseId: string, suffix: string, items: T[]): T {
+  return items[seedHash(`${caseId}:${suffix}`) % items.length] as T;
+}
+
+function inferStage2RiskBand(entity: CaseEntity | null): "LOW" | "MID" | "HIGH" | "AD" {
+  if (!entity) return "MID";
+  if (entity.classification === "AD") return "AD";
+  if (entity.classification === "MCI") return "MID";
+  if (entity.classification === "NORMAL") return "LOW";
+  const risk = entity.riskScore ?? 55;
+  if (risk >= 82) return "AD";
+  if (risk >= 70) return "HIGH";
+  if (risk >= 40) return "MID";
+  return "LOW";
+}
+
+function buildSeededStep2AutoFill(caseId: string, entity: CaseEntity | null): Stage2Step2AutoFillPayload {
+  const riskBand = inferStage2RiskBand(entity);
+  const payload: Stage2Step2AutoFillPayload = {
+    caseId,
+    source: "SEEDED",
+    syncedAt: nowIso(),
+    receivedMeta: {
+      linkageStatus: "WAITING",
+      providerName: "강남구 협력병원",
+    },
+    missingRequiredCount: 0,
+  };
+
+  if (riskBand === "LOW") {
+    payload.mmse = seedInt(caseId, "mmse-low", 24, 29);
+    payload.gds = seedInt(caseId, "gds-low", 1, 3);
+    payload.cogTestType = seedPick(caseId, "cog-low", ["CERAD-K", "LICA"]);
+  } else if (riskBand === "MID") {
+    payload.mmse = seedInt(caseId, "mmse-mid", 20, 25);
+    payload.gds = seedInt(caseId, "gds-mid", 3, 5);
+    payload.cogTestType = seedPick(caseId, "cog-mid", ["SNSB-II", "CERAD-K"]);
+  } else if (riskBand === "HIGH") {
+    payload.mmse = seedInt(caseId, "mmse-high", 16, 22);
+    payload.gds = seedInt(caseId, "gds-high", 4, 6);
+    payload.cdr = Number(seedPick(caseId, "cdr-high", [0.5, 1]));
+    payload.cogTestType = seedPick(caseId, "cog-high", ["SNSB-II", "SNSB-C"]);
+  } else {
+    payload.mmse = seedInt(caseId, "mmse-ad", 10, 18);
+    payload.gds = seedInt(caseId, "gds-ad", 5, 7);
+    payload.cdr = Number(seedPick(caseId, "cdr-ad", [1, 2]));
+    payload.cogTestType = seedPick(caseId, "cog-ad", ["SNSB-II", "SNSB-C"]);
+    payload.specialistOpinionStatus = "DONE";
+  }
+
+  const requiredKeys =
+    riskBand === "LOW" || riskBand === "MID"
+      ? (["mmse", "gds", "cogTestType"] as const)
+      : riskBand === "HIGH"
+        ? (["mmse", "gds", "cdr", "cogTestType"] as const)
+        : (["mmse", "gds", "cdr", "cogTestType", "specialistOpinionStatus"] as const);
+  payload.missingRequiredCount = requiredKeys.filter((key) => {
+    if (key === "specialistOpinionStatus") return payload.specialistOpinionStatus !== "DONE";
+    return payload[key] == null;
+  }).length;
+  payload.filledFields = ["mmse", "gds", "cdr", "cogTestType", "specialistOpinionStatus"].filter(
+    (key) => payload[key as keyof Stage2Step2AutoFillPayload] != null,
+  );
+  return payload;
 }
 
 function delay(ms = 180) {
@@ -209,6 +331,80 @@ export async function fetchLocalCenterCaseEvents(caseId: string): Promise<LocalC
       fetchedAt: nowIso(),
     };
   });
+  return { ...demo.payload, source: demo.source };
+}
+
+export async function fetchStage2Step2Autofill(caseId: string): Promise<Stage2Step2AutoFillResponse> {
+  const demoBuilder = () => {
+    const entity = getCaseEntity(caseId);
+    const item = buildSeededStep2AutoFill(caseId, entity);
+    return {
+      item,
+      fetchedAt: nowIso(),
+    };
+  };
+
+  if (USE_REAL_LOCAL_CENTER_API) {
+    try {
+      const remote = await fetchJson<Stage2Step2AutoFillResponse | Stage2Step2AutoFillPayload>(
+        `/api/stage2/cases/${encodeURIComponent(caseId)}/step2/autofill`,
+      );
+      if ("item" in remote) {
+        return { ...remote, source: remote.source ?? "remote" };
+      }
+      return {
+        item: remote,
+        fetchedAt: nowIso(),
+        source: "remote",
+      };
+    } catch {
+      const fallback = await runDemo(demoBuilder, "fallback");
+      return { ...fallback.payload, source: fallback.source };
+    }
+  }
+
+  const demo = await runDemo(demoBuilder);
+  return { ...demo.payload, source: demo.source };
+}
+
+export async function submitStage2Step2ManualEdit(
+  caseId: string,
+  payload: Stage2Step2ManualEditPayload,
+): Promise<Stage2Step2ManualEditResponse> {
+  if (USE_REAL_LOCAL_CENTER_API) {
+    try {
+      const remote = await fetchJson<Omit<Stage2Step2ManualEditResponse, "source">>(
+        `/api/stage2/cases/${encodeURIComponent(caseId)}/step2/manual-edit`,
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+      );
+      return { ...remote, source: "remote" };
+    } catch {
+      const fallback = await runDemo(
+        () => ({
+          ok: true,
+          caseId,
+          changedFields: payload.changedFields,
+          reason: payload.reason,
+          editor: payload.editor,
+          editedAt: nowIso(),
+        }),
+        "fallback",
+      );
+      return { ...fallback.payload, source: fallback.source };
+    }
+  }
+
+  const demo = await runDemo(() => ({
+    ok: true,
+    caseId,
+    changedFields: payload.changedFields,
+    reason: payload.reason,
+    editor: payload.editor,
+    editedAt: nowIso(),
+  }));
   return { ...demo.payload, source: demo.source };
 }
 

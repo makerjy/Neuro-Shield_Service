@@ -1,18 +1,11 @@
-/* ──────────────────────────────────────────────────────────
-   모델 적용 센터 – 데이터 계약 (TypeScript Interfaces)
-   ────────────────────────────────────────────────────────── */
-
-/** View Mode: 운영 / 품질 / 감사 */
 export type ViewMode = "ops" | "quality" | "audit";
-
-/** 3단계 파이프라인 Stage ID */
 export type StageId = "stage1" | "stage2" | "stage3";
-
-/** 2차 진단 분류 라벨 (기관 연계 결과) */
-export type DiagnosisClass = "AD" | "MCI" | "NORMAL";
+export type BatchStageTag = "S1" | "S2" | "S3";
 
 export type BatchStatus = "completed" | "running" | "partial" | "delayed" | "failed";
-export type BatchStageTag = "S1" | "S2" | "S3";
+export type SlaStatus = "ok" | "delayed" | "breached";
+export type SeverityLevel = "low" | "mid" | "high";
+export type RiskBand = "Low" | "Med" | "High";
 
 export interface Stage2Distribution {
   baseDate: string;
@@ -29,6 +22,45 @@ export interface Stage3Enrollment {
   adEnrollPct: number;
 }
 
+export interface Stage3CaseResult {
+  case_id: string;
+  stage: 3;
+  model_version: {
+    cnn_mri_extractor: string;
+    ann_multimodal_conversion: string;
+    guardrails: string;
+  };
+  inputs_summary: {
+    stage1_sources: string[];
+    stage2_sources: string[];
+    mri_cnn_used: boolean;
+  };
+  upstream_cnn_signal: {
+    mri_quality: "OK" | "WARN" | "FAIL";
+    cnn_risk_score: number;
+    key_rois: string[];
+  };
+  outputs: {
+    conversion_risk_2y: number;
+    conversion_risk_band_2y?: RiskBand;
+    conversion_reason_codes: string[];
+    conversion_top_features?: Array<{ name: string; contribution: number }>;
+    followup_priority: "High" | "Med" | "Low";
+    recommended_actions: string[];
+    guardrail_flags: string[];
+  };
+}
+
+export interface DispatchLog {
+  stage: BatchStageTag;
+  destination: "중앙" | "광역" | "치매안심센터";
+  sentCount: number;
+  failedCount: number;
+  retryCount: number;
+  lastSentAt: string;
+  slaStatus: SlaStatus;
+}
+
 export interface BatchMeta {
   baseDate: string;
   receiveDeadline: string;
@@ -42,83 +74,86 @@ export interface BatchMeta {
   expectedRetryAt?: string;
 }
 
-export interface DispatchLog {
-  stage: BatchStageTag;
-  destination: "중앙" | "광역" | "치매안심센터";
-  sentCount: number;
-  failedCount: number;
-  retryCount: number;
-  lastSentAt: string;
-  slaStatus: "ok" | "delayed" | "breached";
-}
-
 export interface HoverMetaBase {
   stage: BatchStageTag;
   title: string;
-  baseDate: string; // D-1
+  baseDate: string;
   definition: string;
   denominator: { label: string; n: number };
   coverage?: { receivedPct?: number; partial?: boolean; notes?: string };
-  outputs: string[]; // 최대 3개
-  caution?: string; // 1줄
-  modelChip?: string; // "ML v3.2.1" 등
-  dispatchChip?: string; // "전송: 완료/지연" 등
+  outputs: string[];
+  caution?: string;
+  modelChip?: string;
+  dispatchChip?: string;
 }
 
-/* ─── KPI Strip ─── */
+export interface KpiHelp {
+  title: string;
+  body: string;
+}
+
 export interface PipelineKpi {
   key: string;
   label: string;
   value: number;
+  unit?: string;
+  delta?: number;
+  baseDate: string;
+  scopeLine: string;
+  status?: "good" | "warn" | "risk" | "neutral" | string;
+  jumpTo?: StageId;
+  help?: KpiHelp;
+  partialStages?: BatchStageTag[];
   valuePrefix?: string;
   secondaryValueLine?: string;
-  unit?: "%" | "명" | "일" | "건";
-  delta?: number;             // 전주/전월 대비
-  baseDate: string;           // D-1 기준일
-  partialStages?: BatchStageTag[];
-  scopeLine: string;          // "전국 집계 / 비식별"
-  status?: "good" | "warn" | "risk" | "neutral";
-  help?: { title: string; body: string };
-  jumpTo?: StageId;
-  /** View Mode별로 이 카드가 교체되는지 여부 + 교체 시 대체 값 */
-  modeOverride?: Partial<Record<ViewMode, {
-    label: string;
-    value: number;
-    valuePrefix?: string;
-    secondaryValueLine?: string;
-    unit?: string;
-    status?: string;
-  }>>;
+  modeOverride?: Partial<
+    Record<
+      ViewMode,
+      {
+        label?: string;
+        value?: number;
+        valuePrefix?: string;
+        secondaryValueLine?: string;
+        unit?: string;
+        status?: "good" | "warn" | "risk" | "neutral" | string;
+      }
+    >
+  >;
 }
 
-/* ─── Stage Overview ─── */
+export interface NamedItem {
+  name: string;
+  desc: string;
+  version?: string;
+}
+
 export interface StageOverview {
   stageId: StageId;
-  title: string;
   examLabel: string;
+  title: string;
   purposeLine: string;
-  inputs: { name: string; desc: string }[];
-  processing: { name: string; desc: string; version?: string }[];
-  outputs: { name: string; desc: string }[];
-  transition: { to: StageId | "end"; ruleLine: string }[];
+  inputs: NamedItem[];
+  processing: NamedItem[];
+  outputs: NamedItem[];
+  transition: Array<{ to: string; ruleLine: string }>;
   metrics: {
     applied: number;
     appliedRate?: number;
     conversionRate?: number;
     avgLatencyDays?: number;
-    topIssues?: { code: string; label: string; count: number }[];
+    topIssues?: Array<{ code: string; label: string; count: number }>;
   };
 }
 
-/* ─── Model Use Map ─── */
+export type ModelNodeGroup = "input" | "feature" | "model" | "output" | "dispatch" | "ops";
+export type NodeStageTag = StageId | "common";
+
 export interface ModelUseNode {
   id: string;
-  group: "input" | "feature" | "model" | "output" | "dispatch" | "ops";
+  group: ModelNodeGroup;
   label: string;
   shortDesc: string;
-  /** 어느 Stage에 주로 소속되는지 (공통이면 "common") */
-  stageTag?: "stage1" | "stage2" | "stage3" | "common";
-  /** 기관 결과 등 외부 데이터 표시용 */
+  stageTag?: NodeStageTag;
   isExternal?: boolean;
 }
 
@@ -126,29 +161,27 @@ export interface ModelUseEdge {
   from: string;
   to: string;
   label?: string;
-  /** 점선(dashed)은 기관 비교 / 참고 흐름에 사용 */
-  style?: "solid" | "dashed";
+  style?: "dashed" | "solid";
 }
 
-/* ─── Detail Inspector ─── */
 export interface InspectorContent {
   id: string;
   definition: {
     what: string;
     why: string;
     whereUsed: string[];
-    responsibility: string;       // 항상 "최종 결정 주체: 담당자/기관" 포함
+    responsibility: string;
   };
   dataContract: {
-    inputs?: { field: string; type: string; nullable: boolean; note?: string }[];
-    outputs?: { field: string; type: string; nullable: boolean; note?: string }[];
+    inputs?: Array<{ field: string; type: string; nullable?: boolean; note?: string }>;
+    outputs?: Array<{ field: string; type: string; nullable?: boolean; note?: string }>;
     refreshCadence?: string;
   };
   qualityAudit: {
     missingRate?: number;
-    driftSignals?: { name: string; level: "low" | "mid" | "high"; note: string }[];
-    biasAlerts?: { group: string; level: "low" | "mid" | "high"; note: string }[];
-    changeLog?: { version: string; date: string; summary: string; impact?: string }[];
+    driftSignals?: Array<{ name: string; level: SeverityLevel; note: string }>;
+    biasAlerts?: Array<{ group: string; level: SeverityLevel; note: string }>;
+    changeLog?: Array<{ version: string; date: string; summary: string; impact?: string }>;
   };
   batchSummary?: {
     impactedStages?: BatchStageTag[];
@@ -160,13 +193,13 @@ export interface InspectorContent {
   };
 }
 
-/* ─── Root View-Model ─── */
 export interface ModelCenterViewModel {
   lastUpdatedAt: string;
-  batchMeta?: BatchMeta;
-  dispatchLogs?: DispatchLog[];
-  stage2Distribution?: Stage2Distribution;
-  stage3Enrollment?: Stage3Enrollment;
+  batchMeta: BatchMeta;
+  dispatchLogs: DispatchLog[];
+  stage2Distribution: Stage2Distribution;
+  stage3Enrollment: Stage3Enrollment;
+  stage3Cases?: Stage3CaseResult[];
   viewMode: ViewMode;
   kpis: PipelineKpi[];
   stages: StageOverview[];

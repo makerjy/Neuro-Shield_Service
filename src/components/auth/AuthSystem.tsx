@@ -12,6 +12,26 @@ import { toast } from 'sonner@2.0.3';
 type AuthMode = 'select' | 'login' | 'register';
 type UserRole = 'citizen' | 'local_center' | 'regional_center' | 'central_admin';
 
+const DEMO_CITIZEN_TOKEN_DEFAULT = 'R-2ldKkoGbDF-marBFEbgVilAXB5Tw0r';
+
+function normalizeBasePath(path: string) {
+  if (!path || !path.trim()) return '/neuro-shield/';
+  let normalized = path.trim();
+  if (!normalized.startsWith('/')) normalized = `/${normalized}`;
+  if (!normalized.endsWith('/')) normalized = `${normalized}/`;
+  return normalized;
+}
+
+function resolveCitizenEntryUrl(): string {
+  const envAny = import.meta.env as Record<string, string | undefined>;
+  const explicitUrl = (envAny.VITE_CITIZEN_ENTRY_URL || envAny.VITE_STAGE1_DEMO_LINK || '').trim();
+  if (explicitUrl) return explicitUrl;
+
+  const token = (envAny.VITE_CITIZEN_DEMO_TOKEN || DEMO_CITIZEN_TOKEN_DEFAULT).trim();
+  const basePath = normalizeBasePath(envAny.VITE_BASE_PATH || '/neuro-shield/');
+  return `${window.location.origin}${basePath}p/sms?t=${encodeURIComponent(token)}`;
+}
+
 interface DemoAccount {
   email: string;
   password: string;
@@ -92,7 +112,12 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
 
   const handleRoleSelect = (role: UserRole) => {
     if (role === 'citizen') {
-      window.location.hash = '#citizen';
+      const entryUrl = resolveCitizenEntryUrl();
+      try {
+        window.location.href = entryUrl;
+      } catch {
+        window.location.hash = '#citizen';
+      }
       return;
     }
 

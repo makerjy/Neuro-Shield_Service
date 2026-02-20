@@ -1,48 +1,34 @@
-from server_fastapi.app.models.analytics import (
-    FactContactDaily,
-    FactExamDaily,
-    FactModelRunDaily,
-    FactStageFlowDaily,
-    FactWorkitemDaily,
-    KpiSnapshot,
-)
-from server_fastapi.app.models.control import (
-    AuditEvent,
-    Intervention,
-    InterventionAction,
-    InterventionEvidence,
-    InterventionTarget,
-    KpiDefinition,
-    ModelRegistry,
-    OrgUnit,
-    Permission,
-    PolicyRule,
-    Role,
-    RolePermission,
-    User,
-)
-from server_fastapi.app.models.ingestion import EventDeadletter, EventRaw
+from __future__ import annotations
 
-__all__ = [
-    'OrgUnit',
-    'User',
-    'Role',
-    'Permission',
-    'RolePermission',
-    'KpiDefinition',
-    'PolicyRule',
-    'ModelRegistry',
-    'Intervention',
-    'InterventionTarget',
-    'InterventionAction',
-    'InterventionEvidence',
-    'AuditEvent',
-    'EventRaw',
-    'EventDeadletter',
-    'FactContactDaily',
-    'FactStageFlowDaily',
-    'FactExamDaily',
-    'FactModelRunDaily',
-    'FactWorkitemDaily',
-    'KpiSnapshot',
-]
+from importlib import import_module
+
+# Always register local/citizen/comms models for API runtime metadata.
+from server_fastapi.app.models import citizen as _citizen_models  # noqa: F401
+from server_fastapi.app.models import comms as _comms_models  # noqa: F401
+from server_fastapi.app.models import local_center as _local_center_models  # noqa: F401
+
+__all__: list[str] = []
+
+# Central schemas are still loaded for migrations/runtime on supported interpreters.
+for module_name in (
+    'server_fastapi.app.models.control',
+    'server_fastapi.app.models.ingestion',
+    'server_fastapi.app.models.analytics',
+):
+    try:
+        module = import_module(module_name)
+    except Exception:  # pragma: no cover - local dev/runtime compatibility fallback
+        continue
+
+    exported_names = getattr(module, '__all__', None)
+    if exported_names:
+        for name in exported_names:
+            globals()[name] = getattr(module, name)
+            __all__.append(name)
+        continue
+
+    for name, value in module.__dict__.items():
+        if name.startswith('_'):
+            continue
+        globals()[name] = value
+        __all__.append(name)

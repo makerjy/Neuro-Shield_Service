@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   AlertTriangle,
@@ -60,15 +61,22 @@ import {
 import {
   confirmCaseStage2Model,
   recordCaseEvent,
+  runCaseStage2Model,
   runCaseStage3Model,
   setCaseBookingPending,
   setCaseNextStep,
+  type CaseEntity,
   type EventType,
   type Stage2Route,
   updateCaseStage2Evidence,
   updateCaseStage3Evidence,
   useCaseEntity,
 } from "../caseSSOT";
+import {
+  fetchStage2Step2Autofill,
+  submitStage2Step2ManualEdit,
+  type Stage2Step2AutoFillPayload,
+} from "../localCenterDemoApi";
 import type {
   AgentJobStatus,
   ChannelResult,
@@ -135,6 +143,17 @@ import {
   type Stage2PlanRequiredDraft,
   type Stage2PlanRoute,
 } from "./stage2ModalLogic";
+import { createStage1CalendarEvent } from "./stage1OutcomeApi";
+import {
+  computeInferenceState,
+  computeOpsLoopState,
+  formatEtaLabel,
+  mapTimelineToEvents,
+  type InferenceJobStatus,
+  type OpsLoopState,
+} from "./opsLoopState";
+import { useStage3CaseView } from "../../../../stores/caseStore";
+import type { Stage3ViewModel } from "../../../../domain/stage3/types";
 
 type TimelineFilter = "ALL" | "CALL" | "SMS" | "STATUS";
 type CallTarget = "citizen" | "guardian";
@@ -142,7 +161,7 @@ type SmsTarget = "citizen" | "guardian";
 type SmsDispatchStatus = "DELIVERED" | "FAILED" | "PENDING";
 type CallScriptStep = "greeting" | "purpose" | "assessment" | "scheduling";
 type Stage1LinkageAction = "CENTER_LINKAGE" | "HOSPITAL_LINKAGE" | "COUNSELING_LINKAGE";
-type Stage1FlowVisualStatus = "COMPLETED" | "PENDING" | "BLOCKED";
+type Stage1FlowVisualStatus = "COMPLETED" | "READY" | "PENDING" | "BLOCKED";
 type Stage1FlowAction = "OPEN_PRECHECK" | "OPEN_CONTACT_EXECUTION" | "OPEN_RESPONSE_HANDLING" | "OPEN_FOLLOW_UP";
 type Stage1FlowCardId = "PRECHECK" | "CONTACT_EXECUTION" | "RESPONSE_HANDLING" | "FOLLOW_UP";
 type ChannelType = "CALL" | "SMS" | "GUARDIAN";
@@ -150,6 +169,9 @@ type ChannelState = "OK" | "NEEDS_CHECK" | "RESTRICTED";
 type AgentJobTrigger = "AUTO_ON_ENTER" | "AUTO_ON_STRATEGY" | "AUTO_ON_RETRY_DUE" | "MANUAL_RETRY_NOW" | "MANUAL_RETRY_SCHEDULE";
 type StageOpsMode = "stage1" | "stage2" | "stage3";
 type SurfaceStage = "Stage 1" | "Stage 2" | "Stage 3";
+
+const STAGE1_SMS_AUTO_CONTACT_COMPLETE_CASE_IDS = new Set(["CASE-2026-175"]);
+const STAGE1_SMS_AUTO_CONTACT_COMPLETE_NAME = "이재용";
 
 type AgentJobState = {
   status: AgentJobStatus;
@@ -164,6 +186,162 @@ type AgentJobState = {
   lastError?: string;
   summary?: string;
 };
+
+type InferenceJobState = {
+  status: InferenceJobStatus;
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  progress?: number;
+  etaSeconds?: number | null;
+  recommendedLabel?: Stage2ClassLabel;
+  modelVersion?: string;
+  failureReason?: string;
+  minDurationSec?: number;
+  maxDurationSec?: number;
+};
+
+type Stage2AutoFillFieldKey = "mmse" | "gds" | "cdr" | "cogTestType" | "specialistOpinionStatus";
+type Stage2AutoFillRiskBand = "LOW" | "MID" | "HIGH" | "AD";
+
+function inferStage2Step2RiskBand(
+  caseRecord?: CaseRecord,
+  classification?: string,
+  riskScore?: number,
+): Stage2AutoFillRiskBand {
+  const normalizedLabel = typeof classification === "string" ? classification.toUpperCase() : "";
+  if (normalizedLabel === "AD") return "AD";
+  if (normalizedLabel === "MCI") return typeof riskScore === "number" && riskScore >= 70 ? "HIGH" : "MID";
+  if (normalizedLabel === "NORMAL") return "LOW";
+
+  if (typeof riskScore === "number") {
+    if (riskScore >= 82) return "AD";
+    if (riskScore >= 70) return "HIGH";
+    if (riskScore >= 40) return "MID";
+    return "LOW";
+  }
+
+  if (caseRecord?.risk === "고") return "HIGH";
+  if (caseRecord?.risk === "중") return "MID";
+  return "LOW";
+}
+
+function buildStage2Step2SeedAutofill(
+  caseId: string,
+  riskBand: Stage2AutoFillRiskBand,
+): Stage2Step2AutoFillPayload {
+  if (riskBand === "LOW") {
+    return {
+      caseId,
+      source: "SEEDED",
+      syncedAt: nowIso(),
+      mmse: 26,
+      gds: 2,
+      cogTestType: "CERAD-K",
+      specialistOpinionStatus: "MISSING",
+      receivedMeta: {
+        linkageStatus: "WAITING",
+        providerName: "강남구 협력병원",
+      },
+      missingRequiredCount: 0,
+      filledFields: ["mmse", "gds", "cogTestType", "specialistOpinionStatus"],
+    };
+  }
+  if (riskBand === "MID") {
+    return {
+      caseId,
+      source: "SEEDED",
+      syncedAt: nowIso(),
+      mmse: 23,
+      gds: 4,
+      cogTestType: "SNSB-II",
+      specialistOpinionStatus: "MISSING",
+      receivedMeta: {
+        linkageStatus: "WAITING",
+        providerName: "강남구 협력병원",
+      },
+      missingRequiredCount: 0,
+      filledFields: ["mmse", "gds", "cogTestType", "specialistOpinionStatus"],
+    };
+  }
+  if (riskBand === "HIGH") {
+    return {
+      caseId,
+      source: "SEEDED",
+      syncedAt: nowIso(),
+      mmse: 19,
+      gds: 5,
+      cdr: 1,
+      cogTestType: "SNSB-II",
+      specialistOpinionStatus: "MISSING",
+      receivedMeta: {
+        linkageStatus: "WAITING",
+        providerName: "강남구 협력병원",
+      },
+      missingRequiredCount: 0,
+      filledFields: ["mmse", "gds", "cdr", "cogTestType", "specialistOpinionStatus"],
+    };
+  }
+  return {
+    caseId,
+    source: "SEEDED",
+    syncedAt: nowIso(),
+    mmse: 14,
+    gds: 6,
+    cdr: 2,
+    cogTestType: "SNSB-C",
+    specialistOpinionStatus: "DONE",
+    receivedMeta: {
+      linkageStatus: "WAITING",
+      providerName: "강남구 협력병원",
+    },
+    missingRequiredCount: 0,
+    filledFields: ["mmse", "gds", "cdr", "cogTestType", "specialistOpinionStatus"],
+  };
+}
+
+function ensureStage2Step2AutofillPayload(
+  payload: Stage2Step2AutoFillPayload,
+  riskBand: Stage2AutoFillRiskBand,
+): Stage2Step2AutoFillPayload {
+  const seeded = buildStage2Step2SeedAutofill(payload.caseId, riskBand);
+  const specialistOpinionStatus =
+    payload.specialistOpinionStatus ?? (riskBand === "AD" ? "DONE" : seeded.specialistOpinionStatus ?? "MISSING");
+  const merged: Stage2Step2AutoFillPayload = {
+    caseId: payload.caseId,
+    source: payload.source,
+    syncedAt: payload.syncedAt || nowIso(),
+    mmse: payload.mmse ?? seeded.mmse,
+    gds: payload.gds ?? seeded.gds,
+    cdr: payload.cdr ?? seeded.cdr,
+    cogTestType: payload.cogTestType ?? seeded.cogTestType,
+    specialistOpinionStatus,
+    receivedMeta: {
+      linkageStatus: payload.receivedMeta?.linkageStatus ?? seeded.receivedMeta.linkageStatus,
+      receivedAt: payload.receivedMeta?.receivedAt,
+      providerName: payload.receivedMeta?.providerName ?? seeded.receivedMeta.providerName,
+    },
+    missingRequiredCount: payload.missingRequiredCount,
+    filledFields: payload.filledFields,
+  };
+
+  const requiredKeys =
+    riskBand === "LOW" || riskBand === "MID"
+      ? (["mmse", "gds", "cogTestType"] as const)
+      : riskBand === "HIGH"
+        ? (["mmse", "gds", "cdr", "cogTestType"] as const)
+        : (["mmse", "gds", "cdr", "cogTestType", "specialistOpinionStatus"] as const);
+  const missingRequiredCount = requiredKeys.filter((field) => {
+    if (field === "specialistOpinionStatus") return merged.specialistOpinionStatus !== "DONE";
+    return merged[field] == null;
+  }).length;
+  merged.missingRequiredCount = missingRequiredCount;
+  merged.filledFields = ["mmse", "gds", "cdr", "cogTestType", "specialistOpinionStatus"].filter((field) => {
+    if (field === "specialistOpinionStatus") return merged.specialistOpinionStatus != null;
+    return merged[field as Stage2AutoFillFieldKey] != null;
+  });
+  return merged;
+}
 
 type Stage1FlowCardConfig = {
   id: Stage1FlowCardId;
@@ -207,6 +385,8 @@ export type Stage1HeaderSummary = {
   };
   stage3Meta?: {
     opsStatus: Stage3OpsStatus;
+    stage3Type?: "PREVENTIVE_TRACKING" | "AD_MANAGEMENT";
+    originStage2Result?: "MCI-MID" | "MCI-HIGH" | "AD";
     risk2yNowPct?: number;
     risk2yLabel?: Stage3RiskSummary["risk2y_label"];
     modelAvailable?: boolean;
@@ -223,6 +403,28 @@ export type Stage1HeaderSummary = {
     churnRisk: Stage3ChurnRisk;
   };
 };
+
+function toOpsLoopStateFromStage3View(view: Stage3ViewModel): OpsLoopState {
+  const steps: OpsLoopState["steps"] = view.display.stepCards.map((card) => ({
+    id: (`STEP${card.step}` as "STEP1" | "STEP2" | "STEP3" | "STEP4"),
+    label: card.subtitle,
+    status: card.state === "DONE" ? "DONE" : card.state === "IN_PROGRESS" ? "READY" : "TODO",
+    reason: card.reason,
+    requiresHumanApproval: card.step >= 3,
+  }));
+  const doneCount = steps.filter((step) => step.status === "DONE").length;
+  const readyCount = steps.filter((step) => step.status === "READY").length;
+
+  return {
+    stage: "stage3",
+    steps,
+    doneCount,
+    readyCount,
+    totalCount: 4,
+    mismatch: view.display.inconsistencyFlags.length > 0,
+    mismatchReasons: [...view.display.inconsistencyFlags],
+  };
+}
 
 type AuditLogEntry = {
   id: string;
@@ -419,6 +621,8 @@ type Stage3Step2FlowState = {
   calendarSynced: boolean;
 };
 
+type Stage3Step2PanelKey = "REVIEW" | "BOOKING" | "RESULT" | "MODEL" | "TRANSITION";
+
 type Stage3RagAutoFill = {
   generatedAt: string;
   confidenceLabel: "높음" | "보통" | "낮음";
@@ -508,16 +712,20 @@ type SmsTemplate = {
 const STAGE1_PANEL_OPERATOR = "김성실";
 const DEFAULT_CENTER_NAME = "강남구 치매안심센터";
 const DEFAULT_CENTER_PHONE = "02-555-0199";
+const DEMO_CITIZEN_TOKEN_DEFAULT = "R-2ldKkoGbDF-marBFEbgVilAXB5Tw0r";
 /** 시민화면 링크 (배포 환경 자동 감지) */
 function getCitizenUrl(): string {
+  const explicitDemoLink = (import.meta.env.VITE_STAGE1_DEMO_LINK as string | undefined)?.trim();
+  if (explicitDemoLink && explicitDemoLink.length > 0) return explicitDemoLink;
+  const demoToken = ((import.meta.env.VITE_CITIZEN_DEMO_TOKEN as string | undefined) || DEMO_CITIZEN_TOKEN_DEFAULT).trim();
   if (typeof window !== "undefined") {
     const configuredBase = (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined)?.trim();
     const base = configuredBase && configuredBase.length > 0 ? configuredBase.replace(/\/$/, "") : window.location.origin;
     const basePath = import.meta.env.VITE_BASE_PATH || "/neuro-shield/";
     const rootedBase = configuredBase && configuredBase.length > 0 ? base : `${base}${basePath.replace(/\/$/, "")}`;
-    return `${rootedBase}/p/sms?t=preview`;
+    return `${rootedBase}/p/sms?t=${encodeURIComponent(demoToken)}`;
   }
-  return "http://146.56.162.226/neuro-shield/p/sms?t=preview";
+  return `http://146.56.162.226/neuro-shield/p/sms?t=${encodeURIComponent(demoToken)}`;
 }
 const DEFAULT_GUIDE_LINK = getCitizenUrl();
 const DEFAULT_BOOKING_URL = "(센터 예약 안내)";
@@ -1185,7 +1393,27 @@ function stage2StatusFromTests(
   return "NOT_STARTED";
 }
 
-function buildInitialStage2Diagnosis(caseRecord?: CaseRecord): Stage2Diagnosis {
+function buildInitialStage2Diagnosis(caseRecord?: CaseRecord, ssotCase?: CaseEntity): Stage2Diagnosis {
+  const stage2WaitingFromSsot = Boolean(
+    ssotCase &&
+      ssotCase.stage === 2 &&
+      ssotCase.operationStep === "WAITING" &&
+      !ssotCase.computed.model2.available,
+  );
+  if (stage2WaitingFromSsot) {
+    return {
+      status: "NOT_STARTED",
+      tests: {
+        specialist: false,
+        mmse: undefined,
+        cdr: undefined,
+        neuroCognitiveType: undefined,
+      },
+      classification: undefined,
+      nextStep: undefined,
+    };
+  }
+
   const label = inferStage2Label(caseRecord);
   const mciStage = label === "MCI" ? inferStage2MciStage(caseRecord) : undefined;
   const hasStarted = caseRecord?.status === "진행중" || caseRecord?.status === "임박" || caseRecord?.status === "지연";
@@ -1623,6 +1851,7 @@ function buildScoreSummary(
   stage2OpsView = false,
 ) {
   if (mode === "stage3" && stage3Meta) {
+    const isAdManagementCase = caseRecord?.profile.stage3Type === "AD_MANAGEMENT";
     const quality = mapDataQuality(caseRecord?.quality);
     const triggerCount = stage3Meta.recommendedActions.length;
     const maxSeverity =
@@ -1693,7 +1922,7 @@ function buildScoreSummary(
 
     return [
       {
-        label: "2년 전환 위험도(운영 참고)",
+        label: isAdManagementCase ? "현재 위험지수(운영 참고)" : "2년 전환 위험도(운영 참고)",
         value: riskPct,
         unit: "%",
         updatedAt: stage3Meta.transitionRisk.updatedAt,
@@ -1952,7 +2181,9 @@ function buildInitialStage1Detail(
     riskGuardrails.push(
       stage2OpsView
         ? "운영 참고: 진단 진행/지연 신호는 담당자 검토 후 예약/의뢰/확정에 반영"
-        : "운영 참고: 전환 위험 신호는 담당자 검토 후 실행",
+        : caseRecord?.profile.stage3Type === "AD_MANAGEMENT"
+          ? "운영 참고: 현재 위험지수는 담당자 검토 후 실행"
+          : "운영 참고: 전환 위험 신호는 담당자 검토 후 실행",
     );
   }
 
@@ -2301,8 +2532,15 @@ function eventTitle(event: ContactEvent) {
   if (event.type === "NEXT_TRACKING_SET") return "다음 추적 일정 설정";
   if (event.type === "STAGE2_PLAN_CONFIRMED") return "Stage2 검사 계획 확정";
   if (event.type === "STAGE2_RESULTS_RECORDED") return "Stage2 검사 결과 입력 완료";
+  if (event.type === "STAGE2_STEP2_AUTOFILL_APPLIED") return "Stage2 STEP2 자동 기입 적용";
+  if (event.type === "STAGE2_MANUAL_EDIT_APPLIED") return "Stage2 STEP2 수동 수정 반영";
   if (event.type === "STAGE2_CLASS_CONFIRMED") return "Stage2 분류 확정";
   if (event.type === "STAGE2_NEXT_STEP_SET") return "Stage2 다음 단계 결정";
+  if (event.type === "INFERENCE_REQUESTED") return `Stage${event.stage} 모델 실행 요청`;
+  if (event.type === "INFERENCE_STARTED") return `Stage${event.stage} 모델 실행 시작`;
+  if (event.type === "INFERENCE_PROGRESS") return `Stage${event.stage} 모델 실행 진행`;
+  if (event.type === "INFERENCE_COMPLETED") return `Stage${event.stage} 모델 실행 완료`;
+  if (event.type === "INFERENCE_FAILED") return `Stage${event.stage} 모델 실행 실패`;
   return `상태 변경 ${event.from} → ${event.to}`;
 }
 
@@ -2389,10 +2627,23 @@ function eventDetail(event: ContactEvent) {
     event.type === "PROGRAM_EXEC_COMPLETED" ||
     event.type === "STAGE2_PLAN_CONFIRMED" ||
     event.type === "STAGE2_RESULTS_RECORDED" ||
+    event.type === "STAGE2_STEP2_AUTOFILL_APPLIED" ||
+    event.type === "STAGE2_MANUAL_EDIT_APPLIED" ||
     event.type === "STAGE2_CLASS_CONFIRMED" ||
     event.type === "STAGE2_NEXT_STEP_SET"
   ) {
     return event.summary;
+  }
+  if (
+    event.type === "INFERENCE_REQUESTED" ||
+    event.type === "INFERENCE_STARTED" ||
+    event.type === "INFERENCE_COMPLETED" ||
+    event.type === "INFERENCE_FAILED"
+  ) {
+    return `${event.summary}${event.reason ? ` · ${event.reason}` : ""}`;
+  }
+  if (event.type === "INFERENCE_PROGRESS") {
+    return `${event.summary} · ${Math.round(event.progress)}%${event.etaSeconds != null ? ` · ETA ${formatEtaLabel(event.etaSeconds)}` : ""}`;
   }
   if (event.type === "NEXT_TRACKING_SET") {
     return `${formatDateTime(event.nextAt)}${event.summary ? ` · ${event.summary}` : ""}`;
@@ -2935,6 +3186,14 @@ const FLOW_STATUS_META: Record<
     chipTone: "border border-emerald-200 bg-emerald-100 text-emerald-700",
     reasonTone: "border-emerald-200 bg-white/70 text-emerald-800",
   },
+  READY: {
+    label: "준비",
+    icon: Timer,
+    cardTone:
+      "border-cyan-200 bg-cyan-50/80 text-cyan-900 shadow-sm hover:shadow-cyan-200/60",
+    chipTone: "border border-cyan-200 bg-cyan-100 text-cyan-700",
+    reasonTone: "border-cyan-200 bg-white/80 text-cyan-900",
+  },
   PENDING: {
     label: "대기",
     icon: Clock3,
@@ -3000,7 +3259,12 @@ const STAGE1_LINKAGE_ACTION_META: Record<
   },
 };
 
-function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode, stage2OpsView = false): Stage1FlowCard[] {
+function useStage1Flow(
+  detail: Stage1Detail,
+  mode: StageOpsMode,
+  stage2OpsView = false,
+  opsLoopState?: OpsLoopState | null,
+): Stage1FlowCard[] {
   return useMemo(() => {
     const isStage2Mode = mode === "stage2";
     const isStage3Mode = mode === "stage3";
@@ -3033,6 +3297,58 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode, stage2OpsView =
       steps
         .map((step) => `${flowStepLabelMap.get(step) ?? step}:${flowStepStatusMap.get(step) ?? "WAITING"}`)
         .join(" / ");
+
+    if (opsLoopState && opsLoopState.steps.length === flowConfig.length) {
+      const cards = flowConfig.map((config, index) => {
+        const step = opsLoopState.steps[index];
+        const relatedSummary = relatedStepSummary(config.relatedSteps);
+        const status: Stage1FlowVisualStatus =
+          step.status === "DONE" ? "COMPLETED" : step.status === "READY" ? "READY" : "PENDING";
+        const nextActionHint =
+          step.status === "DONE"
+            ? "다음 단계로 이동하거나 타임라인 로그를 확인하세요."
+            : step.status === "READY"
+              ? step.requiresHumanApproval
+                ? "자동 준비 완료 상태입니다. 담당자 승인/확정으로 완료 처리하세요."
+                : "필요 데이터가 준비되었습니다. 다음 작업을 실행하세요."
+              : "현재 단계 필수 입력/검토를 완료해야 다음 단계가 열립니다.";
+
+        return {
+          ...config,
+          status,
+          reason: step.reason,
+          nextActionHint,
+          metricLabel: `${step.label} · ${relatedSummary}`,
+          isCurrent: false,
+        };
+      });
+
+      const gatedCards = cards.reduce<Stage1FlowCard[]>((acc, card, index) => {
+        if (index === 0) {
+          acc.push(card);
+          return acc;
+        }
+        const prevCard = acc[index - 1];
+        if (prevCard.status === "COMPLETED") {
+          acc.push(card);
+          return acc;
+        }
+        const blockedStepNo = index;
+        acc.push({
+          ...card,
+          status: "BLOCKED",
+          reason: `STEP ${blockedStepNo} 완료 전에는 ${card.title} 단계를 진행할 수 없습니다.`,
+          nextActionHint: `STEP ${blockedStepNo}를 먼저 완료해 주세요.`,
+          metricLabel: `선행 단계 미완료 · ${relatedStepSummary(card.relatedSteps)}`,
+          isCurrent: false,
+        });
+        return acc;
+      }, []);
+
+      const currentIndex = gatedCards.findIndex((card) => card.status !== "COMPLETED");
+      const resolvedCurrentIndex = currentIndex === -1 ? gatedCards.length - 1 : currentIndex;
+      return gatedCards.map((card, index) => ({ ...card, isCurrent: index === resolvedCurrentIndex }));
+    }
 
     if (isStage3Mode) {
       const stage3Data = detail.stage3;
@@ -3545,7 +3861,7 @@ function useStage1Flow(detail: Stage1Detail, mode: StageOpsMode, stage2OpsView =
       ...card,
       isCurrent: index === resolvedCurrentIndex,
     }));
-  }, [detail, mode, stage2OpsView]);
+  }, [detail, mode, opsLoopState, stage2OpsView]);
 }
 
 function buildPreTriageInput(caseRecord?: CaseRecord): PreTriageInput {
@@ -3672,34 +3988,43 @@ const STAGE2_STD_TEMPLATES: StdSmsTemplate[] = mapSmsTemplatesToPanelTemplates(S
 const STAGE3_STD_TEMPLATES: StdSmsTemplate[] = mapSmsTemplatesToPanelTemplates(STAGE3_SMS_TEMPLATES);
 
 export function Stage1OpsDetail({
+  caseId,
   caseRecord,
   onHeaderSummaryChange,
   onPrimaryActionChange,
   mode = "stage1",
   surfaceStage,
 }: {
+  caseId?: string;
   caseRecord?: CaseRecord;
   onHeaderSummaryChange?: (summary: Stage1HeaderSummary) => void;
   onPrimaryActionChange?: (handler: (() => void) | null) => void;
   mode?: StageOpsMode;
   surfaceStage?: SurfaceStage;
 }) {
+  const resolvedCaseId = caseRecord?.id ?? caseId;
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
   const isStage2OpsView = isStage3Mode && surfaceStage === "Stage 2";
   const stageLabel = isStage2Mode || isStage2OpsView ? "2차" : isStage3Mode ? "3차" : "1차";
-  const ssotCase = useCaseEntity(caseRecord?.id);
+  const ssotCase = useCaseEntity(resolvedCaseId);
+  const stage3View = useStage3CaseView(isStage3Mode ? resolvedCaseId : null);
+  const resolvedStage3TypeForUi =
+    stage3View?.source.profile?.stage3Type ??
+    caseRecord?.profile.stage3Type ??
+    (stage3View?.source.profile?.originStage2Result === "AD" ? "AD_MANAGEMENT" : undefined);
   const stage2Evidence = ssotCase?.computed.evidence.stage2;
   const stage3Evidence = ssotCase?.computed.evidence.stage3;
   const ssotModel2 = ssotCase?.computed.model2;
   const ssotModel3 = ssotCase?.computed.model3;
-  const stage2ModelAvailable = Boolean(stage2Evidence?.completed && ssotModel2?.available);
-  const stage3ModelAvailable = Boolean(stage3Evidence?.completed && ssotModel3?.available);
+  const stage2StoredModelAvailable = Boolean(ssotModel2?.available);
+  const stage3StoredModelAvailable = Boolean(ssotModel3?.available);
   const stage2GateMissing = stage2Evidence?.missing ?? [];
   const stage3GateMissing = stage3Evidence?.missing ?? [];
   const smsTemplateCatalog = isStage2Mode ? STAGE2_SMS_TEMPLATES : isStage3Mode ? STAGE3_SMS_TEMPLATES : SMS_TEMPLATES;
   const panelSmsTemplates = isStage2Mode ? STAGE2_STD_TEMPLATES : isStage3Mode ? STAGE3_STD_TEMPLATES : STAGE1_STD_TEMPLATES;
   const defaultSmsTemplateId = smsTemplateCatalog[0]?.id ?? "";
+  const queryClient = useQueryClient();
 
   const [detail, setDetail] = useState<Stage1Detail>(() => buildInitialStage1Detail(caseRecord, mode, isStage2OpsView));
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() =>
@@ -3794,6 +4119,7 @@ export function Stage1OpsDetail({
     messageSent: false,
     calendarSynced: false,
   });
+  const [stage3Step2ActivePanel, setStage3Step2ActivePanel] = useState<Stage3Step2PanelKey>("REVIEW");
   const [stage3RagAutoFill, setStage3RagAutoFill] = useState<Stage3RagAutoFill | null>(null);
   const [stage3RiskReviewDraft, setStage3RiskReviewDraft] = useState<Stage3RiskReviewDraft>({
     memo: "",
@@ -3841,7 +4167,7 @@ export function Stage1OpsDetail({
     contactGuide: DEFAULT_CENTER_PHONE,
     note: "",
   });
-  const [stage2Diagnosis, setStage2Diagnosis] = useState<Stage2Diagnosis>(() => buildInitialStage2Diagnosis(caseRecord));
+  const [stage2Diagnosis, setStage2Diagnosis] = useState<Stage2Diagnosis>(() => buildInitialStage2Diagnosis(caseRecord, ssotCase));
   const [stage2ClassificationDraft, setStage2ClassificationDraft] = useState<Stage2ClassLabel>(() => inferStage2Label(caseRecord));
   const [stage2ClassificationOverrideReason, setStage2ClassificationOverrideReason] = useState("");
   const [stage2ClassificationEdited, setStage2ClassificationEdited] = useState(false);
@@ -3874,13 +4200,26 @@ export function Stage1OpsDetail({
   }>({
     sourceOrg: "강남구 협력병원",
   });
-  const [stage2ModelRunState, setStage2ModelRunState] = useState<{
-    status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
-    updatedAt?: string;
-    recommendedLabel?: Stage2ClassLabel;
-  }>({ status: "PENDING" });
+  const [stage2AutoFillPayload, setStage2AutoFillPayload] = useState<Stage2Step2AutoFillPayload | null>(null);
+  const [stage2AutoFillLoading, setStage2AutoFillLoading] = useState(false);
+  const [stage2AutoFillError, setStage2AutoFillError] = useState<string | null>(null);
+  const stage2AutoFillBaselineRef = useRef<{
+    mmse: number | null;
+    cdr: number | null;
+    neuro: Stage2Diagnosis["tests"]["neuroCognitiveType"] | null;
+    specialist: boolean | null;
+  } | null>(null);
+  const [stage2ModelRunState, setStage2ModelRunState] = useState<InferenceJobState>({
+    status: "PENDING",
+    minDurationSec: 45,
+    maxDurationSec: 160,
+  });
+  const [stage3ModelRunState, setStage3ModelRunState] = useState<InferenceJobState>({
+    status: "PENDING",
+    minDurationSec: 60,
+    maxDurationSec: 180,
+  });
   const [stage2ReceiveHistoryOpen, setStage2ReceiveHistoryOpen] = useState(false);
-  const stage2ModelTimerRef = useRef<number | null>(null);
   const [stage2EnteredAt] = useState(() => caseRecord?.created ?? withHoursFromNow(-96));
   const [stage2TargetAt] = useState(() => withHoursFromNow(24 * 10));
   const [stage2ConfirmedAt, setStage2ConfirmedAt] = useState<string | undefined>(undefined);
@@ -4155,6 +4494,7 @@ export function Stage1OpsDetail({
       messageSent: false,
       calendarSynced: false,
     });
+    setStage3Step2ActivePanel("REVIEW");
     setStage3RagAutoFill(null);
     setStage3RiskReviewDraft({
       memo: "",
@@ -4201,7 +4541,7 @@ export function Stage1OpsDetail({
       contactGuide: DEFAULT_CENTER_PHONE,
       note: "",
     });
-    const initialStage2 = buildInitialStage2Diagnosis(caseRecord);
+    const initialStage2 = buildInitialStage2Diagnosis(caseRecord, ssotCase);
     setStage2Diagnosis(initialStage2);
     setStage2ClassificationDraft(initialStage2.classification?.label ?? inferStage2Label(caseRecord));
     setStage2ClassificationOverrideReason("");
@@ -4227,7 +4567,20 @@ export function Stage1OpsDetail({
     setStage2IntegrationState({
       sourceOrg: "강남구 협력병원",
     });
-    setStage2ModelRunState({ status: "PENDING" });
+    setStage2AutoFillPayload(null);
+    setStage2AutoFillLoading(false);
+    setStage2AutoFillError(null);
+    stage2AutoFillBaselineRef.current = null;
+    setStage2ModelRunState({
+      status: "PENDING",
+      minDurationSec: 45,
+      maxDurationSec: 160,
+    });
+    setStage3ModelRunState({
+      status: "PENDING",
+      minDurationSec: 60,
+      maxDurationSec: 180,
+    });
     setStage2ReceiveHistoryOpen(false);
     setStage2ConfirmedAt(undefined);
     setAgentJob({
@@ -4241,13 +4594,76 @@ export function Stage1OpsDetail({
     clearSubmitError();
   }, [caseRecord?.id, clearSubmitError, defaultSmsTemplateId, isStage2OpsView, mode]);
 
+  const stage2CaseWaitingForKickoff = Boolean(
+    (isStage2Mode || isStage2OpsView) &&
+      ssotCase?.stage === 2 &&
+      ssotCase.operationStep === "WAITING" &&
+      !ssotCase.computed.model2.available,
+  );
+
   useEffect(() => {
-    return () => {
-      if (stage2ModelTimerRef.current != null) {
-        window.clearTimeout(stage2ModelTimerRef.current);
-      }
-    };
-  }, []);
+    if (!stage2CaseWaitingForKickoff) return;
+    setStage2Diagnosis({
+      status: "NOT_STARTED",
+      tests: {
+        specialist: false,
+        mmse: undefined,
+        cdr: undefined,
+        neuroCognitiveType: undefined,
+      },
+      classification: undefined,
+      nextStep: undefined,
+    });
+    setStage2ClassificationEdited(false);
+    setStage2ClassificationOverrideReason("");
+    setDetail((prev) => ({
+      ...prev,
+      timeline: prev.timeline.filter((event) => event.type === "STATUS_CHANGE" || event.type === "LEVEL_CHANGE"),
+      stage3: prev.stage3
+        ? {
+            ...prev.stage3,
+            riskReviewedAt: undefined,
+            triggersReviewedAt: undefined,
+            planUpdatedAt: undefined,
+            headerMeta: {
+              ...prev.stage3.headerMeta,
+              opsStatus: "REEVAL_PENDING",
+            },
+          }
+        : prev.stage3,
+    }));
+  }, [stage2CaseWaitingForKickoff]);
+
+  useEffect(() => {
+    setStage2ModelRunState((prev) => {
+      if (prev.status === "RUNNING") return prev;
+      if (!stage2StoredModelAvailable) return prev;
+      return {
+        ...prev,
+        status: "DONE",
+        updatedAt: ssotModel2?.updatedAt ?? prev.updatedAt ?? nowIso(),
+        completedAt: ssotModel2?.updatedAt ?? prev.completedAt ?? nowIso(),
+        progress: 100,
+        etaSeconds: 0,
+        recommendedLabel: stage2ClassLabelFromModel(ssotModel2?.predictedLabel),
+      };
+    });
+  }, [ssotModel2?.predictedLabel, ssotModel2?.updatedAt, stage2StoredModelAvailable]);
+
+  useEffect(() => {
+    setStage3ModelRunState((prev) => {
+      if (prev.status === "RUNNING") return prev;
+      if (!stage3StoredModelAvailable) return prev;
+      return {
+        ...prev,
+        status: "DONE",
+        updatedAt: ssotModel3?.updatedAt ?? prev.updatedAt ?? nowIso(),
+        completedAt: ssotModel3?.updatedAt ?? prev.completedAt ?? nowIso(),
+        progress: 100,
+        etaSeconds: 0,
+      };
+    });
+  }, [ssotModel3?.updatedAt, stage3StoredModelAvailable]);
 
   useEffect(() => {
     const ticker = window.setInterval(() => setNowTick(Date.now()), 1000);
@@ -4357,15 +4773,18 @@ export function Stage1OpsDetail({
   const isNightBlocked = restrictNightSend && isNightWindow;
   const composerPreview = `${smsPreview}\n\n${CONTACT_DISCLAIMER}`;
 
-  const appendAuditLog = (message: string) => {
-    const entry: AuditLogEntry = {
-      id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      at: formatDateTime(nowIso()),
-      actor: detail.header.assigneeName || STAGE1_PANEL_OPERATOR,
-      message,
-    };
-    setAuditLogs((prev) => [entry, ...prev]);
-  };
+  const appendAuditLog = useCallback(
+    (message: string) => {
+      const entry: AuditLogEntry = {
+        id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        at: formatDateTime(nowIso()),
+        actor: detail.header.assigneeName || STAGE1_PANEL_OPERATOR,
+        message,
+      };
+      setAuditLogs((prev) => [entry, ...prev]);
+    },
+    [detail.header.assigneeName],
+  );
 
   const timelineEventTypeToSsot = (event: ContactEvent): EventType => {
     if (event.type === "CALL_ATTEMPT") return "CONTACT_RESULT";
@@ -4375,9 +4794,17 @@ export function Stage1OpsDetail({
     if (event.type === "DIFF_SCHEDULED") return "STAGE3_DIFF_SCHEDULED";
     if (event.type === "DIFF_RESULT_APPLIED") return "STAGE3_RESULTS_RECORDED";
     if (event.type === "RISK_SERIES_UPDATED" || event.type === "RISK_REVIEWED") return "STAGE3_RISK_UPDATED";
+    if (event.type === "STAGE2_PLAN_CONFIRMED") return "STAGE2_PLAN_CONFIRMED";
     if (event.type === "STAGE2_RESULTS_RECORDED") return "STAGE2_RESULTS_RECORDED";
+    if (event.type === "STAGE2_STEP2_AUTOFILL_APPLIED") return "STAGE2_RESULTS_RECORDED";
+    if (event.type === "STAGE2_MANUAL_EDIT_APPLIED") return "STAGE2_RESULTS_RECORDED";
     if (event.type === "STAGE2_CLASS_CONFIRMED") return "STAGE2_CLASS_CONFIRMED";
     if (event.type === "STAGE2_NEXT_STEP_SET") return "STAGE2_NEXT_STEP_SET";
+    if (event.type === "INFERENCE_REQUESTED") return "INFERENCE_REQUESTED";
+    if (event.type === "INFERENCE_STARTED") return "INFERENCE_STARTED";
+    if (event.type === "INFERENCE_PROGRESS") return "INFERENCE_PROGRESS";
+    if (event.type === "INFERENCE_COMPLETED") return "INFERENCE_COMPLETED";
+    if (event.type === "INFERENCE_FAILED") return "INFERENCE_FAILED";
     if (event.type === "STATUS_CHANGE" && (event.from.includes("Stage") || event.to.includes("Stage"))) return "STAGE_CHANGE";
     return "DATA_SYNCED";
   };
@@ -4397,18 +4824,135 @@ export function Stage1OpsDetail({
     }
   };
 
+  const stage2AutoFillFieldHasValue = useCallback(
+    (field: Stage2AutoFillFieldKey) => {
+      if (!stage2AutoFillPayload) return false;
+      if (field === "cdr") return stage2AutoFillPayload.cdr != null || stage2AutoFillPayload.gds != null;
+      return stage2AutoFillPayload[field] != null;
+    },
+    [stage2AutoFillPayload],
+  );
+
+  useEffect(() => {
+    if (!isStage2OpsView) return;
+    if (stage3TaskModalStep !== "CONTACT_EXECUTION") return;
+    if (!caseRecord?.id) return;
+
+    let mounted = true;
+    setStage2AutoFillLoading(true);
+    setStage2AutoFillError(null);
+    const riskBand = inferStage2Step2RiskBand(caseRecord, ssotCase?.classification, ssotCase?.riskScore);
+
+    const applyPayload = (rawPayload: Stage2Step2AutoFillPayload) => {
+      const payload = ensureStage2Step2AutofillPayload(rawPayload, riskBand);
+      const normalizedCdr = payload.cdr ?? payload.gds;
+
+      setStage2AutoFillPayload(payload);
+      setStage2IntegrationState((prev) => ({
+        ...prev,
+        lastSyncedAt: payload.syncedAt,
+        receivedAt: payload.receivedMeta.receivedAt ?? prev.receivedAt,
+        sourceOrg: payload.receivedMeta.providerName ?? prev.sourceOrg,
+      }));
+      setStage2Diagnosis((prev) => {
+        const nextRoute: Stage2Route = stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "HOSPITAL" : "CENTER";
+        const nextTests = {
+          ...prev.tests,
+          mmse: payload.mmse ?? prev.tests.mmse,
+          cdr: normalizedCdr ?? prev.tests.cdr,
+          neuroCognitiveType: payload.cogTestType ?? prev.tests.neuroCognitiveType,
+          specialist:
+            payload.specialistOpinionStatus != null
+              ? payload.specialistOpinionStatus === "DONE"
+              : prev.tests.specialist,
+        };
+        return {
+          ...prev,
+          tests: nextTests,
+          status: stage2StatusFromTests(nextTests, Boolean(prev.classification?.label), nextRoute),
+        };
+      });
+      stage2AutoFillBaselineRef.current = {
+        mmse: payload.mmse ?? null,
+        cdr: normalizedCdr ?? null,
+        neuro: payload.cogTestType ?? null,
+        specialist: payload.specialistOpinionStatus != null ? payload.specialistOpinionStatus === "DONE" : null,
+      };
+      appendTimeline({
+        type: "STAGE2_STEP2_AUTOFILL_APPLIED",
+        at: payload.syncedAt,
+        by: detail.header.assigneeName,
+        summary: `source=${payload.source} · fields=${(payload.filledFields ?? []).join(", ") || "-"}`,
+      });
+      appendAuditLog(
+        `STEP2_AUTOFILL_APPLIED: ${payload.source} · 누락 ${payload.missingRequiredCount}건 · 동기화 ${formatDateTime(payload.syncedAt)}`,
+      );
+    };
+
+    fetchStage2Step2Autofill(caseRecord.id)
+      .then((response) => {
+        if (!mounted) return;
+        applyPayload(response.item);
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        const message = error instanceof Error ? error.message : "자동 기입 실패";
+        const fallback = buildStage2Step2SeedAutofill(caseRecord.id, riskBand);
+        setStage2AutoFillError(`${message} · 기본 자동채움 적용`);
+        applyPayload(fallback);
+        toast("STEP2 자동 기입 연결에 실패해 기본 자동채움을 적용했습니다.");
+      })
+      .finally(() => {
+        if (!mounted) return;
+        setStage2AutoFillLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [
+    appendAuditLog,
+    caseRecord?.id,
+    detail.header.assigneeName,
+    isStage2OpsView,
+    ssotCase?.classification,
+    ssotCase?.riskScore,
+    stage2PlanRouteDraft,
+    stage3TaskModalStep,
+  ]);
+
+  const collectStage2ManualChangedFields = useCallback(() => {
+    const baseline = stage2AutoFillBaselineRef.current;
+    if (!baseline) return {} as Record<string, unknown>;
+    const changed: Record<string, unknown> = {};
+    const currentMmse = typeof stage2Diagnosis.tests.mmse === "number" ? stage2Diagnosis.tests.mmse : null;
+    const currentCdr = typeof stage2Diagnosis.tests.cdr === "number" ? stage2Diagnosis.tests.cdr : null;
+    const currentNeuro = stage2Diagnosis.tests.neuroCognitiveType ?? null;
+    const currentSpecialist = stage2Diagnosis.tests.specialist ?? false;
+
+    if (baseline.mmse !== currentMmse) changed.mmse = currentMmse;
+    if (baseline.cdr !== currentCdr) changed.cdr = currentCdr;
+    if (baseline.neuro !== currentNeuro) changed.cogTestType = currentNeuro;
+    if (baseline.specialist != null && baseline.specialist !== currentSpecialist) {
+      changed.specialistOpinionStatus = currentSpecialist ? "DONE" : "MISSING";
+    }
+    return changed;
+  }, [stage2Diagnosis.tests.cdr, stage2Diagnosis.tests.mmse, stage2Diagnosis.tests.neuroCognitiveType, stage2Diagnosis.tests.specialist]);
+
   const saveStage2TestInputs = () => {
+    const changedFields = collectStage2ManualChangedFields();
     const validationErrors = buildStage2ValidationErrors(
       stage2Diagnosis.tests,
       stage2PlanRouteDraft as Stage2PlanRoute,
       stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
     );
-    if (stage2ManualEditEnabled && stage2ManualEditReason.trim().length < 5) {
+    const hasManualChange = Object.keys(changedFields).length > 0;
+    if ((stage2ManualEditEnabled || hasManualChange) && stage2ManualEditReason.trim().length < 5) {
       validationErrors.manualEditReason = "수동 수정 사유를 5자 이상 입력하세요.";
     }
     if (applyStage2ValidationErrors(validationErrors)) {
       toast.error("필수 입력/오류 항목을 먼저 보완해 주세요.");
-      return;
+      return false;
     }
     setStage2FieldErrors({});
 
@@ -4447,33 +4991,59 @@ export function Stage1OpsDetail({
     }
 
     if (missingKeys.length === 0) {
-      setStage2ModelRunState({
-        status: "RUNNING",
-        updatedAt: nowIso(),
-      });
-      if (stage2ModelTimerRef.current != null) {
-        window.clearTimeout(stage2ModelTimerRef.current);
-      }
-      stage2ModelTimerRef.current = window.setTimeout(() => {
-        const recommended = deriveStage2ModelRecommendation(stage2Diagnosis.tests);
-        setStage2ModelRunState({
+      const now = nowIso();
+      const recommended = deriveStage2ModelRecommendation(stage2Diagnosis.tests);
+
+      if (stage2StoredModelAvailable) {
+        setStage2ModelRunState((prev) => ({
+          ...prev,
           status: "DONE",
-          updatedAt: nowIso(),
+          startedAt: prev.startedAt ?? now,
+          updatedAt: now,
+          completedAt: now,
+          progress: 100,
+          etaSeconds: 0,
+          recommendedLabel: stage2ClassLabelFromModel(ssotModel2?.predictedLabel) ?? recommended,
+        }));
+        appendAuditLog("Stage2 기존 모델 결과를 재사용했습니다.");
+      } else {
+        setStage2ModelRunState((prev) => ({
+          ...prev,
+          status: "RUNNING",
+          startedAt: now,
+          updatedAt: now,
+          completedAt: undefined,
+          progress: 3,
+          etaSeconds: null,
           recommendedLabel: recommended,
+          failureReason: undefined,
+        }));
+        appendTimeline({
+          type: "INFERENCE_REQUESTED",
+          stage: 2,
+          at: now,
+          by: detail.header.assigneeName,
+          summary: "Stage2 모델 실행 요청",
         });
         appendTimeline({
-          type: "STAGE2_RESULTS_RECORDED",
-          at: nowIso(),
+          type: "INFERENCE_STARTED",
+          stage: 2,
+          at: now,
           by: detail.header.assigneeName,
-          summary: `모델 산출 완료: 추천 ${recommended} (운영 참고)`,
+          summary: "Stage2 모델 실행 시작",
         });
-        appendAuditLog(`Stage2 모델 산출 완료: 추천 ${recommended}`);
-      }, 700);
+        appendAuditLog("Stage2 모델 실행 요청");
+      }
     } else {
-      setStage2ModelRunState({
+      setStage2ModelRunState((prev) => ({
+        ...prev,
         status: "PENDING",
         updatedAt: nowIso(),
-      });
+        startedAt: undefined,
+        completedAt: undefined,
+        progress: 0,
+        etaSeconds: null,
+      }));
     }
 
     appendTimeline({
@@ -4484,11 +5054,50 @@ export function Stage1OpsDetail({
       reason: `Stage2 검사 입력 반영 (${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount})`,
       by: detail.header.assigneeName,
     });
-    if (stage2ManualEditEnabled && stage2ManualEditReason.trim()) {
+    if (hasManualChange) {
+      const reason = stage2ManualEditReason.trim();
+      appendTimeline({
+        type: "STAGE2_MANUAL_EDIT_APPLIED",
+        at: nowIso(),
+        by: detail.header.assigneeName,
+        summary: `fields=${Object.keys(changedFields).join(", ") || "-"} · reason=${reason || "-"}`,
+      });
+      if (caseRecord?.id) {
+        void submitStage2Step2ManualEdit(caseRecord.id, {
+          changedFields,
+          reason,
+          editor: detail.header.assigneeName,
+        }).catch(() => {
+          toast.error("수동 수정 감사로그 동기화에 실패했습니다.");
+        });
+      }
+    }
+    stage2AutoFillBaselineRef.current = {
+      mmse: typeof stage2Diagnosis.tests.mmse === "number" ? stage2Diagnosis.tests.mmse : null,
+      cdr: typeof stage2Diagnosis.tests.cdr === "number" ? stage2Diagnosis.tests.cdr : null,
+      neuro: stage2Diagnosis.tests.neuroCognitiveType ?? null,
+      specialist: stage2Diagnosis.tests.specialist ?? null,
+    };
+    if (stage2ManualEditEnabled) {
+      setStage2ManualEditEnabled(false);
+    }
+    setStage2ManualEditReason("");
+    if ((stage2ManualEditEnabled || hasManualChange) && stage2ManualEditReason.trim()) {
       appendAuditLog(`Stage2 수동 수정: ${stage2ManualEditReason.trim()}`);
     }
     appendAuditLog(`Stage2 검사 결과 입력 반영: ${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount}`);
+    if (caseRecord?.id) {
+      void queryClient.invalidateQueries({ queryKey: ["caseDetail", caseRecord.id] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ["stage2Cases"] });
+    void queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
+    if (caseRecord?.id) {
+      void queryClient.invalidateQueries({ queryKey: ["local-center", "case", caseRecord.id] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ["local-center", "cases"] });
+    void queryClient.invalidateQueries({ queryKey: ["local-center", "dashboard-stats"] });
     toast.success("검사 결과 입력이 반영되었습니다.");
+    return true;
   };
 
   const confirmStage2Classification = () => {
@@ -4676,6 +5285,131 @@ export function Stage1OpsDetail({
     if (!target) return;
     changeTodoStatus(target.id, "DONE");
   };
+
+  const runStage1SmsAutoContactCompleteScenario = useCallback(
+    async (item: SmsHistoryItem) => {
+      if (mode !== "stage1" || isStage2Mode || isStage3Mode || !caseRecord) return false;
+
+      const normalizedCaseName = (caseRecord.profile.name ?? "").replace(/\s+/g, "");
+      const normalizedTargetName = STAGE1_SMS_AUTO_CONTACT_COMPLETE_NAME.replace(/\s+/g, "");
+      const normalizedPreview = (item.preview ?? "").replace(/\s+/g, "");
+      const isTargetCase =
+        STAGE1_SMS_AUTO_CONTACT_COMPLETE_CASE_IDS.has(caseRecord.id) ||
+        normalizedCaseName === normalizedTargetName ||
+        normalizedPreview.includes(normalizedTargetName);
+      if (!isTargetCase) return false;
+
+      const now = nowIso();
+      const scheduledAt = withHoursFromNow(24);
+      const title = `${caseRecord.profile.name} 접촉 완료 후속 확인`;
+      const idempotencyKey = `${caseRecord.id}:stage1-sms-complete:${item.id}`;
+      let linkageAfter: LinkageStatus = "BOOKING_DONE";
+
+      try {
+        await createStage1CalendarEvent({
+          idempotencyKey,
+          event: {
+            caseId: caseRecord.id,
+            type: "FOLLOWUP",
+            title,
+            startAt: scheduledAt,
+            durationMin: 20,
+            priority: "NORMAL",
+            payload: {
+              scenario: "STAGE1_SMS_CONTACT_COMPLETE",
+              trigger: "SMS_SENT",
+            },
+          },
+        });
+        appendTimeline({
+          type: "CALENDAR_SYNC",
+          at: nowIso(),
+          status: "SUCCESS",
+          eventType: "FOLLOWUP",
+          title,
+          scheduledAt,
+          idempotencyKey,
+          by: detail.header.assigneeName,
+        });
+        appendTimeline({
+          type: "CAL_EVENT_CREATED",
+          at: nowIso(),
+          scheduledAt,
+          summary: `${caseRecord.profile.name} · 문자 접촉 완료 후속 일정`,
+          by: detail.header.assigneeName,
+        });
+        appendAuditLog(`캘린더 등록 완료(자동 시나리오): ${title} · ${formatDateTime(scheduledAt)}`);
+      } catch (error) {
+        linkageAfter = "BOOKING_IN_PROGRESS";
+        const errorMessage = error instanceof Error ? error.message : "캘린더 등록 실패";
+        appendTimeline({
+          type: "CALENDAR_SYNC",
+          at: nowIso(),
+          status: "FAILED",
+          eventType: "FOLLOWUP",
+          title,
+          scheduledAt,
+          idempotencyKey,
+          error: errorMessage,
+          by: detail.header.assigneeName,
+        });
+        appendAuditLog(`캘린더 등록 실패(자동 시나리오): ${errorMessage}`);
+      }
+
+      const nextOutcomeCode: OutcomeCode = "CONTINUE_SELF";
+      completeSuggestedTodo("SMS");
+      setRecontactDueAt(scheduledAt);
+      setDetail((prev) => {
+        const nextExec: ContactExecution = {
+          ...prev.contactExecution,
+          status: "DONE",
+          lastSentAt: now,
+          lastResponseAt: now,
+          lastOutcomeCode: nextOutcomeCode,
+          retryCount: prev.contactExecution.retryCount + 1,
+        };
+        return {
+          ...prev,
+          linkageStatus: linkageAfter,
+          contactExecution: nextExec,
+          contactFlowSteps: buildContactFlowSteps(nextExec, prev.preTriageResult, linkageAfter, mode),
+        };
+      });
+
+      appendTimeline({
+        type: "OUTCOME_RECORDED",
+        at: now,
+        outcomeCode: nextOutcomeCode,
+        note: "Stage1 문자 발송 자동 시나리오(이재용 데모)",
+        by: detail.header.assigneeName,
+      });
+      appendTimeline({
+        type: "MESSAGE_SENT",
+        at: now,
+        summary: "STAGE1_SMS_AUTO_COMPLETE · 접촉 완료 처리",
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog(`${caseRecord.profile.name} 케이스 자동 시나리오 적용: 문자 발송 후 접촉 완료 처리`);
+
+      if (linkageAfter === "BOOKING_DONE") {
+        toast.success("문자 발송 후 접촉완료 처리 및 캘린더 일정 등록이 완료되었습니다.");
+      } else {
+        toast.error("접촉완료는 처리되었지만 캘린더 등록은 실패했습니다. 캘린더 재시도를 진행하세요.");
+      }
+
+      return true;
+    },
+    [
+      appendAuditLog,
+      appendTimeline,
+      caseRecord,
+      completeSuggestedTodo,
+      detail.header.assigneeName,
+      isStage2Mode,
+      isStage3Mode,
+      mode,
+    ],
+  );
 
   const handleGateFixAction = (gate: PolicyGate) => {
     const action = gate.fixAction?.action;
@@ -5193,6 +5927,7 @@ export function Stage1OpsDetail({
 
     if (caseRecord?.id && action === "APPLY_RESULT") {
       const resultValue = stage3ResultFromDiffLabel(stage3DiffDraft.resultLabel);
+      const now = nowIso();
       updateCaseStage3Evidence(
         caseRecord.id,
         {
@@ -5204,7 +5939,45 @@ export function Stage1OpsDetail({
         },
         detail.header.assigneeName,
       );
-      runCaseStage3Model(caseRecord.id, detail.header.assigneeName);
+
+      if (stage3StoredModelAvailable) {
+        setStage3ModelRunState((prev) => ({
+          ...prev,
+          status: "DONE",
+          startedAt: prev.startedAt ?? now,
+          updatedAt: now,
+          completedAt: now,
+          progress: 100,
+          etaSeconds: 0,
+        }));
+        appendAuditLog("Stage3 기존 모델 결과를 재사용했습니다.");
+      } else {
+        setStage3ModelRunState((prev) => ({
+          ...prev,
+          status: "RUNNING",
+          startedAt: now,
+          updatedAt: now,
+          completedAt: undefined,
+          progress: 4,
+          etaSeconds: null,
+          failureReason: undefined,
+        }));
+        appendTimeline({
+          type: "INFERENCE_REQUESTED",
+          stage: 3,
+          at: now,
+          by: detail.header.assigneeName,
+          summary: "Stage3 모델 실행 요청",
+        });
+        appendTimeline({
+          type: "INFERENCE_STARTED",
+          stage: 3,
+          at: now,
+          by: detail.header.assigneeName,
+          summary: "Stage3 모델 실행 시작",
+        });
+        appendAuditLog("Stage3 모델 실행 요청");
+      }
     }
 
     if (caseRecord?.id && action === "SCHEDULE") {
@@ -5919,12 +6692,14 @@ export function Stage1OpsDetail({
       let finalStatus: SmsDispatchStatus = smsResult;
 
       if (!outcomeModal.scheduled && target.phone && smsResult !== "FAILED") {
+        const smsStage = isStage2Mode ? "STAGE2" : isStage3Mode ? "STAGE3" : "STAGE1";
         const result = await sendSmsApiCommon({
           caseId: detail.header.caseId,
           citizenPhone: target.phone,
           templateId: smsTemplateId,
           renderedMessage: message,
           dedupeKey: `${detail.header.caseId}-${smsTemplateId}-${target.label}-${Date.now()}`,
+          stage: smsStage,
         });
         if (!result.success) {
           finalStatus = "FAILED";
@@ -6395,7 +7170,195 @@ export function Stage1OpsDetail({
   const missingCount = detail.contactFlowSteps.filter((step) => step.status === "MISSING").length;
   const warningCount = detail.contactFlowSteps.filter((step) => step.status === "WARNING").length;
   const preTriageReady = Boolean(detail.preTriageInput) && detail.header.dataQuality.level !== "EXCLUDE";
-  const stage1FlowCards = useStage1Flow(detail, mode, isStage2OpsView);
+  const stage2InferenceState = useMemo(
+    () =>
+      computeInferenceState({
+        caseId: detail.header.caseId,
+        stage: 2,
+        jobStatus: stage2ModelRunState.status,
+        progress: stage2ModelRunState.progress,
+        etaSeconds: stage2ModelRunState.etaSeconds,
+        startedAt: stage2ModelRunState.startedAt,
+        updatedAt: stage2ModelRunState.updatedAt,
+        completedAt: stage2ModelRunState.completedAt,
+        hasResult:
+          stage2ModelRunState.status === "DONE" ||
+          (stage2StoredModelAvailable && stage2ModelRunState.status !== "RUNNING"),
+        minDurationSec: stage2ModelRunState.minDurationSec,
+        maxDurationSec: stage2ModelRunState.maxDurationSec,
+        nowMs: nowTick,
+      }),
+    [
+      detail.header.caseId,
+      nowTick,
+      stage2ModelRunState.completedAt,
+      stage2ModelRunState.etaSeconds,
+      stage2ModelRunState.maxDurationSec,
+      stage2ModelRunState.minDurationSec,
+      stage2ModelRunState.progress,
+      stage2ModelRunState.startedAt,
+      stage2ModelRunState.status,
+      stage2ModelRunState.updatedAt,
+      stage2StoredModelAvailable,
+    ],
+  );
+  const stage3InferenceState = useMemo(
+    () =>
+      computeInferenceState({
+        caseId: detail.header.caseId,
+        stage: 3,
+        jobStatus: stage3ModelRunState.status,
+        progress: stage3ModelRunState.progress,
+        etaSeconds: stage3ModelRunState.etaSeconds,
+        startedAt: stage3ModelRunState.startedAt,
+        updatedAt: stage3ModelRunState.updatedAt,
+        completedAt: stage3ModelRunState.completedAt,
+        hasResult:
+          stage3ModelRunState.status === "DONE" ||
+          (stage3StoredModelAvailable && stage3ModelRunState.status !== "RUNNING"),
+        minDurationSec: stage3ModelRunState.minDurationSec,
+        maxDurationSec: stage3ModelRunState.maxDurationSec,
+        nowMs: nowTick,
+      }),
+    [
+      detail.header.caseId,
+      nowTick,
+      stage3ModelRunState.completedAt,
+      stage3ModelRunState.etaSeconds,
+      stage3ModelRunState.maxDurationSec,
+      stage3ModelRunState.minDurationSec,
+      stage3ModelRunState.progress,
+      stage3ModelRunState.startedAt,
+      stage3ModelRunState.status,
+      stage3ModelRunState.updatedAt,
+      stage3StoredModelAvailable,
+    ],
+  );
+  const stage2ModelAvailable = stage2InferenceState.jobStatus === "DONE";
+  const stage3ModelAvailable = stage3InferenceState.jobStatus === "DONE";
+  const stage3ResultEvidenceReadyForOps = Boolean(
+    stage3Evidence?.completed ||
+      (stage3DiffDraft.resultPerformedAt &&
+        stage3DiffDraft.resultSummary.trim() &&
+        stage3DiffDraft.biomarkerResultText?.trim() &&
+        stage3DiffDraft.imagingResultText?.trim()),
+  );
+  const stage2ConfirmedByState = Boolean(
+    stage2ConfirmedAt ||
+      ssotCase?.status === "CLASS_CONFIRMED" ||
+      ssotCase?.status === "NEXT_STEP_SET" ||
+      ssotCase?.operationStep === "CLASSIFIED" ||
+      ssotCase?.operationStep === "FOLLOW_UP" ||
+      ssotCase?.operationStep === "COMPLETED" ||
+      ssotCase?.stage === 3,
+  );
+  const loopEvents = useMemo(() => mapTimelineToEvents(detail.timeline), [detail.timeline]);
+  const opsLoopState = useMemo(() => {
+    if (isStage2OpsView) {
+      return computeOpsLoopState(loopEvents, {
+        stage: "stage2",
+        storedOpsStatus: detail.stage3?.headerMeta.opsStatus,
+        hasPlanConfirmed: stage2CaseWaitingForKickoff ? false : Boolean(detail.stage3?.riskReviewedAt),
+        hasResultReceived: stage2CaseWaitingForKickoff
+          ? false
+          : Boolean(
+              stage2ModelAvailable ||
+                stage2IntegrationState.receivedAt ||
+                stage2Evidence?.updatedAt ||
+                stage2Diagnosis.status !== "NOT_STARTED",
+            ),
+        hasResultValidated: stage2CaseWaitingForKickoff
+          ? false
+          : Boolean(stage2ModelAvailable || stage2Evidence?.completed || stage2Diagnosis.status === "COMPLETED"),
+        hasModelResult: stage2CaseWaitingForKickoff ? false : stage2ModelAvailable,
+        inferenceStatus: stage2InferenceState.jobStatus,
+        classificationConfirmed: stage2CaseWaitingForKickoff ? false : stage2ConfirmedByState,
+        nextStepDecided: stage2CaseWaitingForKickoff ? false : Boolean(stage2Diagnosis.nextStep),
+      });
+    }
+
+    if (mode === "stage2") {
+      return computeOpsLoopState(loopEvents, {
+        stage: "stage2",
+        hasPlanConfirmed: stage2CaseWaitingForKickoff ? false : preTriageReady && Boolean(detail.preTriageResult?.strategy),
+        hasResultReceived: stage2CaseWaitingForKickoff
+          ? false
+          : Boolean(
+              stage2ModelAvailable ||
+                stage2IntegrationState.receivedAt ||
+                stage2Evidence?.updatedAt ||
+                stage2Diagnosis.status !== "NOT_STARTED",
+            ),
+        hasResultValidated: stage2CaseWaitingForKickoff
+          ? false
+          : Boolean(stage2ModelAvailable || stage2Evidence?.completed || stage2Diagnosis.status === "COMPLETED"),
+        hasModelResult: stage2CaseWaitingForKickoff ? false : stage2ModelAvailable,
+        inferenceStatus: stage2InferenceState.jobStatus,
+        classificationConfirmed: stage2CaseWaitingForKickoff ? false : stage2ConfirmedByState,
+        nextStepDecided: stage2CaseWaitingForKickoff ? false : Boolean(stage2Diagnosis.nextStep),
+      });
+    }
+
+    if (mode === "stage3") {
+      if (stage3View && !isStage2OpsView) {
+        return toOpsLoopStateFromStage3View(stage3View);
+      }
+      return computeOpsLoopState(loopEvents, {
+        stage: "stage3",
+        storedOpsStatus: detail.stage3?.headerMeta.opsStatus,
+        hasPlanConfirmed: Boolean(detail.stage3?.riskReviewedAt),
+        hasResultReceived: stage3ResultEvidenceReadyForOps || stage3ModelAvailable,
+        hasResultValidated: stage3ResultEvidenceReadyForOps || stage3ModelAvailable,
+        hasModelResult: stage3ModelAvailable,
+        inferenceStatus: stage3InferenceState.jobStatus,
+        classificationConfirmed: Boolean(stage3LatestRiskReview?.at || detail.stage3?.riskReviewedAt),
+        nextStepDecided: Boolean(detail.stage3?.planUpdatedAt || detail.stage3?.headerMeta.nextTrackingContactAt),
+        referralConfirmed: detail.linkageStatus === "BOOKING_DONE" || detail.linkageStatus === "REFERRAL_CREATED",
+      });
+    }
+
+    return computeOpsLoopState(loopEvents, {
+      stage: "stage1",
+      hasPlanConfirmed: preTriageReady && Boolean(detail.preTriageResult?.strategy),
+      hasResultReceived: detail.contactExecution.status !== "NOT_STARTED",
+      hasResultValidated: Boolean(detail.contactExecution.lastOutcomeCode || detail.contactExecution.lastResponseAt),
+      hasModelResult: Boolean(detail.preTriageResult),
+      classificationConfirmed: Boolean(detail.contactExecution.lastOutcomeCode || detail.contactExecution.lastResponseAt),
+      nextStepDecided:
+        detail.linkageStatus !== "NOT_CREATED" ||
+        detail.contactExecution.status === "DONE" ||
+        detail.contactExecution.status === "STOPPED",
+    });
+  }, [
+    detail.contactExecution.lastOutcomeCode,
+    detail.contactExecution.lastResponseAt,
+    detail.contactExecution.status,
+    detail.linkageStatus,
+    detail.preTriageResult,
+    detail.stage3?.headerMeta.nextTrackingContactAt,
+    detail.stage3?.headerMeta.opsStatus,
+    detail.stage3?.planUpdatedAt,
+    detail.stage3?.riskReviewedAt,
+    isStage2OpsView,
+    loopEvents,
+    mode,
+    preTriageReady,
+    stage3View,
+    stage2ConfirmedByState,
+    stage2Diagnosis.nextStep,
+    stage2Diagnosis.status,
+    stage2Evidence?.completed,
+    stage2Evidence?.updatedAt,
+    stage2InferenceState.jobStatus,
+    stage2IntegrationState.receivedAt,
+    stage2CaseWaitingForKickoff,
+    stage2ModelAvailable,
+    stage3InferenceState.jobStatus,
+    stage3LatestRiskReview?.at,
+    stage3ModelAvailable,
+    stage3ResultEvidenceReadyForOps,
+  ]);
+  const stage1FlowCards = useStage1Flow(detail, mode, isStage2OpsView, opsLoopState);
   const stage3RiskSummary = detail.stage3?.transitionRisk;
   const stage3Programs = detail.stage3?.programs ?? [];
   const stage3FilteredPrograms = useMemo(() => {
@@ -6452,6 +7415,18 @@ export function Stage1OpsDetail({
   const agentMaxRetries = detail.contactPlan?.maxRetryPolicy.maxRetries ?? 2;
   const agentTemplateVersion = detail.contactPlan?.templateId ?? (isStage2Mode ? "S2_CONTACT_BASE" : isStage3Mode ? "S3_CONTACT_BASE" : "S1_CONTACT_BASE");
   const stage2Route = ssotCase?.stage2Route ?? (stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "HOSPITAL" : "CENTER");
+  const openStage3Step2Panel = useCallback((panel: Stage3Step2PanelKey) => {
+    setStage3Step2ActivePanel(panel);
+    if (panel === "RESULT") {
+      setStage3ShowResultCollection(true);
+    }
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        const target = document.getElementById(`stage3-step2-panel-${panel.toLowerCase()}`);
+        target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }, []);
   const stage2PlanItems = usePlanItems({
     routeType: stage2PlanRouteDraft as Stage2PlanRoute,
     hospitalName: stage2HospitalDraft,
@@ -6679,8 +7654,8 @@ export function Stage1OpsDetail({
   const stage2RequiredTestCount = stage2Route === "HOSPITAL" ? 4 : 3;
   const stage2CompletedCount = stage2Evidence ? stage2RequiredTestCount - stage2Evidence.missing.length : countStage2CompletedTests(stage2Diagnosis.tests);
   const stage2CompletionPct = Math.round((Math.max(0, stage2CompletedCount) / stage2RequiredTestCount) * 100);
-  const stage2DisplayLabel = stage2ModelAvailable ? stage2ClassLabelFromModel(ssotModel2?.predictedLabel) : undefined;
-  const stage2DisplayMciStage = stage2ModelAvailable ? stage2MciStageFromModel(ssotModel2?.mciBand) : undefined;
+  const stage2DisplayLabel = stage2ClassLabelFromModel(ssotModel2?.predictedLabel) ?? stage2ModelRunState.recommendedLabel;
+  const stage2DisplayMciStage = stage2MciStageFromModel(ssotModel2?.mciBand);
   const stage3CaseResultLabel: "정상" | "MCI" | "치매" = stage2DisplayLabel ?? "MCI";
   const stage3MciSeverity: "양호" | "적정" | "위험" | undefined =
     caseRecord?.risk === "고" ? "위험" : caseRecord?.risk === "저" ? "양호" : "적정";
@@ -6712,12 +7687,9 @@ export function Stage1OpsDetail({
   const stage2BookingWaitingCount =
     Number(detail.linkageStatus !== "BOOKING_DONE") + Number(stage2Diagnosis.status !== "COMPLETED");
   const stage2ClassificationConfirmed = Boolean(
-    stage2ConfirmedAt ||
-      ssotCase?.status === "CLASS_CONFIRMED" ||
-      ssotCase?.status === "NEXT_STEP_SET" ||
-      ssotCase?.stage === 3,
+    stage2ConfirmedByState,
   );
-  const stage2ModelReady = stage2ModelAvailable || stage2ModelRunState.status === "DONE";
+  const stage2ModelReady = stage2InferenceState.jobStatus === "DONE";
   const stage2RequiredDataPct = Math.max(0, Math.round(((stage2RequiredTestCount + 1 - stage2MissingRequirements.length) / (stage2RequiredTestCount + 1)) * 100));
   const stage2IntegrationStatus = useMemo(() => {
     const hasBooking = detail.linkageStatus !== "NOT_CREATED";
@@ -6725,12 +7697,8 @@ export function Stage1OpsDetail({
     return deriveStage2ModelStatus(stage2ResultMissingCount, hasBooking, hasReceived);
   }, [detail.linkageStatus, stage2Diagnosis.status, stage2Evidence?.updatedAt, stage2IntegrationState.receivedAt, stage2ResultMissingCount]);
   const stage2IntegrationDisplayStatus =
-    stage2ModelRunState.status === "DONE" && stage2ResultMissingCount === 0 ? "READY" : stage2IntegrationStatus;
-  const stage2ModelRecommendedLabel = stage2ModelAvailable
-    ? stage2DisplayLabel
-    : stage2ModelRunState.status === "DONE"
-      ? stage2ModelRunState.recommendedLabel
-      : undefined;
+    stage2InferenceState.jobStatus === "DONE" && stage2ResultMissingCount === 0 ? "READY" : stage2IntegrationStatus;
+  const stage2ModelRecommendedLabel = stage2ModelReady ? stage2DisplayLabel ?? stage2ModelRunState.recommendedLabel : undefined;
   const stage2ClassificationIsOverride =
     Boolean(stage2ModelRecommendedLabel) && stage2ClassificationDraft !== stage2ModelRecommendedLabel;
   const stage2OverrideMissing = stage2ClassificationIsOverride && stage2ClassificationOverrideReason.trim().length === 0;
@@ -6758,6 +7726,151 @@ export function Stage1OpsDetail({
         : [],
     [stage3CurrentStepErrors, stage3ErrorOrderByStep, stage3TaskModalStep],
   );
+
+  useEffect(() => {
+    if (stage2ModelRunState.status !== "RUNNING") return;
+    if (stage2InferenceState.jobStatus !== "RUNNING" && stage2InferenceState.jobStatus !== "PENDING") return;
+    const shouldFinish = stage2InferenceState.progress >= 95;
+    if (!shouldFinish) return;
+
+    const now = nowIso();
+    const recommended = stage2ModelRunState.recommendedLabel ?? deriveStage2ModelRecommendation(stage2Diagnosis.tests);
+    let didComplete = false;
+    setStage2ModelRunState((prev) => {
+      if (prev.status !== "RUNNING") return prev;
+      didComplete = true;
+      return {
+        ...prev,
+        status: "DONE",
+        updatedAt: now,
+        completedAt: now,
+        progress: 100,
+        etaSeconds: 0,
+        recommendedLabel: recommended,
+      };
+    });
+    if (!didComplete) return;
+
+    let syncOk = true;
+    if (caseRecord?.id) {
+      syncOk = runCaseStage2Model(caseRecord.id, detail.header.assigneeName, {
+        labelOverride: recommended,
+      });
+    }
+    if (!syncOk) {
+      setStage2ModelRunState((prev) => ({
+        ...prev,
+        status: "FAILED",
+        updatedAt: now,
+        completedAt: now,
+        failureReason: "STAGE2_GATE_FAILED",
+      }));
+      appendTimeline({
+        type: "INFERENCE_FAILED",
+        stage: 2,
+        at: now,
+        by: detail.header.assigneeName,
+        summary: "Stage2 모델 실행 실패",
+        reason: "필수 검사/결과 조건 미충족",
+      });
+      appendAuditLog("Stage2 모델 실행 실패: 게이트 조건 미충족");
+      return;
+    }
+
+    appendTimeline({
+      type: "INFERENCE_COMPLETED",
+      stage: 2,
+      at: now,
+      by: detail.header.assigneeName,
+      summary: `Stage2 모델 실행 완료 · 추천 ${recommended}`,
+      progress: 100,
+      etaSeconds: 0,
+    });
+    appendTimeline({
+      type: "STAGE2_RESULTS_RECORDED",
+      at: now,
+      by: detail.header.assigneeName,
+      summary: `모델 산출 완료: 추천 ${recommended} (운영 참고)`,
+    });
+    appendAuditLog(`Stage2 모델 산출 완료: 추천 ${recommended}`);
+  }, [
+    appendAuditLog,
+    caseRecord?.id,
+    detail.header.assigneeName,
+    runCaseStage2Model,
+    stage2Diagnosis.tests,
+    stage2InferenceState.jobStatus,
+    stage2InferenceState.progress,
+    stage2ModelRunState.recommendedLabel,
+    stage2ModelRunState.status,
+  ]);
+
+  useEffect(() => {
+    if (stage3ModelRunState.status !== "RUNNING") return;
+    if (stage3InferenceState.jobStatus !== "RUNNING" && stage3InferenceState.jobStatus !== "PENDING") return;
+    const shouldFinish = stage3InferenceState.progress >= 95;
+    if (!shouldFinish) return;
+
+    const now = nowIso();
+    let didComplete = false;
+    setStage3ModelRunState((prev) => {
+      if (prev.status !== "RUNNING") return prev;
+      didComplete = true;
+      return {
+        ...prev,
+        status: "DONE",
+        updatedAt: now,
+        completedAt: now,
+        progress: 100,
+        etaSeconds: 0,
+      };
+    });
+    if (!didComplete) return;
+
+    let syncOk = true;
+    if (caseRecord?.id) {
+      syncOk = runCaseStage3Model(caseRecord.id, detail.header.assigneeName);
+    }
+    if (!syncOk) {
+      setStage3ModelRunState((prev) => ({
+        ...prev,
+        status: "FAILED",
+        updatedAt: now,
+        completedAt: now,
+        failureReason: "STAGE3_GATE_FAILED",
+      }));
+      appendTimeline({
+        type: "INFERENCE_FAILED",
+        stage: 3,
+        at: now,
+        by: detail.header.assigneeName,
+        summary: "Stage3 모델 실행 실패",
+        reason: "Stage2 확정 결과/후속 데이터 조건 미충족",
+      });
+      appendAuditLog("Stage3 모델 실행 실패: 게이트 조건 미충족");
+      return;
+    }
+
+    appendTimeline({
+      type: "INFERENCE_COMPLETED",
+      stage: 3,
+      at: now,
+      by: detail.header.assigneeName,
+      summary: "Stage3 모델 실행 완료",
+      progress: 100,
+      etaSeconds: 0,
+    });
+    appendAuditLog("Stage3 모델 산출 완료");
+  }, [
+    appendAuditLog,
+    caseRecord?.id,
+    detail.header.assigneeName,
+    runCaseStage3Model,
+    stage3InferenceState.jobStatus,
+    stage3InferenceState.progress,
+    stage3ModelRunState.status,
+  ]);
+
   const focusStage2ResultInput = useCallback(() => {
     if (typeof window === "undefined") return;
     const target =
@@ -7308,7 +8421,7 @@ export function Stage1OpsDetail({
         appendAuditLog(`STAGE2_PLAN_CONFIRMED: ${summary}`);
         setStage2FieldErrors({});
         toast.success("STEP1 검사 계획이 확정되었습니다.");
-        moveStage3TaskStep(1);
+        setStage3TaskModalStep("CONTACT_EXECUTION");
         return;
       }
       const precheckErrors: Stage3TaskFieldErrors = {};
@@ -7388,7 +8501,11 @@ export function Stage1OpsDetail({
         nextAction: isStage2OpsView ? "UPDATE_PLAN" : "RECOMMEND_DIFF",
       });
       toast.success(isStage2OpsView ? "STEP1 근거 검토가 저장되었습니다." : "STEP1 리뷰가 저장되었습니다.");
-      moveStage3TaskStep(1);
+      if (isStage2OpsView) {
+        setStage3TaskModalStep("CONTACT_EXECUTION");
+      } else {
+        moveStage3TaskStep(1);
+      }
       return;
     }
 
@@ -7406,17 +8523,30 @@ export function Stage1OpsDetail({
           toast.error("STEP2 누락/오류 필드를 먼저 보완해 주세요.");
           return;
         }
+        const saveOk = saveStage2TestInputs();
+        if (!saveOk) return;
+        const autoPlanConfirmed = !stage2Step1Reviewed;
         setDetail((prev) => {
           if (!prev.stage3) return prev;
           return {
             ...prev,
             stage3: {
               ...prev.stage3,
+              riskReviewedAt: prev.stage3.riskReviewedAt ?? now,
               diffPathStatus: "SCHEDULED",
             },
           };
         });
-        saveStage2TestInputs();
+        if (autoPlanConfirmed) {
+          const autoSummary = `STEP2 반영 기반 자동 계획 확정 · 경로 ${stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "협약병원 의뢰" : "센터 직접 수행"}`;
+          appendTimeline({
+            type: "STAGE2_PLAN_CONFIRMED",
+            at: now,
+            by: detail.header.assigneeName,
+            summary: autoSummary,
+          });
+          appendAuditLog(`STAGE2_PLAN_CONFIRMED(AUTO): ${autoSummary}`);
+        }
         const summary = `필수 검사 입력 완료 (${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount})`;
         appendTimeline({
           type: "STAGE2_RESULTS_RECORDED",
@@ -7427,7 +8557,7 @@ export function Stage1OpsDetail({
         appendAuditLog(`STAGE2_RESULTS_RECORDED: ${summary}`);
         setStage2FieldErrors({});
         toast.success("STEP2 검사 결과 입력이 완료되었습니다.");
-        moveStage3TaskStep(1);
+        setStage3TaskModalStep("RESPONSE_HANDLING");
         return;
       }
       if (stage3PendingApprovalCount > 0) {
@@ -7536,7 +8666,7 @@ export function Stage1OpsDetail({
         appendAuditLog(`STAGE2_CLASS_CONFIRMED: ${summary}`);
         setStage2FieldErrors({});
         toast.success("STEP3 분류 확정이 완료되었습니다.");
-        moveStage3TaskStep(1);
+        setStage3TaskModalStep("FOLLOW_UP");
         return;
       }
       if (!stage3DiffReadyForRisk) {
@@ -7701,6 +8831,7 @@ export function Stage1OpsDetail({
     stage2PlanRouteDraft,
     stage2ResultMissingCount,
     stage2ScheduleDraft,
+    stage2Step1Reviewed,
     applyStage2ValidationErrors,
     applyStage3ValidationErrors,
     confirmStage2Classification,
@@ -7889,10 +9020,14 @@ export function Stage1OpsDetail({
         mode === "stage3" && detail.stage3
           ? {
               opsStatus: detail.stage3.headerMeta.opsStatus,
+              stage3Type: stage3View?.source.profile?.stage3Type,
+              originStage2Result: stage3View?.source.profile?.originStage2Result,
               risk2yNowPct: isStage2OpsView
                 ? stage2OpsDelayRiskPct ?? 0
                 : stage3ModelAvailable
-                  ? toPercentValue(detail.stage3.transitionRisk.risk2y_now)
+                  ? stage3View?.display.riskBadge.kind === "ready"
+                    ? stage3View.display.riskBadge.riskPct
+                    : toPercentValue(detail.stage3.transitionRisk.risk2y_now)
                   : undefined,
               risk2yLabel: isStage2OpsView
                 ? stage2OpsRiskLabel
@@ -7941,6 +9076,7 @@ export function Stage1OpsDetail({
     stage2TargetAt,
     stage2TargetDelayDays,
     stage2ModelAvailable,
+    stage3View,
     stage3ModelAvailable,
     stage2GateMissing,
     stage3GateMissing,
@@ -7975,28 +9111,56 @@ export function Stage1OpsDetail({
       {
         key: "STEP 1",
         title: "검사 수행 관리",
-        status: detail.reservationInfo?.scheduledAt ? "DONE" : detail.linkageStatus !== "NOT_CREATED" ? "IN_PROGRESS" : "PENDING",
-        reason: detail.reservationInfo?.scheduledAt
-          ? `예약 ${formatDateTime(detail.reservationInfo.scheduledAt)}`
-          : "예약/수행 상태 점검 필요",
+        status: stage2CaseWaitingForKickoff
+          ? "PENDING"
+          : detail.reservationInfo?.scheduledAt
+            ? "DONE"
+            : detail.linkageStatus !== "NOT_CREATED"
+              ? "IN_PROGRESS"
+              : "PENDING",
+        reason: stage2CaseWaitingForKickoff
+          ? "Step1 검토 대기"
+          : detail.reservationInfo?.scheduledAt
+            ? `예약 ${formatDateTime(detail.reservationInfo.scheduledAt)}`
+            : "예약/수행 상태 점검 필요",
       },
       {
         key: "STEP 2",
         title: "검사 결과 입력",
-        status: stage2CompletedCount >= stage2RequiredTestCount ? "DONE" : stage2CompletedCount > 0 ? "IN_PROGRESS" : "PENDING",
-        reason: `필수 ${stage2RequiredTestCount}항목 중 ${stage2CompletedCount}개 완료`,
+        status: stage2CaseWaitingForKickoff
+          ? "PENDING"
+          : stage2CompletedCount >= stage2RequiredTestCount
+            ? "DONE"
+            : stage2CompletedCount > 0
+              ? "IN_PROGRESS"
+              : "PENDING",
+        reason: stage2CaseWaitingForKickoff
+          ? "Step1 완료 후 진행 가능"
+          : `필수 ${stage2RequiredTestCount}항목 중 ${stage2CompletedCount}개 완료`,
       },
       {
         key: "STEP 3",
         title: "분류 확정",
-        status: stage2ConfirmedAt ? "DONE" : stage2CanConfirm ? "IN_PROGRESS" : "BLOCKED",
-        reason: stage2ConfirmedAt ? "분류 확정 완료" : stage2CanConfirm ? "확정 가능" : "요건 미충족",
+        status: stage2CaseWaitingForKickoff ? "BLOCKED" : stage2ClassificationConfirmed ? "DONE" : stage2CanConfirm ? "IN_PROGRESS" : "BLOCKED",
+        reason: stage2CaseWaitingForKickoff
+          ? "Step2 완료 후 진행 가능"
+          : stage2ClassificationConfirmed
+            ? "분류 확정 완료"
+            : stage2CanConfirm
+              ? "확정 가능"
+              : "요건 미충족",
       },
       {
         key: "STEP 4",
         title: "다음 단계 결정",
-        status: stage2Diagnosis.nextStep ? "DONE" : stage2ConfirmedAt ? "IN_PROGRESS" : "PENDING",
-        reason: stage2Diagnosis.nextStep ? `선택 ${stage2Diagnosis.nextStep}` : "분류 확정 후 진행",
+        status: stage2CaseWaitingForKickoff
+          ? "PENDING"
+          : stage2Diagnosis.nextStep
+            ? "DONE"
+            : stage2ClassificationConfirmed
+              ? "IN_PROGRESS"
+              : "PENDING",
+        reason: stage2CaseWaitingForKickoff ? "Step3 완료 후 진행" : stage2Diagnosis.nextStep ? `선택 ${stage2Diagnosis.nextStep}` : "분류 확정 후 진행",
       },
     ] as const;
 
@@ -8313,21 +9477,21 @@ export function Stage1OpsDetail({
               <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
                 <button
                   onClick={() => setStage2NextStep("FOLLOWUP_2Y", "정상 분류로 2년 후 선별검사 일정 생성")}
-                  disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "정상"}
+                  disabled={!stage2ClassificationConfirmed || stage2CurrentLabel !== "정상"}
                   className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-white disabled:opacity-50"
                 >
                   정상 → 2년 후 선별
                 </button>
                 <button
                   onClick={() => setStage2NextStep("STAGE3", "MCI/치매 분류로 Stage3 진입 준비")}
-                  disabled={!stage2ConfirmedAt || !stage2NeedsStage3(stage2CurrentLabel)}
+                  disabled={!stage2ClassificationConfirmed || !stage2NeedsStage3(stage2CurrentLabel)}
                   className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
                 >
                   Stage3 진입
                 </button>
                 <button
                   onClick={() => setStage2NextStep("DIFF_PATH", "치매 분류로 감별검사 경로 활성화")}
-                  disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "치매"}
+                  disabled={!stage2ClassificationConfirmed || stage2CurrentLabel !== "치매"}
                   className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
                 >
                   감별검사 경로
@@ -8414,6 +9578,7 @@ export function Stage1OpsDetail({
             listClassName="max-h-[360px] overflow-y-auto pr-1"
             mode={mode}
             stage2OpsView={isStage2OpsView}
+            stage3Type={resolvedStage3TypeForUi}
           />
           <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
             <h3 className="text-sm font-bold text-slate-900">감사 로그</h3>
@@ -8467,13 +9632,21 @@ export function Stage1OpsDetail({
             stage2ClassificationConfirmed={stage2ClassificationConfirmed}
             stage2ModelAvailable={stage2ModelAvailable}
             stage3ModelAvailable={stage3ModelAvailable}
+            stage3Type={resolvedStage3TypeForUi}
             stage2MissingEvidence={stage2GateMissing}
             stage3MissingEvidence={stage3GateMissing}
             onOpenStage2Input={focusStage2ResultInput}
             onOpenStage3Input={focusStage3ResultInput}
           />
 
-          <ContactFlowPanel flowCards={stage1FlowCards} onAction={handleFlowAction} mode={mode} stage2OpsView={isStage2OpsView} />
+          <ContactFlowPanel
+            flowCards={stage1FlowCards}
+            onAction={handleFlowAction}
+            mode={mode}
+            stage2OpsView={isStage2OpsView}
+            opsLoopState={opsLoopState}
+            storedOpsStatus={isStage3Mode ? detail.stage3?.headerMeta.opsStatus ?? ssotCase?.status : ssotCase?.status}
+          />
 
           {!isStage3Mode ? (
             <ServiceOperationsBoard
@@ -8712,7 +9885,13 @@ export function Stage1OpsDetail({
                 </section>
               ) : null}
 
-              <RiskSignalEvidencePanel evidence={detail.riskEvidence} quality={detail.header.dataQuality} mode={mode} stage2OpsView={isStage2OpsView} />
+              <RiskSignalEvidencePanel
+                evidence={detail.riskEvidence}
+                quality={detail.header.dataQuality}
+                mode={mode}
+                stage2OpsView={isStage2OpsView}
+                stage3Type={resolvedStage3TypeForUi}
+              />
 
               <ContactTimeline
                 timeline={filteredTimeline}
@@ -8721,6 +9900,7 @@ export function Stage1OpsDetail({
                 listClassName="max-h-[300px] overflow-y-auto pr-1"
                 mode={mode}
                 stage2OpsView={isStage2OpsView}
+                stage3Type={resolvedStage3TypeForUi}
               />
             </>
           ) : (
@@ -8730,6 +9910,7 @@ export function Stage1OpsDetail({
                 quality={detail.header.dataQuality}
                 mode={mode}
                 stage2OpsView={isStage2OpsView}
+                stage3Type={resolvedStage3TypeForUi}
               />
 
               <ContactTimeline
@@ -8739,6 +9920,7 @@ export function Stage1OpsDetail({
                 listClassName="max-h-[340px] overflow-y-auto pr-1"
                 mode={mode}
                 stage2OpsView={isStage2OpsView}
+                stage3Type={resolvedStage3TypeForUi}
               />
 
               <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -9290,15 +10472,30 @@ export function Stage1OpsDetail({
                           )}
                         </div>
                         <div
-                          title={isStage2OpsView ? "진단 지연 위험(운영 참고)입니다." : "2년 전환위험 현재값입니다. 담당자 확인 전 운영 참고용입니다."}
+                          title={isStage2OpsView
+                            ? "진단 지연 위험(운영 참고)입니다."
+                            : stage3View?.source.profile?.stage3Type === "AD_MANAGEMENT"
+                              ? "현재 위험지수(운영 참고)입니다. 담당자 확인 전 운영 참고용입니다."
+                              : "2년 전환위험 현재값입니다. 담당자 확인 전 운영 참고용입니다."}
                           className="rounded-md border border-indigo-100 bg-white p-2 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
                         >
-                          <p className="text-[10px] font-semibold text-indigo-600">{isStage2OpsView ? "진단 지연 위험(현재)" : "Stage3 전환위험(현재)"}</p>
+                          <p className="text-[10px] font-semibold text-indigo-600">
+                            {isStage2OpsView
+                              ? "진단 지연 위험(현재)"
+                              : stage3View?.source.profile?.stage3Type === "AD_MANAGEMENT"
+                                ? "Stage3 현재 위험지수(현재)"
+                                : "Stage3 전환위험(현재)"}
+                          </p>
                           <p className="mt-1 text-xs font-bold text-slate-900">
                             {stage3RiskNowPct == null ? "확실하지 않음(데이터 없음)" : `${stage3RiskNowPct}%`}
                           </p>
                           <p className="mt-1 text-[10px] text-slate-500">
-                            {isStage2OpsView ? "진행 위험" : "전환위험"} {stage3ModelAvailable ? opsStats.stage3.risk2yLabel ?? "-" : "결과대기"}
+                            {isStage2OpsView
+                              ? "진행 위험"
+                              : stage3View?.source.profile?.stage3Type === "AD_MANAGEMENT"
+                                ? "현재 위험지수"
+                                : "전환위험"}{" "}
+                            {stage3ModelAvailable ? opsStats.stage3.risk2yLabel ?? "-" : "결과대기"}
                           </p>
                         </div>
                         <div
@@ -9381,9 +10578,11 @@ export function Stage1OpsDetail({
                             </article>
 
                             <article className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                              <p className="text-[10px] font-semibold text-slate-700">Stage3 전환위험/상태</p>
+                              <p className="text-[10px] font-semibold text-slate-700">
+                                {stage3View?.source.profile?.stage3Type === "AD_MANAGEMENT" ? "Stage3 현재 위험지수/상태" : "Stage3 전환위험/상태"}
+                              </p>
                               <p className="mt-1 text-[11px] text-slate-700">
-                                전환위험:{" "}
+                                {stage3View?.source.profile?.stage3Type === "AD_MANAGEMENT" ? "현재 위험지수:" : "전환위험:"}{" "}
                                 <strong>
                                   {stage3ModelAvailable ? opsStats.stage3.risk2yLabel ?? "미확정" : "결과대기"} ({stage3RiskNowPct == null ? "-" : `${stage3RiskNowPct}%`})
                                 </strong>
@@ -9667,14 +10866,6 @@ export function Stage1OpsDetail({
             {stage3TaskModalStep === "CONTACT_EXECUTION"
               ? (() => {
                   const diffStatus = detail.stage3?.diffPathStatus ?? "NONE";
-                  const flowItems: Array<{ key: keyof Stage3Step2FlowState; label: string }> = [
-                    { key: "consultStarted", label: "1) 상담 시작" },
-                    { key: "infoCollected", label: "2) 정보 수집" },
-                    { key: "ragGenerated", label: "3) RAG 자동기록" },
-                    { key: "bookingConfirmed", label: "4) 예약 확정" },
-                    { key: "messageSent", label: "5) 확인 문자" },
-                    { key: "calendarSynced", label: "6) 캘린더 등록" },
-                  ];
                   if (isStage2OpsView) {
                     const stage2Step2Errors = stage2ErrorSummaryEntries.filter(
                       (entry) =>
@@ -9695,12 +10886,24 @@ export function Stage1OpsDetail({
                     const integrationHistory = detail.timeline
                       .filter((event) =>
                         event.type === "STAGE2_RESULTS_RECORDED" ||
+                        event.type === "STAGE2_STEP2_AUTOFILL_APPLIED" ||
+                        event.type === "STAGE2_MANUAL_EDIT_APPLIED" ||
                         event.type === "DIFF_RESULT_APPLIED" ||
                         event.type === "DIFF_REFER_CREATED" ||
                         event.type === "DIFF_SCHEDULED" ||
                         event.type === "MESSAGE_SENT",
                       )
                       .slice(0, 6);
+                    const stage2AutoFillSourceMeta = stage2AutoFillPayload
+                      ? {
+                          RECEIVED: { label: "수신", chip: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+                          MAPPED: { label: "매핑", chip: "border-blue-200 bg-blue-50 text-blue-700" },
+                          SEEDED: { label: "자동 기입", chip: "border-violet-200 bg-violet-50 text-violet-700" },
+                        }[stage2AutoFillPayload.source]
+                      : null;
+                    const manualChangedFields = collectStage2ManualChangedFields();
+                    const manualChangedKeys = Object.keys(manualChangedFields);
+                    const manualReasonRequired = stage2ManualEditEnabled || manualChangedKeys.length > 0;
                     const inputLocked = !stage2ManualEditEnabled;
                     const syncAt = stage2IntegrationState.lastSyncedAt ?? stage2Evidence?.updatedAt;
                     const receivedAt = stage2IntegrationState.receivedAt ?? stage2Evidence?.updatedAt;
@@ -9708,20 +10911,64 @@ export function Stage1OpsDetail({
                       { label: "연계 결과 수신 확인", done: Boolean(receivedAt) },
                       { label: "누락/이상치 검증", done: stage2ResultMissingCount === 0 },
                       { label: "전문의 소견 확인", done: Boolean(stage2Diagnosis.tests.specialist) },
-                      { label: "반영 후 STEP3 모델 산출 요청", done: stage2ModelRunState.status === "DONE" },
+                      { label: "반영 후 STEP3 모델 산출 요청", done: stage2InferenceState.jobStatus === "DONE" },
                     ];
 
                     return (
-                      <section id="stage2-modal-step2-input" className="rounded-lg border border-gray-200 bg-white p-4">
-                        <h4 className="text-sm font-bold text-slate-900">검사 결과 수신/검증/반영</h4>
-                        <p className="mt-1 text-[11px] text-gray-600">
-                          연계병원 결과를 자동 수신해 검증 후 반영합니다. 수동 수정은 사유 기록 후에만 가능합니다.
-                        </p>
+                      <section id="stage2-modal-step2-input" className="rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-4 shadow-sm">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900">STEP2 · 검사 결과 수신/검증/반영</h4>
+                            <p className="mt-1 text-[11px] text-slate-600">
+                              연계병원 결과를 수신한 뒤 검증하고, 담당자 확인으로 반영합니다.
+                            </p>
+                          </div>
+                          <span className={cn("rounded-full border px-2.5 py-1 text-[10px] font-semibold", integrationChip.chip)}>
+                            연계 상태 {integrationChip.label}
+                          </span>
+                        </div>
+                        {stage2AutoFillLoading ? (
+                          <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                            자동 기입값을 동기화하는 중입니다...
+                          </div>
+                        ) : null}
+                        {stage2AutoFillError ? (
+                          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                            {stage2AutoFillError}
+                          </div>
+                        ) : null}
+                        {stage2AutoFillPayload && stage2AutoFillSourceMeta ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+                            <span className="font-semibold text-slate-800">자동 기입 출처</span>
+                            <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", stage2AutoFillSourceMeta.chip)}>
+                              {stage2AutoFillSourceMeta.label}
+                            </span>
+                            <span className="text-slate-500">동기화 {formatDateTime(stage2AutoFillPayload.syncedAt)}</span>
+                          </div>
+                        ) : null}
                         <div className="mt-3">
                           <StepChecklist items={STAGE2_TASK_CHECKLIST.CONTACT_EXECUTION} />
                         </div>
 
-                        <div className="mt-3 rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+                          {step2Tasks.map((task) => (
+                            <article
+                              key={task.label}
+                              className={cn(
+                                "rounded-lg border px-2.5 py-2 text-[11px]",
+                                task.done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700",
+                              )}
+                            >
+                              <p className="font-semibold">{task.done ? "완료" : "대기"}</p>
+                              <p className="mt-1">{task.label}</p>
+                            </article>
+                          ))}
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[320px,1fr]">
+                          <div className="space-y-3">
+
+                        <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <p className="text-xs font-semibold text-indigo-900">연계 상태</p>
                             <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", integrationChip.chip)}>
@@ -9748,13 +10995,21 @@ export function Stage1OpsDetail({
                               </p>
                             </div>
                           </div>
-                          <div className="mt-2 flex flex-wrap gap-1">
+                          <div className="mt-2 grid grid-cols-1 gap-1">
                             <button
                               type="button"
                               onClick={() => {
                                 const now = nowIso();
                                 setStage2IntegrationState((prev) => ({ ...prev, lastSyncedAt: now }));
-                                setStage2ModelRunState({ status: "PENDING", updatedAt: now });
+                                setStage2ModelRunState((prev) => ({
+                                  ...prev,
+                                  status: "PENDING",
+                                  updatedAt: now,
+                                  startedAt: undefined,
+                                  completedAt: undefined,
+                                  progress: 0,
+                                  etaSeconds: null,
+                                }));
                                 appendTimeline({
                                   type: "MESSAGE_SENT",
                                   at: now,
@@ -9764,7 +11019,7 @@ export function Stage1OpsDetail({
                                 appendAuditLog("Stage2 결과 재요청 실행");
                                 toast.success("결과 재요청 이벤트를 기록했습니다.");
                               }}
-                              className="rounded border border-blue-200 bg-white px-2 py-1 text-[10px] font-semibold text-blue-700"
+                              className="rounded border border-blue-200 bg-white px-2 py-1 text-[10px] font-semibold text-blue-700 hover:bg-blue-50"
                             >
                               결과 재요청
                             </button>
@@ -9774,25 +11029,31 @@ export function Stage1OpsDetail({
                                 const now = nowIso();
                                 setStage2IntegrationState((prev) => ({ ...prev, lastSyncedAt: now }));
                                 if (stage2ResultMissingCount > 0) {
-                                  setStage2ModelRunState({ status: "PENDING", updatedAt: now });
+                                  setStage2ModelRunState((prev) => ({
+                                    ...prev,
+                                    status: "PENDING",
+                                    updatedAt: now,
+                                    startedAt: undefined,
+                                    completedAt: undefined,
+                                    progress: 0,
+                                    etaSeconds: null,
+                                  }));
                                 }
                                 appendAuditLog("Stage2 최신화 실행");
                                 toast.success("최신화 시각을 갱신했습니다.");
                               }}
-                              className="rounded border border-indigo-200 bg-white px-2 py-1 text-[10px] font-semibold text-indigo-700"
+                              className="rounded border border-indigo-200 bg-white px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-50"
                             >
                               최신화
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => setStage2ReceiveHistoryOpen((prev) => !prev)}
-                              className="rounded border border-slate-200 bg-white px-2 py-1 text-[10px] font-semibold text-slate-700"
-                            >
-                              수신 이력 보기
-                            </button>
                           </div>
-                          {stage2ReceiveHistoryOpen ? (
-                            <div className="mt-2 space-y-1 rounded border border-indigo-100 bg-white p-2">
+                          <details
+                            open={stage2ReceiveHistoryOpen}
+                            onToggle={(event) => setStage2ReceiveHistoryOpen((event.target as HTMLDetailsElement).open)}
+                            className="mt-2 rounded border border-indigo-100 bg-white p-2"
+                          >
+                            <summary className="cursor-pointer text-[10px] font-semibold text-slate-700">수신 이력 보기</summary>
+                            <div className="mt-2 space-y-1">
                               {integrationHistory.length > 0 ? (
                                 integrationHistory.map((event, idx) => (
                                   <div key={`${event.at}-${idx}`} className="rounded border border-slate-200 px-2 py-1 text-[10px] text-slate-600">
@@ -9804,11 +11065,11 @@ export function Stage1OpsDetail({
                                 <p className="text-[10px] text-slate-500">수신 이력이 없습니다.</p>
                               )}
                             </div>
-                          ) : null}
+                          </details>
                         </div>
 
                         {stage2Step2Errors.length > 0 ? (
-                          <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2">
+                          <div className="rounded-md border border-rose-200 bg-rose-50 p-2">
                             <p className="text-[11px] font-semibold text-rose-700">누락/오류 항목</p>
                             <ul className="mt-1 space-y-1">
                               {stage2Step2Errors.map((entry) => (
@@ -9826,7 +11087,20 @@ export function Stage1OpsDetail({
                           </div>
                         ) : null}
 
-                        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          {stage2ResultMissingCount > 0 ? (
+                            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                              누락 경고: 필수 검사 입력 {stage2ResultMissingCount}건이 남아 있습니다.
+                            </div>
+                          ) : (
+                            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
+                              필수 검사 입력 누락이 없습니다.
+                            </div>
+                          )}
+                          </div>
+
+                          <div className="space-y-3">
+
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <p className="text-xs font-semibold text-slate-800">자동 기입 결과 확인</p>
                             <label className="flex items-center gap-1 text-[10px] font-semibold text-slate-700">
@@ -9834,6 +11108,10 @@ export function Stage1OpsDetail({
                                 type="checkbox"
                                 checked={stage2ManualEditEnabled}
                                 onChange={(event) => {
+                                  if (!event.target.checked && manualChangedKeys.length > 0) {
+                                    toast.error("수정된 값이 있어 사유 입력 없이 잠금을 해제할 수 없습니다.");
+                                    return;
+                                  }
                                   setStage2ManualEditEnabled(event.target.checked);
                                   if (!event.target.checked) {
                                     setStage2ManualEditReason("");
@@ -9844,9 +11122,19 @@ export function Stage1OpsDetail({
                               수동 수정
                             </label>
                           </div>
+                          <p className="mt-1 text-[10px] text-slate-600">
+                            자동 기입(운영 참고) 값이 반영됨. 수동 수정 시 사유 기록이 필수입니다.
+                          </p>
                           <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                             <label className="text-[11px] text-slate-600">
-                              <TermWithTooltip term="MMSE" /> 점수 (0~30)
+                              <span className="inline-flex items-center gap-1">
+                                <TermWithTooltip term="MMSE" /> 점수 (0~30)
+                                {stage2AutoFillSourceMeta && stage2AutoFillFieldHasValue("mmse") ? (
+                                  <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold", stage2AutoFillSourceMeta.chip)}>
+                                    {stage2AutoFillSourceMeta.label}
+                                  </span>
+                                ) : null}
+                              </span>
                               <input
                                 ref={registerStage2FieldRef("mmse")}
                                 type="number"
@@ -9858,6 +11146,7 @@ export function Stage1OpsDetail({
                                 disabled={inputLocked}
                                 onChange={(event) => {
                                   clearStage2FieldError("mmse");
+                                  clearStage2FieldError("manualEditReason");
                                   const value = event.target.value;
                                   const next = value === "" ? undefined : Number(value);
                                   setStage2Diagnosis((prev) => ({
@@ -9876,7 +11165,14 @@ export function Stage1OpsDetail({
                               {stage2FieldErrors.mmse ? <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.mmse}</p> : null}
                             </label>
                             <label className="text-[11px] text-slate-600">
-                              <TermWithTooltip term="CDR" />/<TermWithTooltip term="GDS" /> 점수 (0~7)
+                              <span className="inline-flex items-center gap-1">
+                                <TermWithTooltip term="CDR" />/<TermWithTooltip term="GDS" /> 점수 (0~7)
+                                {stage2AutoFillSourceMeta && stage2AutoFillFieldHasValue("cdr") ? (
+                                  <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold", stage2AutoFillSourceMeta.chip)}>
+                                    {stage2AutoFillSourceMeta.label}
+                                  </span>
+                                ) : null}
+                              </span>
                               <input
                                 ref={registerStage2FieldRef("cdr")}
                                 type="number"
@@ -9888,6 +11184,7 @@ export function Stage1OpsDetail({
                                 disabled={inputLocked}
                                 onChange={(event) => {
                                   clearStage2FieldError("cdr");
+                                  clearStage2FieldError("manualEditReason");
                                   const value = event.target.value;
                                   const next = value === "" ? undefined : Number(value);
                                   setStage2Diagnosis((prev) => ({
@@ -9906,13 +11203,21 @@ export function Stage1OpsDetail({
                               {stage2FieldErrors.cdr ? <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.cdr}</p> : null}
                             </label>
                             <label className="text-[11px] text-slate-600">
-                              신경인지검사 유형
+                              <span className="inline-flex items-center gap-1">
+                                신경인지검사 유형
+                                {stage2AutoFillSourceMeta && stage2AutoFillFieldHasValue("cogTestType") ? (
+                                  <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold", stage2AutoFillSourceMeta.chip)}>
+                                    {stage2AutoFillSourceMeta.label}
+                                  </span>
+                                ) : null}
+                              </span>
                               <select
                                 ref={registerStage2FieldRef("neuro")}
                                 value={stage2Diagnosis.tests.neuroCognitiveType ?? ""}
                                 disabled={inputLocked}
                                 onChange={(event) => {
                                   clearStage2FieldError("neuro");
+                                  clearStage2FieldError("manualEditReason");
                                   setStage2Diagnosis((prev) => ({
                                     ...prev,
                                     tests: {
@@ -9936,13 +11241,21 @@ export function Stage1OpsDetail({
                               {stage2FieldErrors.neuro ? <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage2FieldErrors.neuro}</p> : null}
                             </label>
                             <label className="text-[11px] text-slate-600">
-                              전문의 소견 상태
+                              <span className="inline-flex items-center gap-1">
+                                전문의 소견 상태
+                                {stage2AutoFillSourceMeta && stage2AutoFillFieldHasValue("specialistOpinionStatus") ? (
+                                  <span className={cn("rounded border px-1.5 py-0.5 text-[10px] font-semibold", stage2AutoFillSourceMeta.chip)}>
+                                    {stage2AutoFillSourceMeta.label}
+                                  </span>
+                                ) : null}
+                              </span>
                               <select
                                 ref={registerStage2FieldRef("specialist")}
                                 value={stage2Diagnosis.tests.specialist ? "DONE" : "MISSING"}
                                 disabled={inputLocked}
                                 onChange={(event) => {
                                   clearStage2FieldError("specialist");
+                                  clearStage2FieldError("manualEditReason");
                                   setStage2Diagnosis((prev) => ({
                                     ...prev,
                                     tests: {
@@ -9964,7 +11277,12 @@ export function Stage1OpsDetail({
                               ) : null}
                             </label>
                           </div>
-                          {stage2ManualEditEnabled ? (
+                          {manualChangedKeys.length > 0 ? (
+                            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[10px] text-amber-800">
+                              변경 필드: {manualChangedKeys.join(", ")} · 저장 전에 수동 수정 사유가 필요합니다.
+                            </div>
+                          ) : null}
+                          {manualReasonRequired ? (
                             <label className="mt-2 block text-[11px] text-slate-600">
                               수동 수정 사유(필수)
                               <textarea
@@ -9987,37 +11305,27 @@ export function Stage1OpsDetail({
                           ) : null}
                         </div>
 
-                        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                          {step2Tasks.map((task) => (
-                            <div
-                              key={task.label}
-                              className={cn(
-                                "rounded-md border px-2 py-1.5 text-[11px]",
-                                task.done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-700",
-                              )}
-                            >
-                              <p className="font-semibold">{task.done ? "완료" : "대기"}</p>
-                              <p className="mt-0.5">{task.label}</p>
+                            <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-600">
+                              변경값은 담당자 확인 후 <strong>결과 입력 반영</strong> 버튼으로 저장됩니다.
                             </div>
-                          ))}
+                          </div>
                         </div>
 
-                        {stage2ResultMissingCount > 0 ? (
-                          <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                            누락 경고: 필수 검사 입력 {stage2ResultMissingCount}건이 남아 있습니다.
-                          </div>
-                        ) : (
-                          <div className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
-                            필수 검사 입력 누락이 없습니다. 결과 반영 후 STEP3 모델 산출을 확인할 수 있습니다.
-                          </div>
-                        )}
-
-                        <button
-                          onClick={saveStage2TestInputs}
-                          className="mt-3 inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a]"
-                        >
-                          <CheckCircle2 size={13} /> 결과 입력 반영
-                        </button>
+                        <div className="mt-3 flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-3">
+                          <button
+                            type="button"
+                            onClick={() => moveStage3TaskStep(1)}
+                            className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            Step3(분류 확정) 미리 보기
+                          </button>
+                          <button
+                            onClick={saveStage2TestInputs}
+                            className="inline-flex items-center gap-1 rounded-md bg-[#163b6f] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#112f5a]"
+                          >
+                            <CheckCircle2 size={13} /> 결과 입력 반영
+                          </button>
+                        </div>
                       </section>
                     );
                   }
@@ -10027,24 +11335,53 @@ export function Stage1OpsDetail({
                     stage3ErrorOrderByStep.CONTACT_EXECUTION.includes(entry.key as Stage3TaskFieldKey),
                   );
                   const isDiffPathFlow = stage3ReviewDraft.diffNeeded;
-                  const flowProgress = isDiffPathFlow
-                    ? [
-                        { label: "통화 기록", done: stage3Step2Flow.consultStarted || callMemo.trim().length > 0 },
-                        { label: "검사/조치 계획 확정", done: stage3DiffDraft.testBiomarker || stage3DiffDraft.testBrainImaging || stage3DiffDraft.testOther },
-                        { label: "예약 확정", done: stage3Step2Flow.bookingConfirmed },
-                        { label: "문자/캘린더", done: stage3Step2Flow.messageSent && stage3Step2Flow.calendarSynced },
-                      ]
-                    : [
-                        { label: "통화 기록", done: stage3Step2Flow.consultStarted || callMemo.trim().length > 0 },
-                        { label: "재평가 안내 계획", done: stage3Step2Flow.infoCollected },
-                        { label: "추적 일정 확정", done: stage3Step2Flow.bookingConfirmed },
-                        { label: "리마인더/캘린더", done: stage3Step2Flow.messageSent && stage3Step2Flow.calendarSynced },
-                      ];
                   const previousExamSummary = [
                     `Stage1 우선도 ${modelPriorityMeta.bandLabel} (${Math.round(modelPriorityValue)}점)`,
                     `Stage2 결과 ${stage2ResolvedLabel}${stage2ResolvedMciStage ? `(${stage2ResolvedMciStage})` : ""}`,
                     `현재 감별경로 상태 ${diffStatus}`,
                   ];
+                  const stage3Step2Panels: Array<{
+                    key: Stage3Step2PanelKey;
+                    title: string;
+                    description: string;
+                    done: boolean;
+                  }> = [
+                    {
+                      key: "REVIEW",
+                      title: "1) 이전 상담/리뷰 확인",
+                      description: "이전 검사와 통화 맥락을 확인합니다.",
+                      done: stage3Step2Flow.consultStarted || callMemo.trim().length > 0,
+                    },
+                    {
+                      key: "BOOKING",
+                      title: "2) 감별검사 예약 생성",
+                      description: "기관/검사/예약 정보를 확정합니다.",
+                      done:
+                        Boolean(stage3DiffDraft.preferredHospital.trim()) &&
+                        (stage3DiffDraft.testBiomarker || stage3DiffDraft.testBrainImaging || stage3DiffDraft.testOther) &&
+                        Boolean(stage3DiffDraft.bookingAt),
+                    },
+                    {
+                      key: "RESULT",
+                      title: "3) 결과 수신 입력",
+                      description: "수행일/결과요약/핵심 결과를 반영합니다.",
+                      done: stage3ResultEvidenceReady,
+                    },
+                    {
+                      key: "MODEL",
+                      title: "4) Stage2 모델 판정",
+                      description: "결과 반영 이후 모델 상태를 확인합니다.",
+                      done: stage3InferenceState.jobStatus === "DONE",
+                    },
+                    {
+                      key: "TRANSITION",
+                      title: "5) Stage3 전이 여부 확정",
+                      description: "다음 단계(위험 추적)로 이동합니다.",
+                      done: stage3DiffReadyForRisk,
+                    },
+                  ];
+                  const stage3Step2PanelOrder = stage3Step2Panels.map((panel) => panel.key);
+                  const stage3Step2ActiveIndex = Math.max(0, stage3Step2PanelOrder.indexOf(stage3Step2ActivePanel));
 
                   return (
                     <section id="stage3-step2-input" className="rounded-lg border border-gray-200 bg-white p-4">
@@ -10059,19 +11396,47 @@ export function Stage1OpsDetail({
                           : "이전 검사 결과를 확인한 뒤 통화로 재평가 안내와 추적 계획을 확정합니다."}
                       </p>
 
-                      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-                        {flowProgress.map((item) => (
-                          <div
-                            key={item.label}
-                            className={cn(
-                              "rounded border px-2 py-1.5 text-[11px]",
-                              item.done ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-700",
-                            )}
-                          >
-                            <p className="font-semibold">{item.done ? "완료" : "대기"}</p>
-                            <p className="mt-0.5">{item.label}</p>
-                          </div>
-                        ))}
+                      <div className="mt-3 space-y-2">
+                        {stage3Step2Panels.map((panel, index) => {
+                          const active = stage3Step2ActivePanel === panel.key;
+                          const blocked = index > stage3Step2ActiveIndex + 1;
+                          return (
+                            <button
+                              key={panel.key}
+                              type="button"
+                              onClick={() => {
+                                if (blocked) return;
+                                openStage3Step2Panel(panel.key);
+                              }}
+                              className={cn(
+                                "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left",
+                                active
+                                  ? "border-indigo-300 bg-indigo-50"
+                                  : panel.done
+                                    ? "border-emerald-200 bg-emerald-50"
+                                    : "border-slate-200 bg-slate-50",
+                                blocked ? "cursor-not-allowed opacity-60" : "hover:border-indigo-200 hover:bg-white",
+                              )}
+                            >
+                              <div>
+                                <p className="text-[11px] font-semibold text-slate-900">{panel.title}</p>
+                                <p className="text-[10px] text-slate-600">{panel.description}</p>
+                              </div>
+                              <span
+                                className={cn(
+                                  "rounded border px-2 py-0.5 text-[10px] font-semibold",
+                                  panel.done
+                                    ? "border-emerald-300 bg-white text-emerald-700"
+                                    : active
+                                      ? "border-indigo-300 bg-white text-indigo-700"
+                                      : "border-slate-200 bg-white text-slate-600",
+                                )}
+                              >
+                                {panel.done ? "완료" : blocked ? "잠금" : active ? "열림" : "대기"}
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
 
                       {stage3Step2Errors.length > 0 ? (
@@ -10093,8 +11458,9 @@ export function Stage1OpsDetail({
                         </div>
                       ) : null}
 
-                      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1.1fr]">
-                        <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <div className="mx-auto mt-3 max-w-[1100px] space-y-3 px-2 md:px-8">
+                        {stage3Step2ActivePanel === "REVIEW" ? (
+                        <div id="stage3-step2-panel-review" className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
                           <div className="rounded-md border border-slate-200 bg-white p-2">
                             <p className="text-xs font-semibold text-slate-800">이전 검사 요약</p>
                             <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
@@ -10194,8 +11560,10 @@ export function Stage1OpsDetail({
                             onSmsSent={handleStage3Step2SmsSent}
                           />
                         </div>
+                        ) : null}
 
-                        <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                        {stage3Step2ActivePanel === "BOOKING" || stage3Step2ActivePanel === "RESULT" ? (
+                        <div id="stage3-step2-panel-booking" className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
                           <p className="text-xs font-semibold text-slate-800">연계/예약 폼</p>
                           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                             <label className="text-[11px] text-slate-600">
@@ -10392,7 +11760,7 @@ export function Stage1OpsDetail({
                             {!approvedReady ? <p className="mt-1 text-[10px] text-amber-700">승인 대기 액션을 먼저 처리하세요.</p> : null}
                           </div>
 
-                          <label className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                          <label id="stage3-step2-panel-result" className="flex items-center gap-1 text-[11px] font-semibold text-slate-700">
                             <input
                               type="checkbox"
                               checked={stage3ShowResultCollection}
@@ -10557,6 +11925,49 @@ export function Stage1OpsDetail({
                             </div>
                           ) : null}
                         </div>
+                        ) : null}
+
+                        {stage3Step2ActivePanel === "MODEL" ? (
+                          <div id="stage3-step2-panel-model" className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                            <p className="text-xs font-semibold text-indigo-900">모델 판정 상태</p>
+                            <p className="mt-1 text-[11px] text-indigo-800">
+                              상태 {stage3InferenceState.jobStatus} · 진행률 {Math.round(stage3InferenceState.progress)}%
+                              {stage3InferenceState.updatedAt ? ` · 업데이트 ${formatDateTime(stage3InferenceState.updatedAt)}` : ""}
+                            </p>
+                            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo-100">
+                              <div
+                                className="h-full rounded-full bg-indigo-500 transition-all duration-700"
+                                style={{ width: `${Math.round(stage3InferenceState.progress)}%` }}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleStage3DiffPathAction("APPLY_RESULT")}
+                              className="mt-2 rounded border border-indigo-300 bg-white px-2 py-1 text-[10px] font-semibold text-indigo-700"
+                            >
+                              모델 결과 상태 갱신
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {stage3Step2ActivePanel === "TRANSITION" ? (
+                          <div id="stage3-step2-panel-transition" className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
+                            <p className="text-xs font-semibold text-emerald-900">Stage3 전이 여부 확정</p>
+                            <p className="mt-1 text-[11px] text-emerald-800">
+                              {stage3DiffReadyForRisk
+                                ? "결과 반영이 완료되었습니다. 다음 단계에서 위험 추적/모델 확인을 진행하세요."
+                                : "아직 결과 수집이 완료되지 않아 다음 단계가 잠겨 있습니다."}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => moveStage3TaskStep(1)}
+                              disabled={!stage3DiffReadyForRisk}
+                              className="mt-2 rounded border border-emerald-300 bg-white px-2 py-1 text-[10px] font-semibold text-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              Step3(위험 예측/추적)로 이동
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="mt-3 rounded-md border border-gray-200 bg-gray-50 p-2">
@@ -10625,7 +12036,10 @@ export function Stage1OpsDetail({
                           event.type === "STAGE2_PLAN_CONFIRMED" ||
                           event.type === "STAGE2_RESULTS_RECORDED" ||
                           event.type === "DIFF_RESULT_APPLIED" ||
-                          event.type === "STAGE2_CLASS_CONFIRMED",
+                          event.type === "STAGE2_CLASS_CONFIRMED" ||
+                          event.type === "INFERENCE_STARTED" ||
+                          event.type === "INFERENCE_COMPLETED" ||
+                          event.type === "INFERENCE_FAILED",
                         )
                         .slice(0, 6)
                         .map((event) => ({
@@ -10633,21 +12047,21 @@ export function Stage1OpsDetail({
                           label: eventTitle(event),
                           summary: event.summary,
                         })),
-                      ...(stage2ModelRunState.updatedAt
+                      ...(stage2InferenceState.updatedAt
                         ? [
                             {
-                              at: stage2ModelRunState.updatedAt,
+                              at: stage2InferenceState.updatedAt,
                               label:
-                                stage2ModelRunState.status === "RUNNING"
+                                stage2InferenceState.jobStatus === "RUNNING"
                                   ? "모델 실행 시작"
-                                  : stage2ModelRunState.status === "DONE"
+                                  : stage2InferenceState.jobStatus === "DONE"
                                     ? "모델 결과 생성"
-                                    : stage2ModelRunState.status === "FAILED"
+                                    : stage2InferenceState.jobStatus === "FAILED"
                                       ? "모델 실행 실패"
                                       : "모델 실행 대기",
                               summary:
-                                stage2ModelRunState.status === "DONE"
-                                  ? `추천 분류 ${stage2ModelRunState.recommendedLabel ?? "-"}`
+                                stage2InferenceState.jobStatus === "DONE"
+                                  ? `추천 분류 ${stage2ModelRecommendedLabel ?? "-"}`
                                   : "검사 결과 반영 후 모델 결과를 갱신합니다.",
                             },
                           ]
@@ -10656,11 +12070,11 @@ export function Stage1OpsDetail({
                       .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime())
                       .slice(-6);
                     const modelStatusChip =
-                      stage2ModelRunState.status === "DONE"
+                      stage2InferenceState.jobStatus === "DONE"
                         ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-                        : stage2ModelRunState.status === "RUNNING"
+                        : stage2InferenceState.jobStatus === "RUNNING"
                           ? "bg-blue-50 border-blue-200 text-blue-700"
-                          : stage2ModelRunState.status === "FAILED"
+                          : stage2InferenceState.jobStatus === "FAILED"
                             ? "bg-rose-50 border-rose-200 text-rose-700"
                             : "bg-slate-100 border-slate-200 text-slate-700";
                     const modelReadyForConfirm = stage2ModelReady && stage2DraftProbs;
@@ -10689,12 +12103,70 @@ export function Stage1OpsDetail({
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <p className="text-xs font-semibold text-indigo-900">모델 산출 상태</p>
                             <span className={cn("rounded border px-2 py-0.5 text-[10px] font-semibold", modelStatusChip)}>
-                              {stage2ModelRunState.status}
+                              {stage2InferenceState.jobStatus}
                             </span>
                           </div>
                           <p className="mt-1 text-[11px] text-indigo-800">
-                            추천 분류: {stage2ModelRecommendedLabel ?? "대기"} · 업데이트 {formatDateTime(stage2ModelRunState.updatedAt)}
+                            추천 분류: {stage2ModelRecommendedLabel ?? "대기"} · 업데이트 {formatDateTime(stage2InferenceState.updatedAt)}
                           </p>
+                          {stage2InferenceState.jobStatus === "RUNNING" ? (
+                            <div className="mt-2 rounded-md border border-blue-200 bg-white px-2 py-2">
+                              <div className="flex items-center justify-between text-[10px] text-blue-700">
+                                <span>모델 결과 생성 중</span>
+                                <span>{Math.round(stage2InferenceState.progress)}%</span>
+                              </div>
+                              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-blue-100">
+                                <div
+                                  className="h-full rounded-full bg-blue-500 transition-all duration-700"
+                                  style={{ width: `${Math.round(stage2InferenceState.progress)}%` }}
+                                />
+                              </div>
+                              <p className="mt-1 text-[10px] text-blue-700">
+                                ETA {formatEtaLabel(stage2InferenceState.etaSeconds)}
+                                {stage2InferenceState.buffered ? " · 버퍼링 진행률(추정)" : ""}
+                              </p>
+                            </div>
+                          ) : null}
+                          {stage2InferenceState.jobStatus === "FAILED" ? (
+                            <div className="mt-2 rounded-md border border-rose-200 bg-white px-2 py-2 text-[10px] text-rose-700">
+                              <p>모델 실행이 실패했습니다. 재시도 후 분류 확정을 진행하세요.</p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const now = nowIso();
+                                  setStage2ModelRunState((prev) => ({
+                                    ...prev,
+                                    status: "RUNNING",
+                                    startedAt: now,
+                                    updatedAt: now,
+                                    completedAt: undefined,
+                                    progress: 4,
+                                    etaSeconds: null,
+                                    failureReason: undefined,
+                                    recommendedLabel: prev.recommendedLabel ?? deriveStage2ModelRecommendation(stage2Diagnosis.tests),
+                                  }));
+                                  appendTimeline({
+                                    type: "INFERENCE_REQUESTED",
+                                    stage: 2,
+                                    at: now,
+                                    by: detail.header.assigneeName,
+                                    summary: "Stage2 모델 재실행 요청",
+                                  });
+                                  appendTimeline({
+                                    type: "INFERENCE_STARTED",
+                                    stage: 2,
+                                    at: now,
+                                    by: detail.header.assigneeName,
+                                    summary: "Stage2 모델 재실행 시작",
+                                  });
+                                  appendAuditLog("Stage2 모델 재실행 요청");
+                                }}
+                                className="mt-2 rounded border border-rose-300 bg-white px-2 py-1 text-[10px] font-semibold text-rose-700"
+                              >
+                                재시도
+                              </button>
+                            </div>
+                          ) : null}
                           <p className="text-[10px] text-indigo-700">
                             모델 결과는 운영 참고용이며, 최종 분류 확정은 담당자 판단으로 기록됩니다.
                           </p>
@@ -10851,7 +12323,9 @@ export function Stage1OpsDetail({
                 </section>
               ) : (
                 <section className="rounded-lg border border-gray-200 bg-white p-4">
-                  <h4 className="text-sm font-bold text-slate-900">검사결과 기반 전환 위험 예측/추적</h4>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    {stage3View?.source.profile?.stage3Type === "AD_MANAGEMENT" ? "검사결과 기반 위험도 추적" : "검사결과 기반 전환 위험 예측/추적"}
+                  </h4>
                   <p className="mt-1 text-[11px] text-gray-600">
                     감별경로 예약/결과 입력 이후에만 위험 추세 검토를 완료할 수 있습니다.
                   </p>
@@ -10867,15 +12341,36 @@ export function Stage1OpsDetail({
                         onOpenStep={focusStage3ResultInput}
                       />
                     </div>
-                  ) : !stage3ModelAvailable ? (
+                  ) : stage3InferenceState.jobStatus === "FAILED" ? (
+                    <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-[11px] text-rose-800">
+                      모델 실행 실패: {stage3ModelRunState.failureReason ?? "원인 미확인"}
+                      <button
+                        type="button"
+                        onClick={() => handleStage3DiffPathAction("APPLY_RESULT")}
+                        className="mt-2 block rounded border border-rose-300 bg-white px-2 py-1 text-[10px] font-semibold text-rose-700"
+                      >
+                        재시도
+                      </button>
+                    </div>
+                  ) : stage3InferenceState.jobStatus !== "DONE" ? (
                     <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-[11px] text-blue-800">
-                      검사결과는 반영되었고 모델 산출을 기다리는 중입니다.
+                      <p className="font-semibold">모델 결과 생성 중</p>
+                      <p className="mt-1">
+                        진행률 {Math.round(stage3InferenceState.progress)}% · ETA {formatEtaLabel(stage3InferenceState.etaSeconds)}
+                        {stage3InferenceState.buffered ? " · 버퍼링 진행률(추정)" : ""}
+                      </p>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-blue-100">
+                        <div
+                          className="h-full rounded-full bg-blue-500 transition-all duration-700"
+                          style={{ width: `${Math.round(stage3InferenceState.progress)}%` }}
+                        />
+                      </div>
                       <button
                         type="button"
                         onClick={() => handleStage3DiffPathAction("APPLY_RESULT")}
                         className="mt-2 block rounded border border-blue-300 bg-white px-2 py-1 text-[10px] font-semibold text-blue-700"
                       >
-                        모델 결과 갱신
+                        {stage3InferenceState.jobStatus === "RUNNING" ? "실행 상태 새로고침" : "모델 실행 요청"}
                       </button>
                     </div>
                   ) : !stage3DiffReadyForRisk ? (
@@ -10885,12 +12380,21 @@ export function Stage1OpsDetail({
                   ) : (
                     <div className="mt-3 space-y-3">
                       <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
-                        <p className="text-xs font-semibold text-indigo-900">2년 전환 위험도 {toPercentValue(detail.stage3?.transitionRisk.risk2y_now ?? 0)}%</p>
+                        <p className="text-xs font-semibold text-indigo-900">
+                          {stage3View?.source.profile?.stage3Type === "AD_MANAGEMENT" ? "현재 위험지수" : "2년 전환 위험도"}{" "}
+                          {toPercentValue(detail.stage3?.transitionRisk.risk2y_now ?? 0)}%
+                        </p>
                         <p className="mt-1 text-[11px] text-indigo-800">
                           신뢰 {deriveStage3RiskLabel(detail.stage3?.transitionRisk.risk2y_now ?? 0)} · 추세 {detail.stage3?.transitionRisk.trend} · 모델{" "}
                           {detail.stage3?.transitionRisk.modelVersion}
                         </p>
-                        {detail.stage3 ? <RiskTrendChart risk={detail.stage3.transitionRisk} stage2OpsView={false} /> : null}
+                        {detail.stage3 ? (
+                          <RiskTrendChart
+                            risk={detail.stage3.transitionRisk}
+                            stage2OpsView={false}
+                            stage3Type={resolvedStage3TypeForUi}
+                          />
+                        ) : null}
                       </div>
                       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
                         <label className="text-[11px] text-slate-600">
@@ -10957,21 +12461,21 @@ export function Stage1OpsDetail({
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
                       <button
                         onClick={() => setStage2NextStep("FOLLOWUP_2Y", "정상 분류로 2년 후 선별검사 일정 생성")}
-                        disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "정상"}
+                        disabled={!stage2ClassificationConfirmed || stage2CurrentLabel !== "정상"}
                         className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
                       >
                         정상 → 2년 후 선별
                       </button>
                       <button
                         onClick={() => setStage2NextStep("STAGE3", "MCI/치매 분류로 Stage3 진입 생성")}
-                        disabled={!stage2ConfirmedAt || !stage2NeedsStage3(stage2CurrentLabel)}
+                        disabled={!stage2ClassificationConfirmed || !stage2NeedsStage3(stage2CurrentLabel)}
                         className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] font-semibold text-blue-700 disabled:opacity-50"
                       >
                         MCI → Stage3 진입
                       </button>
                       <button
                         onClick={() => setStage2NextStep("DIFF_PATH", "치매 분류로 감별검사 경로 전환")}
-                        disabled={!stage2ConfirmedAt || stage2CurrentLabel !== "치매"}
+                        disabled={!stage2ClassificationConfirmed || stage2CurrentLabel !== "치매"}
                         className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-semibold text-rose-700 disabled:opacity-50"
                       >
                         치매 → 감별 경로
@@ -11058,7 +12562,13 @@ export function Stage1OpsDetail({
                 이전
               </button>
               <button
-                onClick={() => moveStage3TaskStep(1)}
+                onClick={() => {
+                  if (isStage2OpsView && stage3TaskModalStep === "CONTACT_EXECUTION") {
+                    handleStage3TaskComplete();
+                    return;
+                  }
+                  moveStage3TaskStep(1);
+                }}
                 disabled={stage3TaskStepIndex < 0 || stage3TaskStepIndex >= stage3TaskOrder.length - 1}
                 className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 disabled:opacity-40"
               >
@@ -11202,6 +12712,27 @@ export function Stage1OpsDetail({
                         });
                         appendAuditLog(`${stageLabel} 문자 ${item.mode === "NOW" ? "발송" : "예약"}: ${item.templateLabel} (${item.status})`);
                         if (item.status === "SENT") {
+                          if (!isStage2Mode && !isStage3Mode) {
+                            void runStage1SmsAutoContactCompleteScenario(item).then((handled) => {
+                              if (handled) return;
+                              completeSuggestedTodo("SMS");
+                              setRecontactDueAt(withHoursFromNow(48));
+                              setDetail((prev) => {
+                                const newExec: ContactExecution = {
+                                  ...prev.contactExecution,
+                                  status: "SENT",
+                                  lastSentAt: nowIso(),
+                                  retryCount: prev.contactExecution.retryCount + 1,
+                                };
+                                return {
+                                  ...prev,
+                                  contactExecution: newExec,
+                                  contactFlowSteps: buildContactFlowSteps(newExec, prev.preTriageResult, prev.linkageStatus, mode),
+                                };
+                              });
+                            });
+                            return;
+                          }
                           completeSuggestedTodo("SMS");
                           setRecontactDueAt(withHoursFromNow(48));
                           setDetail((prev) => {
@@ -12056,6 +13587,7 @@ function ContactExecutionLauncherCard({
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
   const isStage2OpsMode = isStage3Mode && stage2OpsView;
+  const isAdManagement = isStage3Mode && stage3Type === "AD_MANAGEMENT" && !isStage2OpsMode;
   const statusLabelMap: Record<ContactExecutionStatus, string> = {
     NOT_STARTED: "미접촉",
     SENT: "발송완료",
@@ -12485,25 +14017,42 @@ function ContactFlowPanel({
   onAction,
   mode = "stage1",
   stage2OpsView = false,
+  opsLoopState,
+  storedOpsStatus,
 }: {
   flowCards: Stage1FlowCard[];
   onAction: (action: Stage1FlowAction) => void;
   mode?: StageOpsMode;
   stage2OpsView?: boolean;
+  opsLoopState?: OpsLoopState | null;
+  storedOpsStatus?: string | null;
 }) {
   const title =
     mode === "stage2" ? "Stage2 진행 흐름" : mode === "stage3" ? (stage2OpsView ? "Stage2 진단검사 운영 루프" : "Stage3 운영 루프") : "Stage1 진행 흐름";
   const doneCount = flowCards.filter((card) => card.status === "COMPLETED").length;
+  const readyCount = flowCards.filter((card) => card.status === "READY").length;
 
   return (
     <section className="relative z-10 rounded-2xl border border-gray-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-          <Zap size={15} className="text-blue-600" />
-          {title}
-        </h3>
+        <div>
+          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+            <Zap size={15} className="text-blue-600" />
+            {title}
+          </h3>
+          {storedOpsStatus ? (
+            <p className="mt-1 text-[10px] text-slate-500">
+              저장 상태: {storedOpsStatus} · 계산 상태: 완료 {opsLoopState?.doneCount ?? doneCount} / 준비 {opsLoopState?.readyCount ?? readyCount}
+            </p>
+          ) : null}
+          {opsLoopState?.mismatch ? (
+            <p className="mt-1 inline-flex rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+              정합화 필요: {opsLoopState.mismatchReasons[0] ?? "저장 상태와 계산 상태가 불일치합니다."}
+            </p>
+          ) : null}
+        </div>
         <span className="text-[11px] text-gray-500">
-          {doneCount}/{flowCards.length} 단계 완료
+          {doneCount}/{flowCards.length} 단계 완료 · 준비 {readyCount}단계
         </span>
       </div>
 
@@ -13494,20 +15043,23 @@ export function RiskSignalEvidencePanel({
   quality,
   mode = "stage1",
   stage2OpsView = false,
+  stage3Type,
 }: {
   evidence: Stage1Detail["riskEvidence"];
   quality: CaseHeader["dataQuality"];
   mode?: StageOpsMode;
   stage2OpsView?: boolean;
+  stage3Type?: Stage3ViewModel["source"]["profile"]["stage3Type"];
 }) {
   const isStage3Mode = mode === "stage3";
   const isStage2OpsMode = isStage3Mode && stage2OpsView;
+  const isAdManagement = isStage3Mode && stage3Type === "AD_MANAGEMENT" && !isStage2OpsMode;
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
           <Layers size={15} className="text-slate-500" />
-          {isStage2OpsMode ? "진단 진행 근거(운영 참고)" : isStage3Mode ? "전환 위험 근거(운영 참고)" : "위험 신호 근거"}
+          {isStage2OpsMode ? "진단 진행 근거(운영 참고)" : isStage3Mode ? (isAdManagement ? "위험도 추적 근거(운영 참고)" : "전환 위험 근거(운영 참고)") : "위험 신호 근거"}
         </h3>
         <span className="text-[11px] text-gray-500">산출 시각 {formatDateTime(evidence.computedAt)} · {evidence.version}</span>
       </div>
@@ -13543,11 +15095,13 @@ function RiskTrendChart({
   stageBadge,
   threshold = 65,
   stage2OpsView = false,
+  stage3Type = "PREVENTIVE_TRACKING",
 }: {
   risk: Stage3RiskSummary;
   stageBadge?: Stage3DiffPathStatus;
   threshold?: number;
   stage2OpsView?: boolean;
+  stage3Type?: "PREVENTIVE_TRACKING" | "AD_MANAGEMENT";
 }) {
   const gradientId = useId().replace(/:/g, "");
   const formatAxisLabel = (iso: string, fullYear = false) => {
@@ -13614,6 +15168,7 @@ function RiskTrendChart({
   const currentRisk01 = clamp01(lastHist?.risk01 ?? risk.risk2y_now);
   const currentRiskPct = toPercentValue(currentRisk01);
   const currentRiskLabel = deriveStage3RiskLabel(currentRisk01);
+  const isAdManagement = stage3Type === "AD_MANAGEMENT" && !stage2OpsView;
   const projectionDelta =
     risk.trend === "UP"
       ? 0.14
@@ -13624,7 +15179,7 @@ function RiskTrendChart({
           : 0.02;
   const riskAt2y01 = clamp01(currentRisk01 + projectionDelta);
   const riskAt2yPct = toPercentValue(riskAt2y01);
-  const forecastMonths = [6, 12, 18, 24];
+  const forecastMonths = isAdManagement ? [] : [12, 24, 36];
   const forecastSeries = forecastMonths.map((month, idx) => {
     const forecastDate = new Date(lastHist.date);
     forecastDate.setMonth(forecastDate.getMonth() + month);
@@ -13659,7 +15214,7 @@ function RiskTrendChart({
         axisLabel: formatAxisLabel(point.t),
         pointKind: "HIST",
         histRiskPct: riskPct,
-        forecastRiskPct: idx === histSeries.length - 1 ? riskPct : null,
+        forecastRiskPct: forecastSeries.length > 0 && idx === histSeries.length - 1 ? riskPct : null,
         areaRiskPct: riskPct,
         riskPct,
         ciLowPct: point.ciLow01 == null ? undefined : toPercentValue(point.ciLow01),
@@ -13700,7 +15255,7 @@ function RiskTrendChart({
   const eventPoints = chartData.filter((point) => point.pointKind === "HIST" && Boolean(point.eventLabel)).slice(-3);
   const highPoints = chartData.filter((point) => point.riskPct >= threshold);
   const latestHighPoint = highPoints[highPoints.length - 1];
-  const forecastEndPoint = chartData[chartData.length - 1];
+  const forecastEndPoint = forecastSeries.length > 0 ? chartData[chartData.length - 1] : undefined;
   const areaTone = currentRiskPct >= threshold
     ? { top: "#ef4444", bottom: "#ef4444" }
     : { top: "#2563eb", bottom: "#2563eb" };
@@ -13720,11 +15275,15 @@ function RiskTrendChart({
     stageBadge === "COMPLETED"
       ? stage2OpsView
         ? "현재 단계: 결과 수신 완료"
-        : "현재 단계: 검사결과 반영 완료"
+        : isAdManagement
+          ? "현재 단계: AD 관리 지표 반영 완료"
+          : "현재 단계: 검사결과 반영 완료"
       : stageBadge === "SCHEDULED"
         ? stage2OpsView
           ? "현재 단계: 진단 예약됨"
-          : "현재 단계: 감별검사 예약됨"
+          : isAdManagement
+            ? "현재 단계: 관리 일정 예약됨"
+            : "현재 단계: 감별검사 예약됨"
         : stageBadge === "REFERRED"
           ? stage2OpsView
             ? "현재 단계: 의뢰 진행중"
@@ -13735,7 +15294,9 @@ function RiskTrendChart({
               : "현재 단계: 권고 생성"
             : stage2OpsView
               ? "현재 단계: 결과 수신 대기"
-              : "현재 단계: 검사결과 대기";
+              : isAdManagement
+                ? "현재 단계: 관리 지표 대기"
+                : "현재 단계: 검사결과 대기";
 
   const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: RiskChartRow }> }) => {
     if (!active || !payload || payload.length === 0) return null;
@@ -13743,8 +15304,10 @@ function RiskTrendChart({
     if (!point) return null;
     return (
       <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] shadow-sm">
-        <p className="font-semibold text-slate-800">{formatDateTime(point.t)} · {point.pointKind === "FORECAST" ? "미래 예측(+2y)" : "관측/추정"}</p>
-        <p className="mt-0.5 text-slate-700">{stage2OpsView ? "진단 진행/지연 지표" : "전환위험(운영 참고)"} {point.riskPct}%</p>
+        <p className="font-semibold text-slate-800">{formatDateTime(point.t)} · {point.pointKind === "FORECAST" ? "미래 예측(+3y)" : "관측/추정"}</p>
+        <p className="mt-0.5 text-slate-700">
+          {stage2OpsView ? "진단 진행/지연 지표" : isAdManagement ? "위험도 추적 지표(운영 참고)" : "전환위험(운영 참고)"} {point.riskPct}%
+        </p>
         {point.ciLowPct != null && point.ciHighPct != null ? (
           <p className="text-slate-500">구간 {point.ciLowPct}% ~ {point.ciHighPct}%</p>
         ) : null}
@@ -13760,10 +15323,10 @@ function RiskTrendChart({
     <div className="rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
-          {stage2OpsView ? "현재 진행/지연" : "현재 위험"} {currentRiskPct}% ({currentRiskLabel})
+          {stage2OpsView ? "현재 진행/지연" : isAdManagement ? "현재 위험지수" : "현재 위험"} {currentRiskPct}% ({currentRiskLabel})
         </span>
         <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
-          {stage2OpsView ? "목표일 예측" : "2년 후 예측"} {riskAt2yPct}%
+          {isAdManagement ? "최근 추세" : stage2OpsView ? "목표일 예측" : "3년 후 예측"} {isAdManagement ? risk.trend : `${riskAt2yPct}%`}
         </span>
         <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700">
           추세 {risk.trend}
@@ -13861,30 +15424,32 @@ function RiskTrendChart({
                 }}
                 activeDot={{ r: 5 }}
               />
-              <Line
-                type="monotone"
-                dataKey="forecastRiskPct"
-                stroke="#2563eb"
-                strokeDasharray="6 4"
-                strokeWidth={2}
-                connectNulls={false}
-                isAnimationActive={false}
-                dot={(props: { cx?: number; cy?: number; payload?: RiskChartRow }) => {
-                  if (props.cx == null || props.cy == null || !props.payload || props.payload.forecastRiskPct == null) return null;
-                  const isHigh = props.payload.riskPct >= threshold;
-                  return (
-                    <circle
-                      cx={props.cx}
-                      cy={props.cy}
-                      r={isHigh ? 4 : 3}
-                      fill={isHigh ? "#dc2626" : "#2563eb"}
-                      stroke="#ffffff"
-                      strokeWidth={1.1}
-                    />
-                  );
-                }}
-              />
-              {forecastEndPoint ? (
+              {forecastSeries.length > 0 ? (
+                <Line
+                  type="monotone"
+                  dataKey="forecastRiskPct"
+                  stroke="#2563eb"
+                  strokeDasharray="6 4"
+                  strokeWidth={2}
+                  connectNulls={false}
+                  isAnimationActive={false}
+                  dot={(props: { cx?: number; cy?: number; payload?: RiskChartRow }) => {
+                    if (props.cx == null || props.cy == null || !props.payload || props.payload.forecastRiskPct == null) return null;
+                    const isHigh = props.payload.riskPct >= threshold;
+                    return (
+                      <circle
+                        cx={props.cx}
+                        cy={props.cy}
+                        r={isHigh ? 4 : 3}
+                        fill={isHigh ? "#dc2626" : "#2563eb"}
+                        stroke="#ffffff"
+                        strokeWidth={1.1}
+                      />
+                    );
+                  }}
+                />
+              ) : null}
+              {forecastSeries.length > 0 && forecastEndPoint ? (
                 <ReferenceDot
                   x={forecastEndPoint.t}
                   y={forecastEndPoint.riskPct}
@@ -13892,7 +15457,7 @@ function RiskTrendChart({
                   fill={forecastEndPoint.riskPct >= threshold ? "#dc2626" : "#2563eb"}
                   stroke="#fff"
                   strokeWidth={1.4}
-                  label={{ value: `+2y ${forecastEndPoint.riskPct}%`, position: "top", fill: "#1e293b", fontSize: 10 }}
+                  label={{ value: `+3y ${forecastEndPoint.riskPct}%`, position: "top", fill: "#1e293b", fontSize: 10 }}
                 />
               ) : null}
             </LineChart>
@@ -14536,6 +16101,7 @@ export function Stage1ScorePanel({
   stage2ClassificationConfirmed,
   stage2ModelAvailable = false,
   stage3ModelAvailable = false,
+  stage3Type,
   stage2MissingEvidence = [],
   stage3MissingEvidence = [],
   onOpenStage2Input,
@@ -14565,6 +16131,7 @@ export function Stage1ScorePanel({
   stage2ClassificationConfirmed?: boolean;
   stage2ModelAvailable?: boolean;
   stage3ModelAvailable?: boolean;
+  stage3Type?: Stage3ViewModel["source"]["profile"]["stage3Type"];
   stage2MissingEvidence?: string[];
   stage3MissingEvidence?: string[];
   onOpenStage2Input?: () => void;
@@ -14573,6 +16140,7 @@ export function Stage1ScorePanel({
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
   const isStage2OpsMode = isStage3Mode && stage2OpsView;
+  const isAdManagement = isStage3Mode && stage3Type === "AD_MANAGEMENT" && !isStage2OpsMode;
   const stage2MciScore = stage2MciStage === "위험" ? 82 : stage2MciStage === "양호" ? 34 : 58;
   const clampedPriority = Math.max(0, Math.min(100, modelPriorityValue));
   const topPercent = Math.max(1, 100 - clampedPriority);
@@ -14726,7 +16294,7 @@ export function Stage1ScorePanel({
       return (
         <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-bold text-slate-900">AD 전환 위험(2년)</h3>
+            <h3 className="text-sm font-bold text-slate-900">{isAdManagement ? "AD 위험도 추적" : "AD 전환 위험(2년)"}</h3>
             <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
               결과 대기
             </span>
@@ -14747,11 +16315,21 @@ export function Stage1ScorePanel({
         if (label.includes("필수자료 충족도")) return "필수 서류/점수/진찰 기록의 충족 수준입니다.";
       }
       if (label.includes("전환 위험")) return "2년 내 AD 전환 위험의 운영 참고 지표입니다. 확률 단독으로 단정하지 않습니다.";
+      if (label.includes("현재 위험지수")) return "현재 위험지수의 운영 참고 지표입니다. 확률 단독으로 단정하지 않습니다.";
       if (label.includes("재평가 필요도")) return "트리거/가드레일로 감지된 주의 신호 수입니다. 재평가 우선순위에 반영됩니다.";
       if (label.includes("추적 준수도")) return "최근 추적 실행의 준수 수준입니다. 지연/미응답 누적 여부를 함께 확인하세요.";
       if (label.includes("정밀관리 플랜")) return "정밀관리 플랜의 진행 상태입니다. 변경/실행은 감사 로그에 기록됩니다.";
       if (label.includes("데이터 품질")) return "누락/최신성/유효성을 반영한 운영 품질 지표입니다.";
       return "운영 참고 지표입니다.";
+    };
+    const normalizeScoreLabelForStage3 = (label: string) => {
+      if (!isAdManagement) return label;
+      return label
+        .replace("2년 전환 위험도", "현재 위험지수")
+        .replace("2년 전환위험", "현재 위험지수")
+        .replace("전환 위험도", "현재 위험지수")
+        .replace("전환위험", "현재 위험지수")
+        .replace("전환 위험", "위험");
     };
 
     return (
@@ -14759,20 +16337,22 @@ export function Stage1ScorePanel({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="group relative inline-flex items-center gap-1 text-sm font-bold text-slate-900">
-              {isStage2OpsMode ? "Stage2 진단검사 운영 지표" : "AD 전환 위험(2년)"}
+              {isStage2OpsMode ? "Stage2 진단검사 운영 지표" : isAdManagement ? "AD 위험도 추적" : "AD 전환 위험(2년)"}
               <AlertCircle size={13} className="text-slate-400" />
               <span className="pointer-events-none absolute left-0 top-[calc(100%+8px)] z-20 w-80 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                 {isStage2OpsMode
                   ? "Stage2 진단검사의 진행/지연 신호를 운영 참고용으로 표시합니다. 예약/의뢰/확정은 담당자 확인 후 진행합니다."
-                  : "감별검사/뇌영상 및 추적 정보를 바탕으로 2년 내 AD 전환 위험을 운영 참고용으로 표시합니다. 최종 조치는 담당자·의료진 확인 후 진행합니다."}
+                  : isAdManagement
+                    ? "감별검사/관리 데이터를 바탕으로 현재 위험지수를 운영 참고용으로 표시합니다. 최종 조치는 담당자·의료진 확인 후 진행합니다."
+                    : "감별검사/뇌영상 및 추적 정보를 바탕으로 2년 내 AD 전환 위험을 운영 참고용으로 표시합니다. 최종 조치는 담당자·의료진 확인 후 진행합니다."}
               </span>
             </h3>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="group relative rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-700">
-              {isStage2OpsMode ? "진단 지연 위험" : "2년 전환위험"} {toPercentValue(stage3Risk.risk2y_now)}%
+              {isStage2OpsMode ? "진단 지연 위험" : isAdManagement ? "현재 위험지수" : "2년 전환위험"} {toPercentValue(stage3Risk.risk2y_now)}%
               <span className="pointer-events-none absolute left-0 top-[calc(100%+6px)] z-20 w-56 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
-                {isStage2OpsMode ? "진단 지연 위험: 운영 우선순위 참고 지표" : "전환위험: 운영 우선순위 참고 지표"}
+                {isStage2OpsMode ? "진단 지연 위험: 운영 우선순위 참고 지표" : isAdManagement ? "현재 위험지수: 운영 우선순위 참고 지표" : "전환위험: 운영 우선순위 참고 지표"}
               </span>
             </span>
             <span className="group relative rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700">
@@ -14791,12 +16371,14 @@ export function Stage1ScorePanel({
         </div>
 
         <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
-          {scoreSummary.map((item) => (
+          {scoreSummary.map((item) => {
+            const displayLabel = normalizeScoreLabelForStage3(item.label);
+            return (
             <article
               key={item.label}
               className="group relative rounded-xl border border-gray-200 bg-gradient-to-b from-white to-slate-50 p-3 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
             >
-              <p className="text-[11px] font-semibold text-gray-500">{item.label}</p>
+              <p className="text-[11px] font-semibold text-gray-500">{displayLabel}</p>
               <p className="mt-1 text-lg font-bold text-slate-900">
                 {item.value}
                 {item.unit ? <span className="ml-0.5 text-xs text-gray-400">{item.unit}</span> : null}
@@ -14816,17 +16398,22 @@ export function Stage1ScorePanel({
                 </span>
               )}
               <span className="pointer-events-none absolute left-3 top-[calc(100%+6px)] z-20 w-56 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-medium text-slate-600 opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100">
-                {scoreTooltipByLabel(item.label)}
+                {scoreTooltipByLabel(displayLabel)}
               </span>
             </article>
-          ))}
+            );
+          })}
         </div>
 
         <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <p className="text-xs font-semibold text-indigo-900">
-                {isStage2OpsMode ? "진단 진행/지연 시계열" : "전환 위험 시계열(관측 + 2년 예측)"}
+                {isStage2OpsMode
+                  ? "진단 진행/지연 시계열"
+                  : stage3Type === "AD_MANAGEMENT"
+                    ? "위험도 추적 시계열"
+                    : "전환 위험 시계열(관측 + 1·2·3년 예측)"}
               </p>
               <p className="text-[11px] text-indigo-700">
                 {isStage2OpsMode ? "지연 추세" : "추세"} {stage3Risk.trend} · 업데이트 {formatDateTime(stage3Risk.updatedAt)} · 모델 {stage3Risk.modelVersion}
@@ -14847,7 +16434,12 @@ export function Stage1ScorePanel({
             </button>
           </div>
           <div className="mt-2">
-            <RiskTrendChart risk={stage3Risk} stageBadge={stage3DiffPathStatus} stage2OpsView={isStage2OpsMode} />
+            <RiskTrendChart
+              risk={stage3Risk}
+              stageBadge={stage3DiffPathStatus}
+              stage2OpsView={isStage2OpsMode}
+              stage3Type={stage3Type}
+            />
           </div>
           <p className="mt-2 text-[11px] text-indigo-700">
             {isStage2OpsMode
@@ -14993,6 +16585,7 @@ export function ContactTimeline({
   listClassName,
   mode = "stage1",
   stage2OpsView = false,
+  stage3Type,
 }: {
   timeline: ContactEvent[];
   filter: TimelineFilter;
@@ -15000,15 +16593,23 @@ export function ContactTimeline({
   listClassName?: string;
   mode?: StageOpsMode;
   stage2OpsView?: boolean;
+  stage3Type?: Stage3ViewModel["source"]["profile"]["stage3Type"];
 }) {
   const isStage3Mode = mode === "stage3";
   const isStage2OpsMode = isStage3Mode && stage2OpsView;
+  const isAdManagement = isStage3Mode && stage3Type === "AD_MANAGEMENT" && !isStage2OpsMode;
   return (
     <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
           <History size={15} className="text-slate-500" />
-          {isStage2OpsMode ? "진단검사/결과/분류 타임라인" : isStage3Mode ? "전환위험/감별/프로그램/플랜 타임라인" : "연락/발송/상태 타임라인"}
+          {isStage2OpsMode
+            ? "진단검사/결과/분류 타임라인"
+            : isStage3Mode
+              ? isAdManagement
+                ? "위험도추적/감별/프로그램/플랜 타임라인"
+                : "전환위험/감별/프로그램/플랜 타임라인"
+              : "연락/발송/상태 타임라인"}
         </h3>
 
         <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1 text-[11px] font-semibold">
@@ -15059,7 +16660,9 @@ export function ContactTimeline({
         {isStage2OpsMode
           ? "운영자가 지금 해야 할 행동: 예약/결과수신/분류확정 이벤트를 우선 확인하고 누락을 보완하세요."
           : isStage3Mode
-          ? "운영자가 지금 해야 할 행동: 전환위험/감별/프로그램/플랜 이벤트를 우선 확인하고 보조 연락 기록을 점검"
+          ? isAdManagement
+            ? "운영자가 지금 해야 할 행동: 위험도추적/감별/프로그램/플랜 이벤트를 우선 확인하고 보조 연락 기록을 점검"
+            : "운영자가 지금 해야 할 행동: 전환위험/감별/프로그램/플랜 이벤트를 우선 확인하고 보조 연락 기록을 점검"
           : "운영자가 지금 해야 할 행동: 최근 3일 미접촉이면 재시도 계획 생성"}
       </p>
     </section>

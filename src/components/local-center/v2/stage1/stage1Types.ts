@@ -596,11 +596,32 @@ export type ContactEvent =
       summary?: string;
     }
   | {
+      type: "INFERENCE_REQUESTED" | "INFERENCE_STARTED" | "INFERENCE_COMPLETED" | "INFERENCE_FAILED";
+      at: string;
+      by: string;
+      stage: 2 | 3;
+      summary: string;
+      progress?: number;
+      etaSeconds?: number;
+      reason?: string;
+    }
+  | {
+      type: "INFERENCE_PROGRESS";
+      at: string;
+      by: string;
+      stage: 2 | 3;
+      summary: string;
+      progress: number;
+      etaSeconds?: number;
+    }
+  | {
       type:
         | "STAGE2_PLAN_CONFIRMED"
         | "STAGE2_RESULTS_RECORDED"
         | "STAGE2_CLASS_CONFIRMED"
-        | "STAGE2_NEXT_STEP_SET";
+        | "STAGE2_NEXT_STEP_SET"
+        | "STAGE2_STEP2_AUTOFILL_APPLIED"
+        | "STAGE2_MANUAL_EDIT_APPLIED";
       at: string;
       by: string;
       summary: string;

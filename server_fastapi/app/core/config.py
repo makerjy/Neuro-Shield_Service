@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     api_prefix: str = '/api'
     central_prefix: str = '/api/central'
     central_alias_prefix: str = '/central'
+    base_path: str = Field(default='/neuro-shield/', alias='BASE_PATH')
 
     database_url: str = Field(default='postgresql+psycopg://dbuser:dbpass@db:5432/neuro', alias='DATABASE_URL')
     redis_url: str = Field(default='redis://redis:6379/0', alias='REDIS_URL')
@@ -30,6 +31,10 @@ class Settings(BaseSettings):
 
     jwt_secret: str = Field(default='change-me', alias='JWT_SECRET')
     jwt_public_key: str | None = Field(default=None, alias='JWT_PUBLIC_KEY')
+    otp_ttl_seconds: int = Field(default=300, alias='OTP_TTL_SECONDS')
+    otp_max_attempts: int = Field(default=5, alias='OTP_MAX_ATTEMPTS')
+    invite_token_ttl_hours: int = Field(default=48, alias='INVITE_TOKEN_TTL_HOURS')
+    sms_provider_base_url: str = Field(default='http://sms:4120', alias='SMS_PROVIDER_BASE_URL')
 
     ingest_shared_secret: str = Field(default='change-me', alias='INGEST_SHARED_SECRET')
 

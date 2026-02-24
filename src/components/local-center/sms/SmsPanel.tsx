@@ -187,7 +187,13 @@ const DEFAULT_CALL_SCRIPTS: CallScriptStep[] = [
 
 const DEFAULT_VARS: SmsTemplateVars = {
   centerName: "강남구 치매안심센터",
-  centerPhone: "02-555-0199",
+  centerPhone:
+    (
+      (import.meta.env.VITE_STAGE1_CENTER_PHONE as string | undefined) ??
+      (import.meta.env.VITE_SMS_CENTER_PHONE as string | undefined) ??
+      (import.meta.env.VITE_CENTER_PHONE as string | undefined) ??
+      "02-555-0199"
+    ).trim() || "02-555-0199",
   guideLink: getDefaultSmsLandingLink(),
   bookingLink: "(센터 예약 안내)",
   caseAlias: "대상자",

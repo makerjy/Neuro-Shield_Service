@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stage3 CNN Model Explainer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="card app-header">
+        <div class="header-left">
+          <h1>Stage3 CNN Model Explainer</h1>
+          <p>CNN 입력 → 전처리 → 추론 → 설명(Grad-CAM/Occlusion) 단계별 검증 콘솔</p>
+        </div>
+        <div class="header-right">
+          <div class="meta-row">
+            <span>Run ID</span>
+            <strong id="runIdLabel">-</strong>
+          </div>
+          <div class="meta-row">
+            <span>Status</span>
+            <strong id="statusBadge" class="badge badge-idle">IDLE</strong>
+          </div>
+          <div class="meta-row">
+            <span>Backbone</span>
+            <strong id="backboneLabel">-</strong>
+          </div>
+          <div class="meta-row">
+            <span>Input</span>
+            <strong id="inputSizeLabel">-</strong>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout-grid">
+        <section class="card panel panel-left">
+          <h2>Input Panel</h2>
+          <div class="tab-controls">
+            <button class="tab-btn active" data-tab="sample">샘플 선택</button>
+            <button class="tab-btn" data-tab="upload">업로드</button>
+          </div>
+
+          <div id="sampleTab" class="tab-pane active">
+            <div id="sampleClassTabs" class="sample-class-tabs"></div>
+            <div id="sampleGrid" class="sample-grid"></div>
+          </div>
+
+          <div id="uploadTab" class="tab-pane">
+            <div id="dropZone" class="drop-zone">
+              <p>Drag & Drop MRI image</p>
+              <p class="drop-hint">or click to browse</p>
+              <input id="fileInput" type="file" accept="image/png,image/jpeg,image/jpg" />
+            </div>
+            <div id="uploadPreviewBox" class="preview-box hidden">
+              <img id="uploadPreview" alt="Upload preview" />
+              <p id="uploadFilename"></p>
+            </div>
+          </div>
+
+          <div class="option-group">
+            <label><input id="optExplain" type="checkbox" checked /> Explain (Grad-CAM)</label>
+            <label><input id="optOcclusion" type="checkbox" /> Occlusion</label>
+          </div>
+
+          <button id="runBtn" class="primary-btn">Run Inference</button>
+          <p id="inputWarning" class="warning-text"></p>
+        </section>
+
+        <section class="card panel panel-center">
+          <h2>Pipeline Stepper</h2>
+          <div id="stepper" class="stepper"></div>
+
+          <div class="artifact-wrapper">
+            <div class="artifact-header">
+              <h3 id="artifactTitle">Step Artifact</h3>
+            </div>
+            <div id="artifactBody" class="artifact-body">run을 시작하면 단계별 산출물이 표시됩니다.</div>
+          </div>
+        </section>
+
+        <section class="card panel panel-right">
+          <h2>Result & Evidence</h2>
+
+          <div class="result-card">
+            <h3>Prediction</h3>
+            <div class="prediction-summary">
+              <div>
+                <span>Predicted class</span>
+                <strong id="predClass">-</strong>
+              </div>
+              <div>
+                <span>Confidence</span>
+                <strong id="predConfidence">-</strong>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <canvas id="probChart"></canvas>
+            </div>
+            <div id="probFallback" class="prob-fallback"></div>
+          </div>
+
+          <div class="result-card" id="gradcamCard">
+            <div class="result-card-head">
+              <h3>Grad-CAM</h3>
+              <div class="inline-toggle">
+                <button class="mini-btn active" data-cam-view="overlay">Overlay</button>
+                <button class="mini-btn" data-cam-view="heatmap">Heatmap</button>
+              </div>
+            </div>
+            <p id="gradcamMeta" class="meta-small">No Grad-CAM output yet.</p>
+            <img id="gradcamImage" class="result-image hidden" alt="Grad-CAM" />
+          </div>
+
+          <div class="result-card hidden" id="occlusionCard">
+            <h3>Occlusion Sensitivity</h3>
+            <img id="occlusionImage" class="result-image" alt="Occlusion Delta Map" />
+            <ul id="occlusionTopList" class="top-list"></ul>
+          </div>
+
+          <div class="result-card">
+            <h3>Run Report</h3>
+            <p>현재 run 내용을 한 페이지 리포트로 구성해 Print/PDF로 저장할 수 있습니다.</p>
+            <button id="printReportBtn" class="secondary-btn">Open Print View</button>
+          </div>
+        </section>
+      </main>
+
+      <section id="printReport" class="print-report"></section>
+    </div>
+
+    <div id="imageModal" class="image-modal hidden">
+      <div class="image-modal-backdrop" data-close-modal="true"></div>
+      <div class="image-modal-content">
+        <button id="modalCloseBtn" class="modal-close">×</button>
+        <img id="modalImage" alt="Preview" />
+      </div>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

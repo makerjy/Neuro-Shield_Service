@@ -88,4 +88,43 @@ describe("stage3 reconcile/derive", () => {
     expect(view.display.stepCards.every((step) => step.state === "LOCKED" || step.state === "TODO")).toBe(true);
     expect(view.display.primaryCta.label).toContain("보류");
   });
+
+  it("diagnosis-confirmed stage3 case should align loop up to step2 automatically", () => {
+    const input = makeBaseCase();
+    input.profile = {
+      stage3Type: "PREVENTIVE_TRACKING",
+      originStage2Result: "MCI-HIGH",
+      originRiskScore: 0.71,
+    };
+
+    const reconciled = reconcileStage3Case(input, { autoCompleteStep1: true });
+    expect(reconciled.nextCase.loop.completed.step1At).toBeTruthy();
+    expect(reconciled.nextCase.loop.completed.step2At).toBeTruthy();
+
+    const view = deriveStage3View(input, { autoCompleteStep1: true });
+    expect(view.display.stepCards[0]?.state).toBe("DONE");
+    expect(view.display.stepCards[1]?.state).toBe("DONE");
+    expect(view.display.stepCards[2]?.state).not.toBe("LOCKED");
+  });
+
+  it("diagnosis-confirmed + model READY should align loop up to step3 done", () => {
+    const input = makeBaseCase();
+    input.profile = {
+      stage3Type: "AD_MANAGEMENT",
+      originStage2Result: "AD",
+      originRiskScore: 0.88,
+    };
+    input.model.status = "READY";
+    input.model.result = {
+      risk_2y_ad: 0.88,
+      computedAt: "2026-02-19T12:00:00.000Z",
+      modelVersion: "stage3-v1",
+    };
+
+    const reconciled = reconcileStage3Case(input, { autoCompleteStep1: true });
+    expect(reconciled.nextCase.loop.completed.step3At).toBe("2026-02-19T12:00:00.000Z");
+
+    const view = deriveStage3View(input, { autoCompleteStep1: true });
+    expect(view.display.stepCards[2]?.state).toBe("DONE");
+  });
 });

@@ -1,0 +1,22 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: stage2-ann-backend
+    environment:
+      - STAGE2_MODEL_DIR=/models/stage2_modelfinal
+    volumes:
+      - ../../stage2_modelfinal:/models/stage2_modelfinal:ro
+    ports:
+      - "8010:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: stage2-ann-frontend
+    ports:
+      - "5190:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

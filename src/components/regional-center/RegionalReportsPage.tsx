@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { InternalRangeKey, KpiKey } from './opsContracts';
 import type { RegionalScope } from '../geomap/regions';
 import { InfoTooltip } from './InfoTooltip';
+import { fetchRegionalReportSummary } from '../../lib/regionalApi';
 
 interface RegionalReportsPageProps {
   region: RegionalScope;
@@ -159,7 +161,7 @@ export function RegionalReportsPage({
 
   const seed = `${region.id}-${scopeMode}-${effectiveSgg || 'all'}-${reportKpi}-${reportRange}`;
 
-  const metrics = useMemo(() => {
+  const fallbackMetrics = useMemo(() => {
     const queueBefore = Math.round(sv(`${seed}-queue-before`, 250, 760));
     const queueAfter = Math.round(sv(`${seed}-queue-after`, 140, 620));
     const actions = Math.round(sv(`${seed}-actions`, 14, 64));
@@ -184,7 +186,7 @@ export function RegionalReportsPage({
     };
   }, [seed]);
 
-  const causeTop3 = useMemo(() => {
+  const fallbackCauseTop3 = useMemo(() => {
     const rows = [
       { key: 'contact_failure', label: '연락 미성공', count: Math.round(sv(`${seed}-cause-contact`, 80, 280)) },
       { key: 'staff_shortage', label: '인력 여유 부족', count: Math.round(sv(`${seed}-cause-staff`, 60, 260)) },
@@ -199,7 +201,7 @@ export function RegionalReportsPage({
       .map((row) => ({ ...row, ratio: Number(((row.count / Math.max(total, 1)) * 100).toFixed(1)) }));
   }, [seed]);
 
-  const interventionSummary = useMemo(() => {
+  const fallbackInterventionSummary = useMemo(() => {
     return [
       {
         title: '재접촉 슬롯 확대',
@@ -225,26 +227,26 @@ export function RegionalReportsPage({
     ];
   }, [seed]);
 
-  const kpiBeforeAfter = useMemo(() => {
+  const fallbackKpiBeforeAfter = useMemo(() => {
     const rows = [
       {
         label: 'SLA 위험률',
-        before: metrics.slaPrev,
-        after: metrics.slaNow,
+        before: fallbackMetrics.slaPrev,
+        after: fallbackMetrics.slaNow,
         unit: '%',
         higherBetter: false,
       },
       {
         label: '병목 적체 건수',
-        before: metrics.queueBefore,
-        after: metrics.queueAfter,
+        before: fallbackMetrics.queueBefore,
+        after: fallbackMetrics.queueAfter,
         unit: '건',
         higherBetter: false,
       },
       {
         label: '개입 효과 발생 비율',
-        before: Number(Math.max(15, metrics.effectRate - sv(`${seed}-effect-before`, 6, 18)).toFixed(1)),
-        after: metrics.effectRate,
+        before: Number(Math.max(15, fallbackMetrics.effectRate - sv(`${seed}-effect-before`, 6, 18)).toFixed(1)),
+        after: fallbackMetrics.effectRate,
         unit: '%',
         higherBetter: true,
       },
@@ -253,9 +255,9 @@ export function RegionalReportsPage({
       ...row,
       delta: Number((row.after - row.before).toFixed(1)),
     }));
-  }, [metrics.effectRate, metrics.queueAfter, metrics.queueBefore, metrics.slaNow, metrics.slaPrev, seed]);
+  }, [fallbackMetrics.effectRate, fallbackMetrics.queueAfter, fallbackMetrics.queueBefore, fallbackMetrics.slaNow, fallbackMetrics.slaPrev, seed]);
 
-  const unresolvedTasks = useMemo(() => {
+  const fallbackUnresolvedTasks = useMemo(() => {
     return [
       {
         title: 'Stage2 검사 연계 지연 구역 후속 조치',
@@ -274,6 +276,26 @@ export function RegionalReportsPage({
       },
     ];
   }, []);
+
+  const reportSummaryQuery = useQuery({
+    queryKey: ['regional-report-summary', region.id, scopeMode, effectiveSgg, reportKpi, reportRange],
+    queryFn: async () =>
+      fetchRegionalReportSummary({
+        regionId: region.id,
+        scopeMode,
+        sgg: effectiveSgg,
+        kpi: reportKpi,
+        period: reportRange,
+      }),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const metrics = reportSummaryQuery.data?.metrics ?? fallbackMetrics;
+  const causeTop3 = reportSummaryQuery.data?.causeTop3 ?? fallbackCauseTop3;
+  const interventionSummary = reportSummaryQuery.data?.interventionSummary ?? fallbackInterventionSummary;
+  const kpiBeforeAfter = reportSummaryQuery.data?.kpiBeforeAfter ?? fallbackKpiBeforeAfter;
+  const unresolvedTasks = reportSummaryQuery.data?.unresolvedTasks ?? fallbackUnresolvedTasks;
 
   const evidenceLinks = useMemo(() => {
     const baseParams = {

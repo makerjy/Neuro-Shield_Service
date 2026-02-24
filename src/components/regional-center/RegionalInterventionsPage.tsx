@@ -18,6 +18,7 @@ import type { RegionalScope } from '../geomap/regions';
 import { safeOpsText } from '../../lib/uiTextGuard';
 import { findCausePolicy, resolveAssignmentPolicy } from './regionalOpsPolicies';
 import { previewAutoInterventions, type AutoInterventionPreview } from './regionalOpsMockApi';
+import { fetchRegionalInterventionSnapshot, putRegionalInterventionSnapshot } from '../../lib/regionalApi';
 
 interface RegionalInterventionsPageProps {
   region: RegionalScope;
@@ -670,15 +671,85 @@ export function RegionalInterventionsPage({
   const [typeFilter, setTypeFilter] = useState<InterventionType | 'ALL'>('ALL');
   const [ownerFilter, setOwnerFilter] = useState<string>('ALL');
   const [ruleModalOpen, setRuleModalOpen] = useState(false);
+  const [snapshotHydrated, setSnapshotHydrated] = useState(false);
   const consumedUrlDraftRef = useRef(false);
+  const interventionsRef = useRef<Intervention[]>(interventions);
+  const persistTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    setInterventions(buildInitialInterventions(region.id, districtOptions, selectedRange));
-    setSelectedId(null);
-  }, [districtOptions, region.id]);
+    interventionsRef.current = interventions;
+  }, [interventions]);
+
+  useEffect(() => {
+    let active = true;
+    setSnapshotHydrated(false);
+
+    const fallback = buildInitialInterventions(region.id, districtOptions, selectedRange);
+    const hydrate = async () => {
+      try {
+        const remote = await fetchRegionalInterventionSnapshot({
+          regionId: region.id,
+          period: selectedRange,
+        });
+        if (!active) return;
+        setInterventions(remote.items.length ? remote.items : fallback);
+      } catch {
+        if (!active) return;
+        setInterventions(fallback);
+      } finally {
+        if (!active) return;
+        setSelectedId(null);
+        setSnapshotHydrated(true);
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      active = false;
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    };
+  }, [districtOptions, region.id, selectedRange]);
+
+  useEffect(() => {
+    if (!snapshotHydrated) return;
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    persistTimerRef.current = window.setTimeout(() => {
+      void putRegionalInterventionSnapshot({
+        regionId: region.id,
+        period: selectedRange,
+        items: interventionsRef.current,
+      }).catch(() => {
+        // Keep local state when remote snapshot persistence fails.
+      });
+    }, 400);
+
+    return () => {
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
+      }
+    };
+  }, [interventions, region.id, selectedRange, snapshotHydrated]);
 
   const createDraftIntervention = useCallback(
     (draft: InterventionDraft, source: 'manual' | 'url' = 'manual') => {
+      if (draft.snapshotId) {
+        const existing = interventionsRef.current.find(
+          (item) => item.createdFrom.snapshotId && item.createdFrom.snapshotId === draft.snapshotId,
+        );
+        if (existing) {
+          setSelectedId(existing.id);
+          return;
+        }
+      }
+
       const now = new Date().toISOString();
       const areaLabel = draft.region ?? selectedRegionSgg ?? districtOptions[0] ?? `${region.label} 전체`;
       const kpiKey = draft.kpiKey;
@@ -725,6 +796,7 @@ export function RegionalInterventionsPage({
   }, [createDraftIntervention, onPendingDraftConsumed, pendingDraft]);
 
   useEffect(() => {
+    if (!snapshotHydrated) return;
     if (pendingDraft || consumedUrlDraftRef.current) return;
     const params = new URLSearchParams(window.location.search);
     if (params.get('create') !== '1') return;
@@ -747,7 +819,7 @@ export function RegionalInterventionsPage({
     };
     createDraftIntervention(urlDraft, 'url');
     consumedUrlDraftRef.current = true;
-  }, [createDraftIntervention, pendingDraft, selectedRegionSgg]);
+  }, [createDraftIntervention, pendingDraft, selectedRegionSgg, snapshotHydrated]);
 
   const filtered = useMemo(() => {
     return interventions.filter((item) => {

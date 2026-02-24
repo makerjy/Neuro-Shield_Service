@@ -125,7 +125,23 @@ async function sendSmsApi(payload: {
   channel: "sms";
   dedupe_key: string;
 }) {
-  const endpoints = ["/api/outreach/send-sms", "http://localhost:4120/api/outreach/send-sms"];
+  const envAny = import.meta.env as Record<string, string | undefined>;
+  const basePathRaw = (envAny.VITE_BASE_PATH || "/neuro-shield/").trim();
+  const normalizedBasePath = basePathRaw
+    ? `/${basePathRaw.replace(/^\/+|\/+$/g, "")}/`
+    : "/neuro-shield/";
+  const basePrefix = normalizedBasePath === "/" ? "" : normalizedBasePath.replace(/\/$/, "");
+  const explicitApiBase = (envAny.VITE_SMS_API_BASE_URL || envAny.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");
+
+  const endpointCandidates = [
+    "/api/outreach/send-sms",
+    basePrefix ? `${basePrefix}/api/outreach/send-sms` : "",
+    typeof window !== "undefined" ? `${window.location.origin}/api/outreach/send-sms` : "",
+    typeof window !== "undefined" && basePrefix ? `${window.location.origin}${basePrefix}/api/outreach/send-sms` : "",
+    explicitApiBase ? `${explicitApiBase}/api/outreach/send-sms` : "",
+    "http://localhost:4120/api/outreach/send-sms",
+  ];
+  const endpoints = Array.from(new Set(endpointCandidates.filter((item) => item.length > 0)));
 
   for (const endpoint of endpoints) {
     try {
@@ -159,7 +175,14 @@ export function SmsOperationsPage({
   const [mode, setMode] = useState<SendMode>("NOW");
   const [scheduledAt, setScheduledAt] = useState("");
   const [centerName, setCenterName] = useState("강남구 치매안심센터");
-  const [centerPhone, setCenterPhone] = useState("02-1234-5678");
+  const [centerPhone, setCenterPhone] = useState(
+    (
+      (import.meta.env.VITE_STAGE1_CENTER_PHONE as string | undefined) ??
+      (import.meta.env.VITE_SMS_CENTER_PHONE as string | undefined) ??
+      (import.meta.env.VITE_CENTER_PHONE as string | undefined) ??
+      "02-1234-5678"
+    ).trim() || "02-1234-5678",
+  );
   const [link, setLink] = useState("https://neuro-shield.local/check");
   const [bookingLink, setBookingLink] = useState("https://neuro-shield.local/booking");
   const [history, setHistory] = useState<SmsHistoryEntry[]>([]);

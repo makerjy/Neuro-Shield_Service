@@ -26,6 +26,7 @@ celery_app.conf.update(
         'server_fastapi.app.tasks.scheduler',
         'server_fastapi.app.tasks.tasks',
         'server_fastapi.app.tasks.citizen_tasks',
+        'server_fastapi.app.tasks.regional',
     ),
     beat_schedule={
         'aggregate-kpis': {
@@ -67,6 +68,10 @@ celery_app.conf.update(
         'process-queued-local-schedules': {
             'task': 'server_fastapi.app.tasks.tasks.process_queued_schedules',
             'schedule': 120.0,
+        },
+        'sync-regional-snapshots': {
+            'task': 'server_fastapi.app.tasks.regional.sync_regional_snapshots',
+            'schedule': 900.0,
         },
     },
 )

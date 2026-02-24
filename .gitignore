@@ -1,1 +1,6 @@
 node_modules
+3-step_model_final/node_modules
+3-step_model_final/dist
+3-step_model_final/*.tsbuildinfo
+3-step_model_final/vite.config.js
+3-step_model_final/vite.config.d.ts

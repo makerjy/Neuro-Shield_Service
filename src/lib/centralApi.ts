@@ -25,7 +25,7 @@ import {
   type UnifiedAuditEvent,
 } from '../mocks/mockCentralOps';
 
-const USE_REAL_CENTRAL_API = import.meta.env.VITE_USE_REAL_CENTRAL_API === 'true';
+const USE_REAL_CENTRAL_API = String(import.meta.env.VITE_USE_REAL_CENTRAL_API ?? 'true').toLowerCase() !== 'false';
 const CENTRAL_BASE = '/api/central';
 
 function withQuery(path: string, params: Record<string, string | undefined | null | number | boolean>) {

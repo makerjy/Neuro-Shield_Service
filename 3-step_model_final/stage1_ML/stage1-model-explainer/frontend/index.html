@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stage1 ML Model Explainer</title>
+    <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <header class="top-header card">
+      <div>
+        <h1>치매 위험도 설명 도우미</h1>
+        <p class="sub-title">Neuro-Shield Stage1 모델이 계산되는 과정을 쉽게 보여줍니다</p>
+      </div>
+      <div class="header-metrics">
+        <div class="meta-item">
+          <span class="meta-label">실행 ID</span>
+          <span id="run-id" class="mono">-</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">상태</span>
+          <span id="run-status" class="badge status-queued">대기 중</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">모델 버전</span>
+          <span id="model-version" class="mono">loading...</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">결과 시각</span>
+          <span id="generated-at" class="mono">-</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="main-grid">
+      <section class="card panel" id="input-panel">
+        <div class="panel-title-row">
+          <h2>입력 정보</h2>
+          <button id="input-panel-toggle-btn" class="panel-toggle-btn" type="button" aria-expanded="true" aria-controls="input-panel-content">
+            입력 항목 숨기기
+          </button>
+        </div>
+        <p class="panel-help">점수와 건강 정보를 입력하면 위험도를 계산합니다. 모르는 값은 비워둘 수 있습니다.</p>
+        <p id="input-panel-collapsed-hint" class="panel-help hidden">입력 항목이 접혀 있습니다. 아래 버튼으로 계산/데모 생성은 계속 가능합니다.</p>
+
+        <div id="input-panel-content">
+          <div class="quick-guide">
+            <p><strong>1)</strong> 값 입력 또는 모름/미입력 체크</p>
+            <p><strong>2)</strong> 필요 시 결측 허용(데모 모드) 켜기</p>
+            <p><strong>3)</strong> 위험도 계산 시작 버튼 클릭</p>
+          </div>
+
+          <form id="input-form"></form>
+
+          <div class="toggle-row">
+            <label class="toggle-label" for="allow-missing-demo">
+              <input type="checkbox" id="allow-missing-demo" />
+              결측 허용(데모 모드)
+            </label>
+            <small>기본 OFF: 필수값이 비면 계산 중단</small>
+          </div>
+        </div>
+
+        <button id="run-btn" class="primary-btn" type="button">위험도 계산 시작</button>
+
+        <div class="demo-tools">
+          <h3>심사용 데모 CSV</h3>
+          <p class="panel-help">가상 환자 100건을 자동 생성하고, 모델 점수까지 계산해 CSV로 저장합니다.</p>
+          <button id="demo-generate-btn" class="secondary-btn" type="button">데모 CSV 생성(100건)</button>
+          <a id="demo-download-link" class="secondary-btn hidden" href="#" download>CSV 다운로드</a>
+
+          <div id="demo-summary" class="demo-summary hidden">
+            <div class="demo-summary-grid">
+              <div class="metric-card"><span>총 건수</span><strong id="demo-n">-</strong></div>
+              <div class="metric-card"><span>CN</span><strong id="demo-cn">-</strong></div>
+              <div class="metric-card"><span>MCI</span><strong id="demo-mci">-</strong></div>
+              <div class="metric-card"><span>DM</span><strong id="demo-dm">-</strong></div>
+              <div class="metric-card"><span>평균 확률</span><strong id="demo-mean">-</strong></div>
+              <div class="metric-card"><span>평균 MCI 확률</span><strong id="demo-mci-mean">-</strong></div>
+              <div class="metric-card"><span>최소/최대</span><strong id="demo-range">-</strong></div>
+              <div class="metric-card"><span>High 우선순위</span><strong id="demo-priority-high">-</strong></div>
+            </div>
+            <div class="chart-canvas-wrap demo-canvas-wrap">
+              <canvas id="demo-bucket-chart"></canvas>
+            </div>
+          </div>
+
+          <p id="demo-message" class="muted">아직 생성된 데모 파일이 없습니다.</p>
+        </div>
+      </section>
+
+      <section class="card panel" id="timeline-panel">
+        <h2>계산 진행 단계</h2>
+        <p class="panel-help">입력 확인 → 형식 맞추기 → 범위 보정 → 빈칸 채우기 → 계산 준비 → 위험도 계산 → 영향 요인 분석</p>
+        <div id="stepper" class="stepper"></div>
+      </section>
+
+      <section class="card panel" id="result-panel">
+        <h2>결과 이해하기</h2>
+
+        <div id="missing-message" class="alert hidden"></div>
+
+        <div class="gauge-card">
+          <div class="gauge-head">
+            <span>예상 위험도</span>
+            <span id="probability-text" class="probability">-</span>
+          </div>
+          <div class="gauge-track">
+            <div id="probability-fill" class="gauge-fill"></div>
+          </div>
+          <div class="gauge-foot">
+            <span>낮음</span>
+            <span>주의</span>
+            <span>높음</span>
+          </div>
+          <div>
+            <span id="risk-badge" class="badge risk-normal">-</span>
+          </div>
+          <p id="result-guide" class="result-guide">입력 후 계산을 시작하면, 결과 해석 문구가 여기에 표시됩니다.</p>
+        </div>
+
+        <div class="model-breakdown" id="model-breakdown">
+          <div class="metric-card">
+            <span>랜덤포레스트</span>
+            <strong id="rf-proba">-</strong>
+          </div>
+          <div class="metric-card">
+            <span>그래디언트부스팅</span>
+            <strong id="hgb-proba">-</strong>
+          </div>
+          <div class="metric-card">
+            <span>최종 평균</span>
+            <strong id="ens-proba">-</strong>
+          </div>
+        </div>
+
+        <div class="chart-wrap">
+          <h3>어떤 항목이 결과에 영향이 큰가요?</h3>
+          <div class="chart-canvas-wrap">
+            <canvas id="sensitivity-chart"></canvas>
+          </div>
+          <p class="muted">현재 입력 주변에서 값이 조금 바뀔 때 위험도가 얼마나 달라지는지 보여줍니다.</p>
+        </div>
+
+        <button id="report-btn" class="secondary-btn" type="button" disabled>보고서 만들기</button>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

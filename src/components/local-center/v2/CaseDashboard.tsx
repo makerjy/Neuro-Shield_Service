@@ -25,6 +25,7 @@ import {
   type CaseRisk,
   type CaseStatus,
 } from "./caseRecords";
+import { derivePreTriageResultByRule } from "./stage1/stage1ContactEngine";
 import { useLocalCenterCaseDashboardQuery } from "./useLocalCenterApi";
 import { getStage3CaseViewSync } from "../../../stores/caseStore";
 import { HERO_CASE_ID } from "../../../demo/demoConfig";
@@ -278,12 +279,12 @@ function getDemoHeroCaseRecord(): CaseRecord | null {
       risk: "중",
       path: "초기 접촉 집중",
       status: "대기",
-      manager: "이동욱",
+      manager: "김순자",
       action: "Stage1 모델 실행",
       updated: isoToLegacyDateTime(new Date().toISOString()),
       quality: "양호",
       profile: {
-        name: "이재용",
+        name: "김복남",
         age: ageFromBirthYear(1959),
         phone: "010-****-1234",
       },
@@ -340,7 +341,7 @@ function getDemoHeroCaseRecord(): CaseRecord | null {
     risk: mapDemoBandToLegacyRisk(targetCase.stage1.riskBand),
     path,
     status: mapDemoStatusToLegacyStatus(stage, stage === "STAGE1" ? targetCase.stage1.status : stage === "STAGE2" ? targetCase.stage2.status : targetCase.stage3.status),
-    manager: "이동욱",
+    manager: "김순자",
     action,
     updated: isoToLegacyDateTime(targetCase.updatedAt),
     quality: "양호",
@@ -396,7 +397,13 @@ function interventionLevelLabel(priorityTier: Stage1PriorityTier) {
   return "관찰";
 }
 
-function interventionLevelDetail(priorityTier: Stage1PriorityTier) {
+function interventionLevelDetail(priorityTier: Stage1PriorityTier, ownerType?: Stage1OwnerType) {
+  if (ownerType === "AGENT") {
+    if (priorityTier === "L3") return "예외 발생 시 상담사 전환/연계 강화";
+    if (priorityTier === "L2") return "자동 안내/응답 수집 중심";
+    if (priorityTier === "L1") return "정보 제공/자가점검 안내 중심";
+    return "자동 모니터링 중심";
+  }
   if (priorityTier === "L3") return "2차 연계 요청 중심";
   if (priorityTier === "L2") return "상담사 직접 연락 중심";
   if (priorityTier === "L1") return "자가점검/정보 제공 중심";
@@ -438,20 +445,57 @@ function isStage1GateBlocked(item: CaseRecord) {
   return item.profile.phone.trim().length === 0;
 }
 
+function inferStage1RecommendedStrategy(item: CaseRecord): "HUMAN_FIRST" | "AI_FIRST" {
+  const contactModeHint = item.computed?.ops?.contactMode;
+  if (contactModeHint === "AGENT") return "AI_FIRST";
+  if (contactModeHint === "HUMAN") return "HUMAN_FIRST";
+
+  const age = item.profile.age;
+  const hasGuardian = Boolean(item.profile.guardianPhone);
+  const hasComplaint = item.quality === "경고" || item.alertTags.includes("이탈 위험");
+  const hasRefusal = item.status === "지연" || item.alertTags.includes("재평가 필요");
+  const needsGuardian = !hasGuardian && age >= 75;
+  const comprehensionDifficultyFlag = age >= 80 || item.risk === "고";
+  const hasMCI = item.alertTags.includes("High MCI") || item.alertTags.includes("재평가 필요");
+  const hasDementia = item.risk === "고" && age >= 80;
+
+  const result = derivePreTriageResultByRule({
+    age,
+    dxHistory: { hasMCI, hasDementia },
+    contactHistory: {
+      hasComplaint,
+      hasRefusal,
+      needsGuardian,
+      comprehensionDifficultyFlag,
+    },
+    guardian: {
+      exists: hasGuardian,
+      isPrimaryContact: hasGuardian && (needsGuardian || comprehensionDifficultyFlag),
+    },
+    responseHistory: {
+      smsResponseGood: item.risk !== "고",
+      callResponseGood: item.status !== "지연",
+      lastOutcome: item.status === "지연" ? "NO_RESPONSE" : undefined,
+    },
+  });
+
+  return result.strategy;
+}
+
 function resolveStage1Owner(
   item: CaseRecord,
   contactStatus: Stage1ContactStatus,
   channel: Stage1Channel
 ): Pick<Stage1Row, "ownerType" | "ownerName" | "ownerReason"> {
   const hasAssignedManager = item.manager.trim().length > 0 && !item.manager.includes("미지정");
-  const isAutoGuidePreferred = item.path.includes("문자") || item.action.includes("문자");
+  const recommendedStrategy = inferStage1RecommendedStrategy(item);
   const isGateBlocked = isStage1GateBlocked(item);
   if (!hasAssignedManager) {
-    if (isAutoGuidePreferred && !isGateBlocked) {
+    if (recommendedStrategy === "AI_FIRST" && !isGateBlocked) {
       return {
         ownerType: "AGENT",
         ownerName: "자동 안내 Agent",
-        ownerReason: "자동안내 경로로 실행 가능하며 담당 상담사 배정은 후속으로 진행됩니다.",
+        ownerReason: "자동안내 우선 기준으로 자동 안내/응답 수집을 먼저 수행합니다.",
       };
     }
     return {
@@ -471,11 +515,11 @@ function resolveStage1Owner(
     };
   }
 
-  if (isAutoGuidePreferred) {
+  if (recommendedStrategy === "AI_FIRST") {
     return {
       ownerType: "AGENT",
       ownerName: item.manager,
-      ownerReason: "자동안내 우선 경로이지만 담당 상담사 기준으로 자동 발송/상태 확인 흐름이 적용됩니다.",
+      ownerReason: "자동안내 우선 기준으로 자동 안내/응답 수집을 진행하고 담당자가 상태를 확인합니다.",
     };
   }
 
@@ -502,8 +546,7 @@ function resolveStage1Owner(
 function computeStage1Priority(
   item: CaseRecord,
   contactStatus: Stage1ContactStatus,
-  channel: Stage1Channel,
-  lastContactMs: number
+  channel: Stage1Channel
 ): Pick<Stage1Row, "priorityScore" | "priorityTier" | "priorityFactors" | "slaUrgencyScore"> {
   const hasSlaAlert = item.alertTags.includes("SLA 임박");
   const slaUrgency =
@@ -517,21 +560,16 @@ function computeStage1Priority(
             ? 0.2
             : 0;
 
-  const hoursSinceLastContact = lastContactMs > 0 ? (Date.now() - lastContactMs) / (1000 * 60 * 60) : 0;
   const contactStaleness =
     contactStatus === "미시도"
       ? 0.6
-      : hoursSinceLastContact >= 48
-        ? 1
-        : hoursSinceLastContact >= 24
-          ? 0.85
-          : hoursSinceLastContact >= 12
-            ? 0.55
-            : hoursSinceLastContact >= 6
-              ? 0.3
-              : hoursSinceLastContact >= 3
-                ? 0.2
-                : 0.1;
+      : contactStatus === "재시도 필요"
+        ? 0.95
+        : contactStatus === "실패"
+          ? 0.9
+          : contactStatus === "시도중"
+            ? 0.3
+            : 0.1;
 
   const riskBase = item.risk === "고" ? 1 : item.risk === "중" ? 0.6 : 0.25;
   const riskBoost = item.alertTags.includes("High MCI") || item.alertTags.includes("이탈 위험") ? 0.2 : 0;
@@ -675,7 +713,7 @@ function deriveStage1Row(item: CaseRecord): Stage1Row {
   const lastContactMs = parseUpdatedMs(item.updated);
   const isGateBlocked = isStage1GateBlocked(item);
   const owner = resolveStage1Owner(item, contactStatus, channel);
-  const priority = computeStage1Priority(item, contactStatus, channel, lastContactMs);
+  const priority = computeStage1Priority(item, contactStatus, channel);
 
   const nextAction: Stage1NextAction =
     owner.ownerType === "UNASSIGNED" || isGateBlocked
@@ -1502,7 +1540,7 @@ export function CaseDashboard({
                               <span className={cn("inline-flex w-fit rounded border px-2 py-0.5 text-[10px] font-semibold", priorityTierTone(row.priorityTier))}>
                                 {row.priorityTier} · {interventionLevelLabel(row.priorityTier)}
                               </span>
-                              <p className="mt-1 text-[10px] text-gray-500">{interventionLevelDetail(row.priorityTier)} · 점수 {row.priorityScore}</p>
+                              <p className="mt-1 text-[10px] text-gray-500">{interventionLevelDetail(row.priorityTier, row.ownerType)} · 점수 {row.priorityScore}</p>
                               <div className="pointer-events-none invisible absolute left-0 top-[calc(100%+6px)] z-20 w-60 rounded-lg border border-gray-200 bg-white p-2 text-[11px] text-gray-700 opacity-0 shadow-xl transition-all duration-150 group-hover:visible group-hover:opacity-100">
                                 <p className="font-semibold text-gray-800">개입 레벨 근거</p>
                                 {priorityTooltipFactors(row).map((factor) => (

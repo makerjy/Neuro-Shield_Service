@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     demo_mode: bool = Field(default=False, alias='DEMO_MODE')
 
-    cors_origins: List[str] = Field(default_factory=lambda: ['*'])
+    cors_origins: List[str] = Field(default_factory=lambda: ['*'], alias='CORS_ORIGINS')
 
 
 @lru_cache(maxsize=1)

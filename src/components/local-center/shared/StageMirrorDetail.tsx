@@ -118,7 +118,7 @@ export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMir
   const subjectName = profile?.profile.name ?? ssotCase?.patient.name ?? "이름 미확인";
   const subjectAge = profile?.profile.age ?? ssotCase?.patient.age;
   const subjectTitle = isStage3View ? subjectName : caseId;
-  const assigneeName = profile?.manager ?? ssotCase?.assigneeId ?? "김성실 매니저";
+  const assigneeName = profile?.manager ?? ssotCase?.assigneeId ?? "박종덕 매니저";
   const identityLine =
     profile
       ? isStage3View

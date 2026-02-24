@@ -23,7 +23,7 @@ interface LocalCenterAppProps {
 
 export function LocalCenterApp({ 
   userRole = 'counselor',
-  userName = '이상담',
+  userName = '김순자',
   centerName = '서울시 강남구 치매안심센터',
   onLogout
 }: LocalCenterAppProps) {

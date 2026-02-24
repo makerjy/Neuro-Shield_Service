@@ -56,10 +56,10 @@ function ageBandFromBirthYear(birthYear: number) {
 }
 
 function timelineTone(type: TimelineEvent["type"]) {
-  if (type.includes("DONE")) return "text-emerald-700 bg-emerald-50 border-emerald-200";
-  if (type.includes("REQUESTED")) return "text-blue-700 bg-blue-50 border-blue-200";
-  if (type.includes("PROMOTED")) return "text-violet-700 bg-violet-50 border-violet-200";
-  return "text-slate-600 bg-slate-50 border-slate-200";
+  if (type.includes("DONE")) return "text-success bg-success/10 border-success/30";
+  if (type.includes("REQUESTED")) return "text-primary bg-accent border-primary/30";
+  if (type.includes("PROMOTED")) return "text-primary bg-accent border-primary/30";
+  return "text-muted-foreground bg-muted border-border";
 }
 
 export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
@@ -126,9 +126,9 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
 
   if (loading || !currentCase || !person || !stage || !stageJob) {
     return (
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="h-5 w-64 animate-pulse rounded bg-slate-100" />
-        <div className="mt-3 h-20 animate-pulse rounded bg-slate-100" />
+      <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+        <div className="h-5 w-64 animate-pulse rounded bg-muted" />
+        <div className="mt-3 h-20 animate-pulse rounded bg-muted" />
       </div>
     );
   }
@@ -137,40 +137,40 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
     <div className="space-y-4">
       <DemoPanel />
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">
             <button
               type="button"
-              className="rounded-full border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
+              className="rounded-full border border-border p-2 text-muted-foreground hover:bg-muted"
               onClick={onBack}
             >
               <ChevronLeft size={18} />
             </button>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-bold text-slate-900">{currentCase.caseId}</h2>
-                <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-bold text-blue-700">
+                <h2 className="text-xl font-bold text-foreground">{currentCase.caseId}</h2>
+                <span className="rounded-md border border-primary/30 bg-accent px-2 py-1 text-xs font-bold text-primary">
                   {stageLabel(stage)}
                 </span>
                 {runningCurrentStage ? (
-                  <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                  <span className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-xs font-semibold text-warning">
                     모델 산출 중
                   </span>
                 ) : null}
               </div>
-              <p className="mt-1 text-sm text-slate-600">
+              <p className="mt-1 text-sm text-muted-foreground">
                 {person.name} · {person.sex} · {ageBandFromBirthYear(person.birthYear)} · {person.region.sido} {person.region.sigungu} ·{" "}
                 {person.phoneMasked}
               </p>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-1 text-xs text-muted-foreground">
                 운영 Loop Step {loopStep} · Contact Priority {currentCase.ops.contactPriority}
               </p>
             </div>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-right">
-            <p className="text-[11px] font-semibold text-slate-500">마지막 업데이트</p>
-            <p className="text-xs font-bold text-slate-700">{formatDateTime(currentCase.updatedAt)}</p>
+          <div className="rounded-lg border border-border bg-muted px-3 py-2 text-right">
+            <p className="text-[11px] font-semibold text-muted-foreground">마지막 업데이트</p>
+            <p className="text-xs font-bold text-foreground">{formatDateTime(currentCase.updatedAt)}</p>
           </div>
         </div>
 
@@ -183,13 +183,13 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
       </div>
 
       {stage === "STAGE1" ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-base font-bold text-slate-900">Stage1 ML 선별 결과</h3>
+            <h3 className="text-base font-bold text-foreground">Stage1 ML 선별 결과</h3>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 disabled:opacity-50"
+                className="rounded-md border border-primary/30 bg-accent px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-50"
                 disabled={!canRunStage1 || pendingAction !== null}
                 onClick={() => execute("run-stage1", () => runStage1Model(currentCase.caseId), "Stage1 모델 실행을 시작했습니다.")}
               >
@@ -197,7 +197,7 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
               </button>
               <button
                 type="button"
-                className="rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 text-sm font-semibold text-violet-700 disabled:opacity-50"
+                className="rounded-md border border-primary/30 bg-accent px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-50"
                 disabled={!canPromoteStage2 || pendingAction !== null}
                 onClick={() => execute("promote-2", () => promoteToStage2(currentCase.caseId), "Stage2로 상승했습니다.")}
               >
@@ -207,35 +207,35 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
           </div>
 
           <div
-            className={`rounded-xl border border-slate-200 p-4 transition-all duration-300 ease-out ${
+            className={`rounded-xl border border-border p-4 transition-all duration-300 ease-out ${
               runningCurrentStage ? "opacity-60 blur-[1px]" : "opacity-100 translate-y-0"
             }`}
           >
             {currentCase.stage1.status === "DONE" ? (
               <>
-                <p className="text-sm text-slate-700">
+                <p className="text-sm text-foreground">
                   Risk Score <span className="font-bold">{currentCase.stage1.riskScore}</span> / 밴드{" "}
                   <span className="font-bold">{currentCase.stage1.riskBand}</span>
                 </p>
-                <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-foreground">
                   {currentCase.stage1.keyFactors?.map((factor) => <li key={factor}>{factor}</li>)}
                 </ul>
               </>
             ) : (
-              <p className="text-sm text-slate-500">Stage1 결과가 아직 없습니다. 모델 실행 후 위험 신호가 표시됩니다.</p>
+              <p className="text-sm text-muted-foreground">Stage1 결과가 아직 없습니다. 모델 실행 후 위험 신호가 표시됩니다.</p>
             )}
           </div>
         </div>
       ) : null}
 
       {stage === "STAGE2" ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-base font-bold text-slate-900">Stage2 추가검사 + 3중 분류(High-MCI)</h3>
+            <h3 className="text-base font-bold text-foreground">Stage2 추가검사 + 3중 분류(High-MCI)</h3>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 disabled:opacity-50"
+                className="rounded-md border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground disabled:opacity-50"
                 disabled={!canReceiveLabs || pendingAction !== null}
                 onClick={() =>
                   execute("labs", () => submitStage2Labs(currentCase.caseId), "검사결과 수신 처리가 완료되었습니다.")
@@ -245,7 +245,7 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
               </button>
               <button
                 type="button"
-                className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 disabled:opacity-50"
+                className="rounded-md border border-primary/30 bg-accent px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-50"
                 disabled={!canRunStage2 || pendingAction !== null}
                 onClick={() => execute("run-stage2", () => runStage2Model(currentCase.caseId), "Stage2 모델 실행을 시작했습니다.")}
               >
@@ -253,7 +253,7 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
               </button>
               <button
                 type="button"
-                className="rounded-md border border-violet-200 bg-violet-50 px-3 py-1.5 text-sm font-semibold text-violet-700 disabled:opacity-50"
+                className="rounded-md border border-primary/30 bg-accent px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-50"
                 disabled={!canPromoteStage3 || pendingAction !== null}
                 onClick={() => execute("promote-3", () => promoteToStage3(currentCase.caseId), "Stage3로 상승했습니다.")}
               >
@@ -263,34 +263,34 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 p-4">
-              <p className="text-xs font-semibold text-slate-500">검사결과</p>
+            <div className="rounded-xl border border-border p-4">
+              <p className="text-xs font-semibold text-muted-foreground">검사결과</p>
               {currentCase.stage2.labs ? (
-                <div className="mt-2 space-y-2 text-sm text-slate-700">
+                <div className="mt-2 space-y-2 text-sm text-foreground">
                   <p>인지: MMSE {currentCase.stage2.labs.cognition?.MMSE}, MoCA {currentCase.stage2.labs.cognition?.MoCA}</p>
                   <p>혈액: HbA1c {currentCase.stage2.labs.blood?.HbA1c}, LDL {currentCase.stage2.labs.blood?.LDL}</p>
                   <p>바이오마커: pTau {currentCase.stage2.labs.biomarker?.pTau}</p>
-                  <p className="text-xs text-slate-500">수신 시각 {formatDateTime(currentCase.stage2.labs.receivedAt)}</p>
+                  <p className="text-xs text-muted-foreground">수신 시각 {formatDateTime(currentCase.stage2.labs.receivedAt)}</p>
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-amber-700">검사결과 수신 후 실행 가능</p>
+                <p className="mt-2 text-sm text-warning">검사결과 수신 후 실행 가능</p>
               )}
             </div>
 
             <div
-              className={`rounded-xl border border-slate-200 p-4 transition-all duration-300 ease-out ${
+              className={`rounded-xl border border-border p-4 transition-all duration-300 ease-out ${
                 runningCurrentStage ? "opacity-60 blur-[1px]" : "opacity-100 translate-y-0"
               }`}
             >
-              <p className="text-xs font-semibold text-slate-500">3중 분류 결과</p>
+              <p className="text-xs font-semibold text-muted-foreground">3중 분류 결과</p>
               {currentCase.stage2.classification ? (
-                <div className="mt-2 space-y-2 text-sm text-slate-700">
+                <div className="mt-2 space-y-2 text-sm text-foreground">
                   <p>
-                    Label <span className="font-bold text-red-700">{currentCase.stage2.classification.label}</span>
+                    Label <span className="font-bold text-destructive">{currentCase.stage2.classification.label}</span>
                   </p>
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     {Object.entries(currentCase.stage2.classification.probs).map(([key, value]) => (
-                      <div key={key} className="rounded border border-slate-100 bg-slate-50 px-2 py-1">
+                      <div key={key} className="rounded border border-border bg-muted px-2 py-1">
                         {key}: <span className="font-semibold">{toPercent(value)}</span>
                       </div>
                     ))}
@@ -300,7 +300,7 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
                   </ul>
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-slate-500">검사결과 수신 후 모델 실행 시 분류 결과가 표시됩니다.</p>
+                <p className="mt-2 text-sm text-muted-foreground">검사결과 수신 후 모델 실행 시 분류 결과가 표시됩니다.</p>
               )}
             </div>
           </div>
@@ -308,12 +308,12 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
       ) : null}
 
       {stage === "STAGE3" ? (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-base font-bold text-slate-900">Stage3 추가관리 + 2년 전환위험</h3>
+            <h3 className="text-base font-bold text-foreground">Stage3 추가관리 + 2년 전환위험</h3>
             <button
               type="button"
-              className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 disabled:opacity-50"
+              className="rounded-md border border-primary/30 bg-accent px-3 py-1.5 text-sm font-semibold text-primary disabled:opacity-50"
               disabled={!canRunStage3 || pendingAction !== null}
               onClick={() => execute("run-stage3", () => runStage3Model(currentCase.caseId), "Stage3 모델 실행을 시작했습니다.")}
             >
@@ -322,20 +322,20 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 p-4">
-              <p className="text-xs font-semibold text-slate-500">입력 신호</p>
-              <div className="mt-2 space-y-1 text-sm text-slate-700">
+            <div className="rounded-xl border border-border p-4">
+              <p className="text-xs font-semibold text-muted-foreground">입력 신호</p>
+              <div className="mt-2 space-y-1 text-sm text-foreground">
                 <p>ANN Features: {currentCase.stage3.inputs?.annFeaturesReady ? "READY" : "NOT_READY"}</p>
                 <p>MRI CNN Score: {currentCase.stage3.inputs?.cnnMriScore ?? "-"}</p>
               </div>
             </div>
 
             <div
-              className={`rounded-xl border border-slate-200 p-4 transition-all duration-300 ease-out ${
+              className={`rounded-xl border border-border p-4 transition-all duration-300 ease-out ${
                 runningCurrentStage ? "opacity-60 blur-[1px]" : "opacity-100 translate-y-0"
               }`}
             >
-              <p className="text-xs font-semibold text-slate-500">2년 내 AD 전환 위험(1년 단위)</p>
+              <p className="text-xs font-semibold text-muted-foreground">2년 내 AD 전환 위험(1년 단위)</p>
               {currentCase.stage3.conversionRisk ? (
                 <div className="mt-2 space-y-2">
                   {currentCase.stage3.conversionRisk.yearly.map((point) => (
@@ -344,31 +344,31 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
                         <span>Year {point.year}</span>
                         <span className="font-semibold">{toPercent(point.prob)}</span>
                       </div>
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
-                        <div className="h-full rounded-full bg-violet-500" style={{ width: `${Math.round(point.prob * 100)}%` }} />
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-chart-2" style={{ width: `${Math.round(point.prob * 100)}%` }} />
                       </div>
                     </div>
                   ))}
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-muted-foreground">
                     업데이트 {formatDateTime(currentCase.stage3.conversionRisk.updatedAt)}
                   </p>
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-slate-500">모델 실행 후 전환 위험(Year 1, Year 2)이 표시됩니다.</p>
+                <p className="mt-2 text-sm text-muted-foreground">모델 실행 후 전환 위험(Year 1, Year 2)이 표시됩니다.</p>
               )}
             </div>
           </div>
 
           <div
-            className={`mt-4 rounded-xl border border-slate-200 p-4 transition-all duration-300 ease-out ${
+            className={`mt-4 rounded-xl border border-border p-4 transition-all duration-300 ease-out ${
               runningCurrentStage ? "opacity-60 blur-[1px]" : "opacity-100 translate-y-0"
             }`}
           >
-            <p className="mb-2 text-xs font-semibold text-slate-500">조치 계획 (Care Plan)</p>
+            <p className="mb-2 text-xs font-semibold text-muted-foreground">조치 계획 (Care Plan)</p>
             {currentCase.stage3.carePlan && currentCase.stage3.carePlan.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] border-collapse text-sm">
-                  <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+                  <thead className="bg-muted text-xs font-semibold text-muted-foreground">
                     <tr>
                       <th className="px-2 py-2 text-left">조치</th>
                       <th className="px-2 py-2 text-left">담당</th>
@@ -378,12 +378,12 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
                   </thead>
                   <tbody>
                     {currentCase.stage3.carePlan.map((plan, index) => (
-                      <tr key={`${plan.title}-${index}`} className="border-t border-slate-100">
-                        <td className="px-2 py-2 text-slate-700">{plan.title}</td>
-                        <td className="px-2 py-2 text-slate-700">{plan.owner}</td>
-                        <td className="px-2 py-2 text-slate-700">{formatDateTime(plan.dueAt)}</td>
+                      <tr key={`${plan.title}-${index}`} className="border-t border-border">
+                        <td className="px-2 py-2 text-foreground">{plan.title}</td>
+                        <td className="px-2 py-2 text-foreground">{plan.owner}</td>
+                        <td className="px-2 py-2 text-foreground">{formatDateTime(plan.dueAt)}</td>
                         <td className="px-2 py-2">
-                          <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-xs font-semibold text-slate-600">
+                          <span className="rounded border border-border bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground">
                             {plan.status}
                           </span>
                         </td>
@@ -393,22 +393,22 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
                 </table>
               </div>
             ) : (
-              <p className="text-sm text-slate-500">모델 완료 후 조치 계획이 자동 생성됩니다.</p>
+              <p className="text-sm text-muted-foreground">모델 완료 후 조치 계획이 자동 생성됩니다.</p>
             )}
           </div>
         </div>
       ) : null}
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-3 text-base font-bold text-slate-900">Case Timeline</h3>
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
+        <h3 className="mb-3 text-base font-bold text-foreground">Case Timeline</h3>
         <div className="space-y-2">
-          {detail.timeline.length === 0 ? <p className="text-sm text-slate-500">이력 없음</p> : null}
+          {detail.timeline.length === 0 ? <p className="text-sm text-muted-foreground">이력 없음</p> : null}
           {detail.timeline.map((event) => (
-            <div key={`${event.ts}-${event.type}`} className="flex items-start gap-2 rounded-lg border border-slate-100 p-2">
+            <div key={`${event.ts}-${event.type}`} className="flex items-start gap-2 rounded-lg border border-border p-2">
               <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${timelineTone(event.type)}`}>{event.type}</span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm text-slate-700">{event.summary}</p>
-                <p className="text-[11px] text-slate-500">{formatDateTime(event.ts)}</p>
+                <p className="text-sm text-foreground">{event.summary}</p>
+                <p className="text-[11px] text-muted-foreground">{formatDateTime(event.ts)}</p>
               </div>
             </div>
           ))}
@@ -416,7 +416,7 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
       </div>
 
       {latestJob?.status === "FAILED" ? (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
           <div className="flex items-center gap-2">
             <AlertCircle size={16} />
             모델 실행 실패가 감지되었습니다. 데모에서는 재실행 버튼으로 복구할 수 있습니다.
@@ -424,7 +424,7 @@ export function DemoCaseDetail({ caseId, onBack }: DemoCaseDetailProps) {
         </div>
       ) : null}
 
-      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+      <div className="rounded-xl border border-border bg-muted p-3 text-xs text-muted-foreground">
         <div className="flex items-center gap-1">
           <ArrowUpRight size={12} />
           Stage 상승 시 이전 Stage 리스트에서는 즉시 제외되고, 다음 Stage 리스트에서 즉시 조회됩니다.

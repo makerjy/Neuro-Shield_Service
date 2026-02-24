@@ -10,6 +10,7 @@ import type {
   SmsStage,
   SmsTemplateType,
 } from "../../../features/sms/templateRegistry";
+import { rememberSmsTokenCaseLink } from "../../../lib/smsReservationSync";
 
 /** SMS 발송 요청 파라미터 */
 export interface SmsSendRequest {
@@ -64,6 +65,7 @@ export interface SmsSendResult {
 const SMS_API_ENDPOINT_V2 = "/api/sms/messages";
 const SMS_API_ENDPOINT_LEGACY = "/api/outreach/send-sms";
 const DEMO_CITIZEN_TOKEN_DEFAULT = "R-2ldKkoGbDF-marBFEbgVilAXB5Tw0r";
+const DEPLOYED_PUBLIC_BASE_FALLBACK = "http://146.56.162.226/neuro-shield";
 
 function normalizeBasePath(path: string): string {
   if (!path || !path.trim()) return "/neuro-shield/";
@@ -73,19 +75,81 @@ function normalizeBasePath(path: string): string {
   return normalized;
 }
 
+function normalizeEndpointPath(path: string): string {
+  const trimmed = (path || "").trim();
+  if (!trimmed) return "/";
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function dedupeCandidates(items: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of items) {
+    const normalized = item.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function resolveSmsEndpointCandidates(endpointPath: string): string[] {
+  const envAny = import.meta.env as Record<string, string | undefined>;
+  const normalizedPath = normalizeEndpointPath(endpointPath);
+  const basePath = normalizeBasePath(envAny.VITE_BASE_PATH || envAny.BASE_PATH || "/neuro-shield/");
+  const basePrefix = basePath === "/" ? "" : basePath.replace(/\/$/, "");
+  const explicitApiBase = (envAny.VITE_SMS_API_BASE_URL || envAny.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");
+
+  const candidates: string[] = [normalizedPath];
+  if (basePrefix && !normalizedPath.startsWith(`${basePrefix}/`)) {
+    candidates.push(`${basePrefix}${normalizedPath}`);
+  }
+  if (typeof window !== "undefined") {
+    candidates.push(`${window.location.origin}${normalizedPath}`);
+    if (basePrefix && !normalizedPath.startsWith(`${basePrefix}/`)) {
+      candidates.push(`${window.location.origin}${basePrefix}${normalizedPath}`);
+    }
+  }
+  if (explicitApiBase) {
+    candidates.push(`${explicitApiBase}${normalizedPath}`);
+  }
+
+  return dedupeCandidates(candidates);
+}
+
 export function resolvePublicBaseUrl(): string {
   const envAny = import.meta.env as Record<string, string | undefined>;
+  const explicitCitizenEntry = (envAny.VITE_CITIZEN_ENTRY_URL || envAny.VITE_STAGE1_DEMO_LINK || "").trim();
+  if (explicitCitizenEntry) {
+    try {
+      const parsed = new URL(explicitCitizenEntry);
+      const pathname = parsed.pathname.replace(/\/+$/, "");
+      const smsIndex = pathname.indexOf("/p/sms");
+      if (smsIndex >= 0) {
+        const rootPath = pathname.slice(0, smsIndex);
+        return `${parsed.origin}${rootPath}`.replace(/\/$/, "");
+      }
+      return `${parsed.origin}${pathname}`.replace(/\/$/, "");
+    } catch {
+      // ignore malformed explicit link and continue fallback resolution
+    }
+  }
+
   const preferred = envAny.VITE_PUBLIC_BASE_URL || envAny.DEPLOY_BASE_URL;
   if (preferred && preferred.trim()) {
     return preferred.replace(/\/$/, "");
   }
 
   if (typeof window !== "undefined") {
+    const host = window.location.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return DEPLOYED_PUBLIC_BASE_FALLBACK;
+    }
     const basePath = normalizeBasePath(envAny.VITE_BASE_PATH || envAny.BASE_PATH || "/neuro-shield/");
     return `${window.location.origin}${basePath.replace(/\/$/, "")}`;
   }
 
-  return "http://146.56.162.226/neuro-shield";
+  return DEPLOYED_PUBLIC_BASE_FALLBACK;
 }
 
 export function buildSmsLandingLink(token: string): string {
@@ -106,9 +170,13 @@ function parseTokenFromLink(link: string): string | undefined {
 function resolveStage1DemoLink(stage?: SmsStage): { linkUrl: string; token?: string } | null {
   if (stage !== "STAGE1") return null;
   const envAny = import.meta.env as Record<string, string | undefined>;
-  const explicit = (envAny.VITE_STAGE1_DEMO_LINK || "").trim();
+  const explicit = (envAny.VITE_CITIZEN_ENTRY_URL || envAny.VITE_STAGE1_DEMO_LINK || "").trim();
   const token = (envAny.VITE_CITIZEN_DEMO_TOKEN || DEMO_CITIZEN_TOKEN_DEFAULT).trim();
-  const linkUrl = explicit || buildSmsLandingLink(token);
+  const linkUrl = explicit
+    ? explicit.includes("/p/sms")
+      ? explicit
+      : `${explicit.replace(/\/$/, "")}/p/sms?t=${encodeURIComponent(token)}`
+    : buildSmsLandingLink(token);
   return {
     linkUrl,
     token: parseTokenFromLink(linkUrl),
@@ -195,39 +263,52 @@ async function sendViaV2(
   linkUrl: string,
   token: string,
 ): Promise<SmsSendResult> {
-  const response = await fetch(SMS_API_ENDPOINT_V2, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildV2Payload(request, linkUrl, token)),
-  });
+  const endpoints = resolveSmsEndpointCandidates(SMS_API_ENDPOINT_V2);
+  let lastError = "";
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    return {
-      success: false,
-      endpoint: SMS_API_ENDPOINT_V2,
-      error: `서버 오류 (${response.status}): ${errorText}`,
-    };
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildV2Payload(request, linkUrl, token)),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        lastError = `서버 오류 (${response.status}): ${errorText}`;
+        continue;
+      }
+
+      const data = (await response.json()) as V2Response;
+      const lifecycleStatus = normalizeLifecycleStatus(
+        data.status,
+        request.sendPolicy === "SCHEDULE" ? "SCHEDULED" : "SENT",
+      );
+
+      return {
+        success: true,
+        endpoint,
+        providerMessageId: data.providerMessageId || data.messageId,
+        status: data.status || lifecycleStatus,
+        lifecycleStatus,
+        renderedText: data.renderedText || data.renderedMessage || request.renderedMessage,
+        renderedMessage: data.renderedMessage || data.renderedText || request.renderedMessage,
+        token: data.token || token,
+        linkUrl: data.linkUrl || linkUrl,
+        actualTo: data.actualTo,
+        intendedTo: data.intendedTo,
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      lastError = `연결 실패: ${reason}`;
+    }
   }
 
-  const data = (await response.json()) as V2Response;
-  const lifecycleStatus = normalizeLifecycleStatus(
-    data.status,
-    request.sendPolicy === "SCHEDULE" ? "SCHEDULED" : "SENT",
-  );
-
   return {
-    success: true,
-    endpoint: SMS_API_ENDPOINT_V2,
-    providerMessageId: data.providerMessageId || data.messageId,
-    status: data.status || lifecycleStatus,
-    lifecycleStatus,
-    renderedText: data.renderedText || data.renderedMessage || request.renderedMessage,
-    renderedMessage: data.renderedMessage || data.renderedText || request.renderedMessage,
-    token: data.token || token,
-    linkUrl: data.linkUrl || linkUrl,
-    actualTo: data.actualTo,
-    intendedTo: data.intendedTo,
+    success: false,
+    endpoint: endpoints[0] ?? SMS_API_ENDPOINT_V2,
+    error: lastError || "문자 발송 실패",
   };
 }
 
@@ -240,39 +321,52 @@ type LegacyResponse = {
 };
 
 async function sendViaLegacy(request: SmsSendRequest, linkUrl: string): Promise<SmsSendResult> {
-  const response = await fetch(SMS_API_ENDPOINT_LEGACY, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildLegacyPayload(request, linkUrl)),
-  });
+  const endpoints = resolveSmsEndpointCandidates(SMS_API_ENDPOINT_LEGACY);
+  let lastError = "";
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    return {
-      success: false,
-      endpoint: SMS_API_ENDPOINT_LEGACY,
-      error: `서버 오류 (${response.status}): ${errorText}`,
-    };
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildLegacyPayload(request, linkUrl)),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        lastError = `서버 오류 (${response.status}): ${errorText}`;
+        continue;
+      }
+
+      const data = (await response.json()) as LegacyResponse;
+      const lifecycleStatus = normalizeLifecycleStatus(
+        data.status,
+        request.sendPolicy === "SCHEDULE" ? "SCHEDULED" : "SENT",
+      );
+
+      return {
+        success: true,
+        endpoint,
+        providerMessageId: data.provider_message_id,
+        status: data.status || lifecycleStatus,
+        lifecycleStatus,
+        actualTo: data.actual_to,
+        intendedTo: data.intended_to,
+        renderedMessage: data.rendered_message || ensureLinkInMessage(request.renderedMessage, linkUrl),
+        renderedText: data.rendered_message || ensureLinkInMessage(request.renderedMessage, linkUrl),
+        token: request.linkToken,
+        linkUrl,
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      lastError = `연결 실패: ${reason}`;
+    }
   }
 
-  const data = (await response.json()) as LegacyResponse;
-  const lifecycleStatus = normalizeLifecycleStatus(
-    data.status,
-    request.sendPolicy === "SCHEDULE" ? "SCHEDULED" : "SENT",
-  );
-
   return {
-    success: true,
-    endpoint: SMS_API_ENDPOINT_LEGACY,
-    providerMessageId: data.provider_message_id,
-    status: data.status || lifecycleStatus,
-    lifecycleStatus,
-    actualTo: data.actual_to,
-    intendedTo: data.intended_to,
-    renderedMessage: data.rendered_message || ensureLinkInMessage(request.renderedMessage, linkUrl),
-    renderedText: data.rendered_message || ensureLinkInMessage(request.renderedMessage, linkUrl),
-    token: request.linkToken,
-    linkUrl,
+    success: false,
+    endpoint: endpoints[0] ?? SMS_API_ENDPOINT_LEGACY,
+    error: lastError || "문자 발송 실패",
   };
 }
 
@@ -313,35 +407,27 @@ export async function sendSmsApi(request: SmsSendRequest): Promise<SmsSendResult
   const stage1Demo = !request.linkUrl ? resolveStage1DemoLink(request.stage) : null;
   const token = request.linkToken || stage1Demo?.token || createClientSmsToken(request.caseId);
   const linkUrl = request.linkUrl || stage1Demo?.linkUrl || buildSmsLandingLink(token);
+  rememberSmsTokenCaseLink({ token, caseId: request.caseId, sentAt: new Date().toISOString() });
 
-  try {
-    const v2Result = await sendViaV2(request, linkUrl, token);
-    if (v2Result.success) {
-      return v2Result;
-    }
-    console.warn(`[SMS] ${SMS_API_ENDPOINT_V2} 실패, legacy fallback 사용:`, v2Result.error);
-
-    const legacyResult = await sendViaLegacy(request, linkUrl);
-    if (legacyResult.success) {
-      return legacyResult;
-    }
-
-    return {
-      success: false,
-      endpoint: legacyResult.endpoint,
-      error: legacyResult.error || v2Result.error || "문자 발송 실패",
-      token,
-      linkUrl,
-    };
-  } catch (err) {
-    console.warn(`[SMS] ${SMS_API_ENDPOINT_V2}/${SMS_API_ENDPOINT_LEGACY} 연결 실패:`, err);
-    return {
-      success: false,
-      token,
-      linkUrl,
-      error: "SMS 서비스에 연결할 수 없습니다. 네트워크를 확인하세요.",
-    };
+  const v2Result = await sendViaV2(request, linkUrl, token);
+  if (v2Result.success) {
+    return v2Result;
   }
+  console.warn(`[SMS] ${SMS_API_ENDPOINT_V2} 실패, legacy fallback 사용:`, v2Result.error);
+
+  const legacyResult = await sendViaLegacy(request, linkUrl);
+  if (legacyResult.success) {
+    return legacyResult;
+  }
+
+  const fallbackError = legacyResult.error || v2Result.error;
+  return {
+    success: false,
+    endpoint: legacyResult.endpoint || v2Result.endpoint,
+    error: fallbackError || "SMS 서비스에 연결할 수 없습니다. 네트워크를 확인하세요.",
+    token,
+    linkUrl,
+  };
 }
 
 /** 발송 이력 아이템 */

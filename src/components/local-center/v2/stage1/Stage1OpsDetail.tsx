@@ -64,6 +64,8 @@ import {
   runCaseStage2Model,
   runCaseStage3Model,
   setCaseBookingPending,
+  setCaseContactMode,
+  setCaseStage1NextStep,
   setCaseNextStep,
   type CaseEntity,
   type EventType,
@@ -71,6 +73,7 @@ import {
   updateCaseStage2Evidence,
   updateCaseStage3Evidence,
   useCaseEntity,
+  useCaseEvents,
 } from "../caseSSOT";
 import {
   fetchStage2Step2Autofill,
@@ -97,6 +100,8 @@ import type {
   LinkageStatus,
   FollowUpRoute,
   ReservationInfo,
+  ReservationSnapshot,
+  ReservationStatus,
   AgentExecutionLog,
   AgentContactResult,
   OutcomeSavePayload,
@@ -154,6 +159,12 @@ import {
 } from "./opsLoopState";
 import { useStage3CaseView } from "../../../../stores/caseStore";
 import type { Stage3ViewModel } from "../../../../domain/stage3/types";
+import {
+  listSmsReservationSyncEvents,
+  matchSmsReservationSyncEvent,
+  SMS_RESERVATION_SYNC_STORAGE_KEY,
+  type SmsReservationSyncEvent,
+} from "../../../../lib/smsReservationSync";
 
 type TimelineFilter = "ALL" | "CALL" | "SMS" | "STATUS";
 type CallTarget = "citizen" | "guardian";
@@ -171,7 +182,11 @@ type StageOpsMode = "stage1" | "stage2" | "stage3";
 type SurfaceStage = "Stage 1" | "Stage 2" | "Stage 3";
 
 const STAGE1_SMS_AUTO_CONTACT_COMPLETE_CASE_IDS = new Set(["CASE-2026-175"]);
-const STAGE1_SMS_AUTO_CONTACT_COMPLETE_NAME = "이재용";
+const STAGE1_SMS_AUTO_CONTACT_COMPLETE_NAME = "김복남";
+const STAGE1_FORCE_STEP1_WAIT_CASE_IDS = new Set(["CASE-2026-175"]);
+const LINKED_DEMO_UNIFIED_OPS_CASE_IDS = new Set(["CASE-2026-175", "CASE-2026-275", "CASE-2026-375"]);
+const LINKED_DEMO_UNIFIED_PRIORITY_SCORE = 80;
+const LINKED_DEMO_UNIFIED_INTERVENTION_LEVEL: InterventionLevel = "L2";
 
 type AgentJobState = {
   status: AgentJobStatus;
@@ -481,6 +496,14 @@ type NoResponsePlanDraft = {
   applyL3: boolean;
 };
 
+type AutoFilledOutcomeState = {
+  source: "SMS";
+  outcome: OutcomeCode;
+  summary: string;
+  autoFilledAt: string;
+  manualOverriddenAt?: string;
+};
+
 type RagRecommendation = {
   id: string;
   title: string;
@@ -489,12 +512,15 @@ type RagRecommendation = {
   scriptBody: string;
 };
 
+type Stage1FollowUpNextStepDecision = "KEEP_STAGE1" | "MOVE_STAGE2";
+
 type FollowUpDecisionDraft = {
   route: FollowUpRoute;
   scheduledAt: string;
   place: string;
   contactGuide: string;
   note: string;
+  stage2Decision: Stage1FollowUpNextStepDecision;
 };
 
 type Stage3ReviewDraft = {
@@ -709,23 +735,37 @@ type SmsTemplate = {
   }) => string;
 };
 
-const STAGE1_PANEL_OPERATOR = "김성실";
+const STAGE1_PANEL_OPERATOR = "박종덕";
 const DEFAULT_CENTER_NAME = "강남구 치매안심센터";
-const DEFAULT_CENTER_PHONE = "02-555-0199";
+const DEFAULT_CENTER_PHONE =
+  (
+    (import.meta.env.VITE_STAGE1_CENTER_PHONE as string | undefined) ??
+    (import.meta.env.VITE_SMS_CENTER_PHONE as string | undefined) ??
+    (import.meta.env.VITE_CENTER_PHONE as string | undefined) ??
+    "02-555-0199"
+  ).trim() || "02-555-0199";
 const DEMO_CITIZEN_TOKEN_DEFAULT = "R-2ldKkoGbDF-marBFEbgVilAXB5Tw0r";
+const DEPLOYED_CITIZEN_BASE_FALLBACK = "http://146.56.162.226/neuro-shield";
 /** 시민화면 링크 (배포 환경 자동 감지) */
 function getCitizenUrl(): string {
-  const explicitDemoLink = (import.meta.env.VITE_STAGE1_DEMO_LINK as string | undefined)?.trim();
+  const explicitDemoLink =
+    ((import.meta.env.VITE_CITIZEN_ENTRY_URL as string | undefined) ||
+      (import.meta.env.VITE_STAGE1_DEMO_LINK as string | undefined) ||
+      "").trim();
   if (explicitDemoLink && explicitDemoLink.length > 0) return explicitDemoLink;
   const demoToken = ((import.meta.env.VITE_CITIZEN_DEMO_TOKEN as string | undefined) || DEMO_CITIZEN_TOKEN_DEFAULT).trim();
   if (typeof window !== "undefined") {
+    const host = window.location.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+      return `${DEPLOYED_CITIZEN_BASE_FALLBACK}/p/sms?t=${encodeURIComponent(demoToken)}`;
+    }
     const configuredBase = (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined)?.trim();
     const base = configuredBase && configuredBase.length > 0 ? configuredBase.replace(/\/$/, "") : window.location.origin;
     const basePath = import.meta.env.VITE_BASE_PATH || "/neuro-shield/";
     const rootedBase = configuredBase && configuredBase.length > 0 ? base : `${base}${basePath.replace(/\/$/, "")}`;
     return `${rootedBase}/p/sms?t=${encodeURIComponent(demoToken)}`;
   }
-  return `http://146.56.162.226/neuro-shield/p/sms?t=${encodeURIComponent(demoToken)}`;
+  return `${DEPLOYED_CITIZEN_BASE_FALLBACK}/p/sms?t=${encodeURIComponent(demoToken)}`;
 }
 const DEFAULT_GUIDE_LINK = getCitizenUrl();
 const DEFAULT_BOOKING_URL = "(센터 예약 안내)";
@@ -978,6 +1018,13 @@ function fromDateTimeLocalValue(value: string) {
   return date.toISOString();
 }
 
+function toIsoFromLegacyDateTime(input?: string) {
+  if (!input) return undefined;
+  const parsed = new Date(input.includes("T") ? input : input.replace(" ", "T"));
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return parsed.toISOString();
+}
+
 function recommendationToCallScripts(mode: StageOpsMode, recommendation?: RagRecommendation): StdCallScriptStep[] {
   const baseSteps = mode === "stage1" ? CALL_SCRIPT_STEPS : STAGE2_CALL_SCRIPT_STEPS;
   if (!recommendation) {
@@ -1046,6 +1093,10 @@ function mapDataQuality(raw?: CaseRecord["quality"]) {
 }
 
 function computePriorityValue(caseRecord?: CaseRecord) {
+  if (caseRecord && LINKED_DEMO_UNIFIED_OPS_CASE_IDS.has(caseRecord.id)) {
+    return LINKED_DEMO_UNIFIED_PRIORITY_SCORE;
+  }
+
   const statusScoreMap: Record<CaseRecord["status"], number> = {
     진행중: 62,
     대기: 76,
@@ -1410,6 +1461,40 @@ function buildInitialStage2Diagnosis(caseRecord?: CaseRecord, ssotCase?: CaseEnt
         neuroCognitiveType: undefined,
       },
       classification: undefined,
+      nextStep: undefined,
+    };
+  }
+
+  const ssotStage2Required = ssotCase?.computed.evidence.stage2.required;
+  const ssotModel2 = ssotCase?.computed.model2;
+  if (ssotCase?.stage === 2 && ssotStage2Required) {
+    const routeFromSsot: Stage2Route = ssotCase.stage2Route === "HOSPITAL" ? "HOSPITAL" : "CENTER";
+    const labelFromSsot = stage2ClassLabelFromModel(ssotModel2?.predictedLabel) ?? inferStage2Label(caseRecord);
+    const mciStageFromSsot = stage2MciStageFromModel(ssotModel2?.mciBand) ?? (labelFromSsot === "MCI" ? inferStage2MciStage(caseRecord) : undefined);
+    const tests: Stage2Diagnosis["tests"] = {
+      specialist: Boolean(ssotStage2Required.specialist),
+      mmse: typeof ssotStage2Required.mmse === "number" ? ssotStage2Required.mmse : undefined,
+      cdr: typeof ssotStage2Required.cdrOrGds === "number" ? ssotStage2Required.cdrOrGds : undefined,
+      neuroCognitiveType: ssotStage2Required.neuroType ?? undefined,
+    };
+    const classificationConfirmedBySsot =
+      ssotCase.status === "CLASS_CONFIRMED" ||
+      ssotCase.status === "NEXT_STEP_SET" ||
+      ssotCase.operationStep === "CLASSIFIED" ||
+      ssotCase.operationStep === "FOLLOW_UP" ||
+      ssotCase.operationStep === "COMPLETED" ||
+      ssotCase.stage >= 3;
+
+    return {
+      status: stage2StatusFromTests(tests, classificationConfirmedBySsot, routeFromSsot),
+      tests,
+      classification: ssotModel2?.available
+        ? {
+            label: labelFromSsot,
+            probs: ssotModel2.probs ?? inferStage2Probs(labelFromSsot, mciStageFromSsot),
+            mciStage: mciStageFromSsot,
+          }
+        : undefined,
       nextStep: undefined,
     };
   }
@@ -2077,7 +2162,7 @@ function buildInitialTimeline(caseRecord: CaseRecord | undefined, level: Interve
     },
   ];
 
-  if (baseStatus !== "완료") {
+  if (baseStatus === "진행중" || baseStatus === "임박" || baseStatus === "지연") {
     events.unshift({
       type: "CALL_ATTEMPT",
       at: withHoursFromNow(-18),
@@ -2140,11 +2225,15 @@ function buildInitialStage1Detail(
   stage2OpsView = false,
 ): Stage1Detail {
   const intervention = getStage1InterventionPlan(caseRecord);
+  const resolvedInterventionLevel: InterventionLevel =
+    caseRecord && LINKED_DEMO_UNIFIED_OPS_CASE_IDS.has(caseRecord.id)
+      ? LINKED_DEMO_UNIFIED_INTERVENTION_LEVEL
+      : intervention.level;
   const quality = mapDataQuality(caseRecord?.quality);
   const preTriageInput = buildPreTriageInput(caseRecord);
-  const preTriage = buildPreTriageResult(preTriageInput);
+  const preTriage = applyContactModeHint(buildPreTriageResult(preTriageInput), caseRecord?.computed?.ops?.contactMode);
   const contactPlan = buildContactPlan(preTriage.strategy, caseRecord, mode);
-  const contactExecution = buildInitialContactExecution();
+  const contactExecution = buildInitialContactExecution(caseRecord);
   const linkageStatus: LinkageStatus = "NOT_CREATED";
   const stage3HeaderMeta = mode === "stage3" ? buildStage3HeaderMeta(caseRecord) : undefined;
   const stage3TransitionRisk = mode === "stage3" ? buildStage3TransitionRisk(caseRecord) : undefined;
@@ -2210,7 +2299,7 @@ function buildInitialStage1Detail(
       riskGuardrails: riskGuardrails.length > 0 ? riskGuardrails : undefined,
     },
     policyGates: buildPolicyGates(caseRecord),
-    interventionLevel: intervention.level,
+    interventionLevel: resolvedInterventionLevel,
     riskEvidence: buildRiskEvidence(caseRecord, mode, stage2OpsView),
     scoreSummary: buildScoreSummary(
       caseRecord,
@@ -2227,8 +2316,8 @@ function buildInitialStage1Detail(
         : undefined,
       stage2OpsView,
     ),
-    todos: buildTodos(intervention.level, quality.level),
-    timeline: buildInitialTimeline(caseRecord, intervention.level, mode),
+    todos: buildTodos(resolvedInterventionLevel, quality.level),
+    timeline: buildInitialTimeline(caseRecord, resolvedInterventionLevel, mode),
     preTriageInput,
     preTriageResult: preTriage,
     contactPlan,
@@ -2236,6 +2325,11 @@ function buildInitialStage1Detail(
     contactFlowSteps: buildContactFlowSteps(contactExecution, preTriage, linkageStatus, mode),
     linkageStatus,
     contactExecutor: preTriage.strategy === "AI_FIRST" ? "AGENT_SEND_ONLY" : "HUMAN",
+    lastSmsSentAt: contactExecution.lastSentAt ?? null,
+    reservation: {
+      source: "MANUAL",
+      status: "NONE",
+    },
     agentExecutionLogs: [],
     stage3:
       mode === "stage3" && stage3HeaderMeta && stage3TransitionRisk && stage3PlanProgressPct != null
@@ -2456,6 +2550,15 @@ function remainingTimeText(targetIso: string | undefined, nowMs: number) {
 
 function eventToCategory(event: ContactEvent): TimelineFilter {
   if (event.type === "CALL_ATTEMPT") return "CALL";
+  if (
+    event.type === "SMS_RESERVATION_RESERVED" ||
+    event.type === "SMS_RESERVATION_CANCELLED" ||
+    event.type === "SMS_RESERVATION_CHANGED" ||
+    event.type === "SMS_RESERVATION_NO_SHOW"
+  ) {
+    return "SMS";
+  }
+  if (event.type === "INCONSISTENT_SMS_STATUS") return "STATUS";
   if (event.type === "MESSAGE_SENT") {
     if (event.summary.includes("STAGE1_RESPONSE_RECORDED") || event.summary.includes("STAGE2_RESPONSE_RECORDED")) {
       return "STATUS";
@@ -2482,6 +2585,11 @@ function eventTitle(event: ContactEvent) {
     }
     return "예약 확인 문자 발송";
   }
+  if (event.type === "SMS_RESERVATION_RESERVED") return "[SMS] 시민 예약 완료";
+  if (event.type === "SMS_RESERVATION_CANCELLED") return "[SMS] 시민 예약 취소";
+  if (event.type === "SMS_RESERVATION_CHANGED") return "[SMS] 시민 예약 변경";
+  if (event.type === "SMS_RESERVATION_NO_SHOW") return "[SMS] 시민 예약 노쇼";
+  if (event.type === "INCONSISTENT_SMS_STATUS") return "문자 발송 상태 확인 필요";
   if (event.type === "LEVEL_CHANGE") {
     return `개입 레벨 변경 ${event.from} → ${event.to}`;
   }
@@ -2553,6 +2661,18 @@ function eventDetail(event: ContactEvent) {
   }
   if (event.type === "MESSAGE_SENT") {
     return event.summary;
+  }
+  if (
+    event.type === "SMS_RESERVATION_RESERVED" ||
+    event.type === "SMS_RESERVATION_CANCELLED" ||
+    event.type === "SMS_RESERVATION_CHANGED" ||
+    event.type === "SMS_RESERVATION_NO_SHOW"
+  ) {
+    const chunks = [event.programName, event.scheduledAt ? formatDateTime(event.scheduledAt) : undefined].filter(Boolean);
+    return chunks.length > 0 ? chunks.join(" · ") : event.summary;
+  }
+  if (event.type === "INCONSISTENT_SMS_STATUS") {
+    return [event.summary, event.detail].filter(Boolean).join(" · ");
   }
   if (event.type === "LEVEL_CHANGE") {
     return event.reason;
@@ -3098,7 +3218,7 @@ const STAGE3_FLOW_CONFIG: Stage1FlowCardConfig[] = [
   },
   {
     id: "CONTACT_EXECUTION",
-    title: "감별검사·뇌영상 경로",
+    title: "정밀검사 연계 경로",
     description: "권고/의뢰/예약 생성",
     relatedSteps: ["COMPOSE", "SEND"],
     action: "OPEN_CONTACT_EXECUTION",
@@ -3161,7 +3281,8 @@ function getFlowCardLockReason(flowCards: Stage1FlowCard[], targetId: Stage1Flow
   const targetIndex = flowCards.findIndex((card) => card.id === targetId);
   if (targetIndex <= 0) return null;
 
-  const blockedBy = flowCards.slice(0, targetIndex).find((card) => card.status !== "COMPLETED");
+  const canPass = (status: Stage1FlowVisualStatus) => status === "COMPLETED" || status === "READY";
+  const blockedBy = flowCards.slice(0, targetIndex).find((card) => !canPass(card.status));
   if (!blockedBy) return null;
 
   const targetTitle = flowCards[targetIndex]?.title ?? "해당";
@@ -3229,6 +3350,47 @@ const LINKAGE_STATUS_HINT: Record<LinkageStatus, string> = {
   BOOKING_DONE: "예약완료",
   REFERRAL_CREATED: "의뢰생성",
 };
+
+const RESERVATION_STATUS_LABELS: Record<ReservationStatus, string> = {
+  NONE: "미생성",
+  RESERVED: "예약 완료",
+  CANCELLED: "예약 취소",
+  CHANGED: "예약 변경",
+  NO_SHOW: "노쇼",
+};
+
+const SMS_RESERVATION_EVENT_TYPE_BY_STATUS: Record<
+  Exclude<ReservationStatus, "NONE">,
+  "SMS_RESERVATION_RESERVED" | "SMS_RESERVATION_CANCELLED" | "SMS_RESERVATION_CHANGED" | "SMS_RESERVATION_NO_SHOW"
+> = {
+  RESERVED: "SMS_RESERVATION_RESERVED",
+  CANCELLED: "SMS_RESERVATION_CANCELLED",
+  CHANGED: "SMS_RESERVATION_CHANGED",
+  NO_SHOW: "SMS_RESERVATION_NO_SHOW",
+};
+
+function mapReservationStatusToOutcome(status: ReservationStatus): OutcomeCode {
+  if (status === "CANCELLED") return "SCHEDULE_LATER";
+  if (status === "NO_SHOW") return "NO_RESPONSE";
+  return "CONTINUE_SELF";
+}
+
+function toReservationStatus(status: SmsReservationSyncEvent["status"]): Exclude<ReservationStatus, "NONE"> {
+  if (status === "CANCELLED") return "CANCELLED";
+  if (status === "CHANGED") return "CHANGED";
+  if (status === "NO_SHOW") return "NO_SHOW";
+  return "RESERVED";
+}
+
+function buildReservationSummary(reservation: ReservationSnapshot | undefined) {
+  if (!reservation || reservation.status === "NONE") return "예약 정보 미수신";
+  const chunks = [
+    reservation.programName,
+    reservation.scheduledAt ? formatDateTime(reservation.scheduledAt) : undefined,
+    reservation.locationName,
+  ].filter(Boolean);
+  return chunks.length > 0 ? chunks.join(" · ") : RESERVATION_STATUS_LABELS[reservation.status];
+}
 
 const STAGE1_LINKAGE_ACTION_META: Record<
   Stage1LinkageAction,
@@ -3329,7 +3491,7 @@ function useStage1Flow(
           return acc;
         }
         const prevCard = acc[index - 1];
-        if (prevCard.status === "COMPLETED") {
+        if (prevCard.status === "COMPLETED" || prevCard.status === "READY") {
           acc.push(card);
           return acc;
         }
@@ -3345,7 +3507,7 @@ function useStage1Flow(
         return acc;
       }, []);
 
-      const currentIndex = gatedCards.findIndex((card) => card.status !== "COMPLETED");
+      const currentIndex = gatedCards.findIndex((card) => card.status !== "COMPLETED" && card.status !== "READY");
       const resolvedCurrentIndex = currentIndex === -1 ? gatedCards.length - 1 : currentIndex;
       return gatedCards.map((card, index) => ({ ...card, isCurrent: index === resolvedCurrentIndex }));
     }
@@ -3425,7 +3587,7 @@ function useStage1Flow(
             ...config,
             status: "COMPLETED" as const,
             reason: "전환 위험 추적 리뷰 및 기준선 확정이 완료되었습니다.",
-            nextActionHint: "감별검사/뇌영상 경로 단계로 이동해 권고를 실행하세요.",
+            nextActionHint: "정밀검사 연계 경로 단계로 이동해 권고를 실행하세요.",
             metricLabel: `리스크 리뷰 완료 · ${relatedSummary}`,
             isCurrent: false,
           };
@@ -3486,7 +3648,7 @@ function useStage1Flow(
             return {
               ...config,
               status: "PENDING" as const,
-              reason: "감별검사/뇌영상 경로가 예약 또는 완료 상태가 아닙니다.",
+              reason: "정밀검사 연계 경로가 예약 또는 완료 상태가 아닙니다.",
               nextActionHint: "권고·의뢰 후 예약 생성/결과 입력까지 진행하세요.",
               metricLabel: `감별경로 ${diffPathStatus} · ${relatedSummary}`,
               isCurrent: false,
@@ -3505,7 +3667,7 @@ function useStage1Flow(
           return {
             ...config,
             status: "COMPLETED" as const,
-            reason: "감별검사/뇌영상 경로 권고가 처리되었습니다.",
+            reason: "정밀검사 연계 경로 권고가 처리되었습니다.",
             nextActionHint: "정밀관리 제공 단계에서 프로그램 실행을 기록하세요.",
             metricLabel: `감별경로 ${diffPathStatus} · ${relatedSummary}`,
             isCurrent: false,
@@ -3634,7 +3796,7 @@ function useStage1Flow(
           return acc;
         }
         const prevCard = acc[index - 1];
-        if (prevCard.status === "COMPLETED") {
+        if (prevCard.status === "COMPLETED" || prevCard.status === "READY") {
           acc.push(card);
           return acc;
         }
@@ -3650,7 +3812,7 @@ function useStage1Flow(
         return acc;
       }, []);
 
-      const currentIndex = gatedCards.findIndex((card) => card.status !== "COMPLETED");
+      const currentIndex = gatedCards.findIndex((card) => card.status !== "COMPLETED" && card.status !== "READY");
       const resolvedCurrentIndex = currentIndex === -1 ? gatedCards.length - 1 : currentIndex;
       return gatedCards.map((card, index) => ({ ...card, isCurrent: index === resolvedCurrentIndex }));
     }
@@ -3854,7 +4016,7 @@ function useStage1Flow(
       };
     });
 
-    const currentIndex = cards.findIndex((card) => card.status !== "COMPLETED");
+    const currentIndex = cards.findIndex((card) => card.status !== "COMPLETED" && card.status !== "READY");
     const resolvedCurrentIndex = currentIndex === -1 ? cards.length - 1 : currentIndex;
 
     return cards.map((card, index) => ({
@@ -3899,6 +4061,25 @@ function buildPreTriageResult(input: PreTriageInput): PreTriageResult {
   return derivePreTriageResultByRule(input);
 }
 
+function applyContactModeHint(preTriage: PreTriageResult, contactMode?: "HUMAN" | "AGENT"): PreTriageResult {
+  if (!contactMode) return preTriage;
+  const hintedStrategy: RecommendedContactStrategy = contactMode === "AGENT" ? "AI_FIRST" : "HUMAN_FIRST";
+  if (preTriage.strategy === hintedStrategy) return preTriage;
+
+  const trigger = contactMode === "AGENT" ? "CONTACT_MODE_HINT_AGENT" : "CONTACT_MODE_HINT_HUMAN";
+  const policyNote =
+    contactMode === "AGENT"
+      ? "운영 설정 기준에서 자동 안내/응답 수집 우선으로 설정되어 있습니다. 최종 실행은 담당자가 확인 후 진행합니다."
+      : "운영 설정 기준에서 상담사 우선 접촉으로 설정되어 있습니다. 최종 실행은 담당자가 확인 후 진행합니다.";
+
+  return {
+    strategy: hintedStrategy,
+    triggers: [...preTriage.triggers, trigger],
+    policyNote,
+    confidence: "RULE",
+  };
+}
+
 function buildContactPlan(strategy: RecommendedContactStrategy, caseRecord?: CaseRecord, mode: StageOpsMode = "stage1"): ContactPlan {
   const isStage2Mode = mode === "stage2";
   const isStage3Mode = mode === "stage3";
@@ -3927,7 +4108,49 @@ function buildContactPlan(strategy: RecommendedContactStrategy, caseRecord?: Cas
   };
 }
 
-function buildInitialContactExecution(): ContactExecution {
+function buildInitialContactExecution(caseRecord?: CaseRecord): ContactExecution {
+  if (!caseRecord) {
+    return { status: "NOT_STARTED", retryCount: 0 };
+  }
+
+  const lastTouchAt = toIsoFromLegacyDateTime(caseRecord.updated);
+
+  if (caseRecord.status === "완료") {
+    return {
+      status: "DONE",
+      retryCount: 1,
+      lastSentAt: lastTouchAt,
+      lastResponseAt: lastTouchAt,
+      lastOutcomeCode: "CONTINUE_SELF",
+    };
+  }
+
+  if (caseRecord.status === "지연") {
+    return {
+      status: "RETRY_NEEDED",
+      retryCount: 2,
+      lastSentAt: lastTouchAt,
+      lastOutcomeCode: "NO_RESPONSE",
+    };
+  }
+
+  if (caseRecord.status === "임박") {
+    return {
+      status: "RETRY_NEEDED",
+      retryCount: 1,
+      lastSentAt: lastTouchAt,
+      lastOutcomeCode: "NO_RESPONSE",
+    };
+  }
+
+  if (caseRecord.status === "진행중") {
+    return {
+      status: "WAITING_RESPONSE",
+      retryCount: 1,
+      lastSentAt: lastTouchAt,
+    };
+  }
+
   return { status: "NOT_STARTED", retryCount: 0 };
 }
 
@@ -4008,6 +4231,7 @@ export function Stage1OpsDetail({
   const isStage2OpsView = isStage3Mode && surfaceStage === "Stage 2";
   const stageLabel = isStage2Mode || isStage2OpsView ? "2차" : isStage3Mode ? "3차" : "1차";
   const ssotCase = useCaseEntity(resolvedCaseId);
+  const ssotEvents = useCaseEvents(resolvedCaseId);
   const stage3View = useStage3CaseView(isStage3Mode ? resolvedCaseId : null);
   const resolvedStage3TypeForUi =
     stage3View?.source.profile?.stage3Type ??
@@ -4078,7 +4302,7 @@ export function Stage1OpsDetail({
   });
   const [stage3ReviewDraft, setStage3ReviewDraft] = useState<Stage3ReviewDraft>({
     diffNeeded: true,
-    diffDecisionSet: false,
+    diffDecisionSet: true,
     diffDecisionReason: "",
     priority: "HIGH",
     caregiverNeeded: false,
@@ -4156,6 +4380,10 @@ export function Stage1OpsDetail({
   const [responseValidationError, setResponseValidationError] = useState<string | null>(null);
   const [responseDraftDirty, setResponseDraftDirty] = useState(false);
   const [responseLastSavedAt, setResponseLastSavedAt] = useState<string | null>(null);
+  const [autoFilledOutcomeState, setAutoFilledOutcomeState] = useState<AutoFilledOutcomeState | null>(null);
+  const [reservationDetailOpen, setReservationDetailOpen] = useState(false);
+  const responseManualEditedRef = useRef(false);
+  const processedSmsReservationEventKeysRef = useRef<Set<string>>(new Set());
   const [ragRecommendations, setRagRecommendations] = useState<RagRecommendation[]>([]);
   const [ragLoading, setRagLoading] = useState(false);
   const [selectedRagId, setSelectedRagId] = useState<string | null>(null);
@@ -4166,6 +4394,7 @@ export function Stage1OpsDetail({
     place: FOLLOW_UP_ROUTE_META.CENTER_VISIT_BOOKING.defaultPlace,
     contactGuide: DEFAULT_CENTER_PHONE,
     note: "",
+    stage2Decision: "KEEP_STAGE1",
   });
   const [stage2Diagnosis, setStage2Diagnosis] = useState<Stage2Diagnosis>(() => buildInitialStage2Diagnosis(caseRecord, ssotCase));
   const [stage2ClassificationDraft, setStage2ClassificationDraft] = useState<Stage2ClassLabel>(() => inferStage2Label(caseRecord));
@@ -4453,7 +4682,7 @@ export function Stage1OpsDetail({
     });
     setStage3ReviewDraft({
       diffNeeded: true,
-      diffDecisionSet: false,
+      diffDecisionSet: true,
       diffDecisionReason: "",
       priority: caseRecord?.risk === "고" ? "HIGH" : caseRecord?.risk === "중" ? "MID" : "LOW",
       caregiverNeeded: Boolean(caseRecord?.profile.guardianPhone),
@@ -4530,6 +4759,10 @@ export function Stage1OpsDetail({
     setResponseValidationError(null);
     setResponseDraftDirty(false);
     setResponseLastSavedAt(null);
+    setAutoFilledOutcomeState(null);
+    setReservationDetailOpen(false);
+    responseManualEditedRef.current = false;
+    processedSmsReservationEventKeysRef.current = new Set();
     setRagRecommendations([]);
     setRagLoading(false);
     setSelectedRagId(null);
@@ -4540,6 +4773,7 @@ export function Stage1OpsDetail({
       place: FOLLOW_UP_ROUTE_META.CENTER_VISIT_BOOKING.defaultPlace,
       contactGuide: DEFAULT_CENTER_PHONE,
       note: "",
+      stage2Decision: "KEEP_STAGE1",
     });
     const initialStage2 = buildInitialStage2Diagnosis(caseRecord, ssotCase);
     setStage2Diagnosis(initialStage2);
@@ -4600,6 +4834,21 @@ export function Stage1OpsDetail({
       ssotCase.operationStep === "WAITING" &&
       !ssotCase.computed.model2.available,
   );
+  const hasStage1GateDoneTimeline = useMemo(
+    () =>
+      detail.timeline.some(
+        (event) => typeof event.summary === "string" && event.summary.includes("STAGE1_GATE_DONE"),
+      ),
+    [detail.timeline],
+  );
+  const stage1CaseWaitingForKickoff = Boolean(
+    mode === "stage1" &&
+      ssotCase?.stage === 1 &&
+      ssotCase.operationStep === "WAITING" &&
+      ssotCase.modelStatus === "PENDING" &&
+      !hasStage1GateDoneTimeline &&
+      STAGE1_FORCE_STEP1_WAIT_CASE_IDS.has(ssotCase.caseId),
+  );
 
   useEffect(() => {
     if (!stage2CaseWaitingForKickoff) return;
@@ -4633,6 +4882,35 @@ export function Stage1OpsDetail({
         : prev.stage3,
     }));
   }, [stage2CaseWaitingForKickoff]);
+
+  useEffect(() => {
+    if (!stage1CaseWaitingForKickoff) return;
+    setDetail((prev) => ({
+      ...prev,
+      timeline: prev.timeline.filter((event) => event.type === "STATUS_CHANGE" || event.type === "LEVEL_CHANGE"),
+      contactExecution: {
+        ...prev.contactExecution,
+        status: "NOT_STARTED",
+        lastSentAt: undefined,
+        lastResponseAt: undefined,
+        lastOutcomeCode: undefined,
+        retryCount: 0,
+      },
+    }));
+  }, [stage1CaseWaitingForKickoff]);
+
+  const latestSmsTimelineAt = useMemo(
+    () =>
+      detail.timeline.find((event) => event.type === "SMS_SENT" || event.type === "AGENT_SMS_SENT")?.at ??
+      detail.contactExecution.lastSentAt ??
+      null,
+    [detail.contactExecution.lastSentAt, detail.timeline],
+  );
+
+  useEffect(() => {
+    if (!latestSmsTimelineAt) return;
+    setDetail((prev) => (prev.lastSmsSentAt === latestSmsTimelineAt ? prev : { ...prev, lastSmsSentAt: latestSmsTimelineAt }));
+  }, [latestSmsTimelineAt]);
 
   useEffect(() => {
     setStage2ModelRunState((prev) => {
@@ -4704,6 +4982,20 @@ export function Stage1OpsDetail({
     if (timelineFilter === "ALL") return detail.timeline;
     return detail.timeline.filter((event) => eventToCategory(event) === timelineFilter);
   }, [detail.timeline, timelineFilter]);
+
+  const hasSmsReservationSignal = useMemo(
+    () =>
+      detail.reservation?.source === "SMS" ||
+      detail.timeline.some(
+        (event) =>
+          event.type === "SMS_RESERVATION_RESERVED" ||
+          event.type === "SMS_RESERVATION_CANCELLED" ||
+          event.type === "SMS_RESERVATION_CHANGED" ||
+          event.type === "SMS_RESERVATION_NO_SHOW",
+      ) ||
+      ssotEvents.some((event) => event.type === "BOOKING_CONFIRMED" && String(event.payload?.source ?? "").toLowerCase() === "citizen"),
+    [detail.reservation?.source, detail.timeline, ssotEvents],
+  );
 
   const smsTemplate = useMemo(
     () => smsTemplateCatalog.find((template) => template.id === smsTemplateId) ?? smsTemplateCatalog[0],
@@ -4789,6 +5081,8 @@ export function Stage1OpsDetail({
   const timelineEventTypeToSsot = (event: ContactEvent): EventType => {
     if (event.type === "CALL_ATTEMPT") return "CONTACT_RESULT";
     if (event.type === "SMS_SENT" || event.type === "MESSAGE_SENT" || event.type === "AGENT_SMS_SENT") return "CONTACT_SENT";
+    if (event.type === "SMS_RESERVATION_RESERVED" || event.type === "SMS_RESERVATION_CHANGED") return "BOOKING_CONFIRMED";
+    if (event.type === "SMS_RESERVATION_CANCELLED" || event.type === "SMS_RESERVATION_NO_SHOW") return "CONTACT_RESULT";
     if (event.type === "LINKAGE_CREATED") return "BOOKING_CREATED";
     if (event.type === "LINKAGE_APPROVED" || event.type === "LINKAGE_COMPLETED") return "BOOKING_CONFIRMED";
     if (event.type === "DIFF_SCHEDULED") return "STAGE3_DIFF_SCHEDULED";
@@ -4823,6 +5117,181 @@ export function Stage1OpsDetail({
       );
     }
   };
+
+  const applySmsReservationSyncEvent = useCallback(
+    (syncEvent: SmsReservationSyncEvent) => {
+      const reservationStatus = toReservationStatus(syncEvent.status);
+      const timelineType = SMS_RESERVATION_EVENT_TYPE_BY_STATUS[reservationStatus];
+      const outcomeCode = mapReservationStatusToOutcome(reservationStatus);
+      const eventAt = syncEvent.updatedAt || syncEvent.createdAt || nowIso();
+      const programName = syncEvent.programName || syncEvent.programType || "시민 예약";
+      const summary = `${programName} · ${RESERVATION_STATUS_LABELS[reservationStatus]}`;
+      const autoMemo =
+        reservationStatus === "CANCELLED"
+          ? "시민이 문자 링크 예약을 취소했습니다. 후속 연락 일정을 확인해 주세요."
+          : reservationStatus === "NO_SHOW"
+            ? "시민 예약 노쇼가 확인되었습니다. 재접촉 계획을 검토해 주세요."
+            : `시민이 문자 링크로 예약을 완료했습니다${syncEvent.scheduledAt ? ` (${formatDateTime(syncEvent.scheduledAt)})` : ""}.`;
+
+      const latestSmsStatus = detail.timeline.find((event) => event.type === "SMS_SENT");
+      const needsSmsConsistencyWarning =
+        latestSmsStatus?.status === "PENDING" ||
+        latestSmsStatus?.status === "FAILED" ||
+        (!latestSmsStatus && !detail.lastSmsSentAt);
+
+      setDetail((prev) => {
+        const baseLastSmsSentAt = syncEvent.lastSmsSentAt ?? prev.lastSmsSentAt ?? prev.contactExecution.lastSentAt ?? eventAt;
+        const nextExecutionStatus = prev.contactExecution.status === "NOT_STARTED" ? "WAITING_RESPONSE" : prev.contactExecution.status;
+        const nextLinkageStatus =
+          reservationStatus === "RESERVED" || reservationStatus === "CHANGED"
+            ? "BOOKING_DONE"
+            : prev.linkageStatus;
+        const nextExecution: ContactExecution = {
+          ...prev.contactExecution,
+          status: nextExecutionStatus,
+          lastSentAt: prev.contactExecution.lastSentAt ?? baseLastSmsSentAt,
+          lastResponseAt: eventAt,
+          lastOutcomeCode: outcomeCode,
+        };
+        const nextReservation: ReservationSnapshot = {
+          source: "SMS",
+          status: reservationStatus,
+          programType: syncEvent.programType ?? prev.reservation?.programType,
+          programName,
+          scheduledAt: syncEvent.scheduledAt ?? prev.reservation?.scheduledAt,
+          locationName: syncEvent.locationName ?? prev.reservation?.locationName,
+          options: syncEvent.options ?? prev.reservation?.options,
+          createdAt: prev.reservation?.createdAt ?? syncEvent.createdAt ?? eventAt,
+          updatedAt: eventAt,
+          createdBy: syncEvent.createdBy === "AGENT" ? "AGENT" : syncEvent.createdBy === "STAFF" ? "STAFF" : "CITIZEN",
+          reservationId: syncEvent.reservationId ?? prev.reservation?.reservationId,
+        };
+
+        const nextReservationInfo: ReservationInfo | undefined =
+          reservationStatus === "RESERVED" || reservationStatus === "CHANGED"
+            ? {
+                route: prev.reservationInfo?.route ?? "CENTER_VISIT_BOOKING",
+                reservationType: syncEvent.programType ?? prev.reservationInfo?.reservationType ?? "문자 예약",
+                scheduledAt: syncEvent.scheduledAt ?? prev.reservationInfo?.scheduledAt,
+                place: syncEvent.locationName ?? prev.reservationInfo?.place,
+                contactGuide: prev.reservationInfo?.contactGuide ?? DEFAULT_CENTER_PHONE,
+                note: syncEvent.note ?? prev.reservationInfo?.note,
+              }
+            : prev.reservationInfo;
+
+        return {
+          ...prev,
+          lastSmsSentAt: baseLastSmsSentAt,
+          reservation: nextReservation,
+          reservationInfo: nextReservationInfo,
+          linkageStatus: nextLinkageStatus,
+          contactExecution: nextExecution,
+          contactFlowSteps: buildContactFlowSteps(nextExecution, prev.preTriageResult, nextLinkageStatus, mode),
+        };
+      });
+
+      appendTimeline({
+        type: timelineType,
+        at: eventAt,
+        actor: "CITIZEN",
+        source: "SMS",
+        summary: `[SMS] 시민 예약 ${RESERVATION_STATUS_LABELS[reservationStatus]}`,
+        reservationId: syncEvent.reservationId,
+        programName,
+        scheduledAt: syncEvent.scheduledAt,
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog(`[SMS] 예약 동기화: ${summary}`);
+
+      if (needsSmsConsistencyWarning) {
+        appendTimeline({
+          type: "INCONSISTENT_SMS_STATUS",
+          at: eventAt,
+          summary: "예약 이벤트가 도착했지만 문자 발송 상태 확인이 필요합니다.",
+          detail: latestSmsStatus ? `최근 문자 상태 ${latestSmsStatus.status}` : "문자 발송 로그가 없습니다.",
+          reservationId: syncEvent.reservationId,
+          by: detail.header.assigneeName,
+        });
+        appendAuditLog("INCONSISTENT_SMS_STATUS: 문자 발송 상태 확인 필요");
+      }
+
+      if (!responseManualEditedRef.current) {
+        setSelectedOutcomeCode(outcomeCode);
+        setOutcomeNote(autoMemo);
+        setResponseReasonTags((prev) => prev);
+        setResponseValidationError(null);
+        setResponseDraftDirty(false);
+        setResponseLastSavedAt(eventAt);
+        setAutoFilledOutcomeState({
+          source: "SMS",
+          outcome: outcomeCode,
+          summary: autoMemo,
+          autoFilledAt: eventAt,
+        });
+      } else {
+        setAutoFilledOutcomeState((prev) =>
+          prev ?? {
+            source: "SMS",
+            outcome: outcomeCode,
+            summary: "문자 예약 동기화가 도착했지만 기존 수동 입력을 유지했습니다.",
+            autoFilledAt: eventAt,
+            manualOverriddenAt: nowIso(),
+          },
+        );
+      }
+    },
+    [appendAuditLog, detail.header.assigneeName, detail.lastSmsSentAt, detail.timeline, mode],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const runSync = () => {
+      const events = listSmsReservationSyncEvents();
+      if (!events.length) return;
+
+      events
+        .filter((event) =>
+          matchSmsReservationSyncEvent(event, {
+            caseId: detail.header.caseId,
+            phoneCandidates: [
+              caseRecord?.profile.phone,
+              caseRecord?.profile.guardianPhone,
+              ssotCase?.patient.phone,
+              ssotCase?.patient.caregiverPhone,
+            ],
+          }),
+        )
+        .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+        .forEach((event) => {
+          const key = `${event.reservationId ?? event.eventId}:${event.status}:${event.updatedAt}`;
+          if (processedSmsReservationEventKeysRef.current.has(key)) return;
+          processedSmsReservationEventKeysRef.current.add(key);
+          applySmsReservationSyncEvent(event);
+        });
+    };
+
+    runSync();
+    const timer = window.setInterval(runSync, 5000);
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === SMS_RESERVATION_SYNC_STORAGE_KEY) {
+        runSync();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [
+    applySmsReservationSyncEvent,
+    caseRecord?.profile.guardianPhone,
+    caseRecord?.profile.phone,
+    detail.header.caseId,
+    ssotCase?.patient.caregiverPhone,
+    ssotCase?.patient.phone,
+  ]);
 
   const stage2AutoFillFieldHasValue = useCallback(
     (field: Stage2AutoFillFieldKey) => {
@@ -4942,7 +5411,7 @@ export function Stage1OpsDetail({
   const saveStage2TestInputs = () => {
     const changedFields = collectStage2ManualChangedFields();
     const validationErrors = buildStage2ValidationErrors(
-      stage2Diagnosis.tests,
+      stage2EffectiveTests,
       stage2PlanRouteDraft as Stage2PlanRoute,
       stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
     );
@@ -4957,9 +5426,9 @@ export function Stage1OpsDetail({
     setStage2FieldErrors({});
 
     const hasClassification = Boolean(stage2Diagnosis.classification?.label);
-    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, hasClassification, stage2Route);
+    const nextStatus = stage2StatusFromTests(stage2EffectiveTests, hasClassification, stage2Route);
     const missingKeys = computeStage2MissingFields(
-      stage2Diagnosis.tests,
+      stage2EffectiveTests,
       stage2PlanRouteDraft as Stage2PlanRoute,
       stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
     );
@@ -4978,10 +5447,10 @@ export function Stage1OpsDetail({
       updateCaseStage2Evidence(
         caseRecord.id,
         {
-          specialist: Boolean(stage2Diagnosis.tests.specialist),
-          mmse: typeof stage2Diagnosis.tests.mmse === "number" ? stage2Diagnosis.tests.mmse : null,
-          cdrOrGds: typeof stage2Diagnosis.tests.cdr === "number" ? stage2Diagnosis.tests.cdr : null,
-          neuroType: stage2Diagnosis.tests.neuroCognitiveType ?? null,
+          specialist: Boolean(stage2EffectiveTests.specialist),
+          mmse: typeof stage2EffectiveTests.mmse === "number" ? stage2EffectiveTests.mmse : null,
+          cdrOrGds: typeof stage2EffectiveTests.cdr === "number" ? stage2EffectiveTests.cdr : null,
+          neuroType: stage2EffectiveTests.neuroCognitiveType ?? null,
         },
         {
           route: stage2PlanRouteDraft === "HOSPITAL_REFERRAL" ? "HOSPITAL" : "CENTER",
@@ -4992,7 +5461,7 @@ export function Stage1OpsDetail({
 
     if (missingKeys.length === 0) {
       const now = nowIso();
-      const recommended = deriveStage2ModelRecommendation(stage2Diagnosis.tests);
+      const recommended = deriveStage2ModelRecommendation(stage2EffectiveTests);
 
       if (stage2StoredModelAvailable) {
         setStage2ModelRunState((prev) => ({
@@ -5051,7 +5520,7 @@ export function Stage1OpsDetail({
       at: nowIso(),
       from: "검사입력",
       to: "검사입력",
-      reason: `Stage2 검사 입력 반영 (${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount})`,
+      reason: `Stage2 검사 입력 반영 (${countStage2CompletedTests(stage2EffectiveTests, stage2Route)}/${stage2RequiredTestCount})`,
       by: detail.header.assigneeName,
     });
     if (hasManualChange) {
@@ -5085,7 +5554,7 @@ export function Stage1OpsDetail({
     if ((stage2ManualEditEnabled || hasManualChange) && stage2ManualEditReason.trim()) {
       appendAuditLog(`Stage2 수동 수정: ${stage2ManualEditReason.trim()}`);
     }
-    appendAuditLog(`Stage2 검사 결과 입력 반영: ${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount}`);
+    appendAuditLog(`Stage2 검사 결과 입력 반영: ${countStage2CompletedTests(stage2EffectiveTests, stage2Route)}/${stage2RequiredTestCount}`);
     if (caseRecord?.id) {
       void queryClient.invalidateQueries({ queryKey: ["caseDetail", caseRecord.id] });
     }
@@ -5102,7 +5571,7 @@ export function Stage1OpsDetail({
 
   const confirmStage2Classification = () => {
     const validationErrors = buildStage2ValidationErrors(
-      stage2Diagnosis.tests,
+      stage2EffectiveTests,
       stage2PlanRouteDraft as Stage2PlanRoute,
       stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
       {
@@ -5126,7 +5595,7 @@ export function Stage1OpsDetail({
     const probs = inferStage2Probs(label, mciStage);
     const nextStep = inferStage2NextStep(label);
     const now = nowIso();
-    const nextStatus = stage2StatusFromTests(stage2Diagnosis.tests, true, stage2Route);
+    const nextStatus = stage2StatusFromTests(stage2EffectiveTests, true, stage2Route);
 
     setStage2Diagnosis((prev) => ({
       ...prev,
@@ -5380,7 +5849,7 @@ export function Stage1OpsDetail({
         type: "OUTCOME_RECORDED",
         at: now,
         outcomeCode: nextOutcomeCode,
-        note: "Stage1 문자 발송 자동 시나리오(이재용 데모)",
+        note: "Stage1 문자 발송 자동 시나리오(김복남 데모)",
         by: detail.header.assigneeName,
       });
       appendTimeline({
@@ -6496,6 +6965,12 @@ export function Stage1OpsDetail({
 
   const handleSaveFollowUpDecision = () => {
     const routeMeta = FOLLOW_UP_ROUTE_META[followUpDecisionDraft.route];
+    const stage2Decision =
+      mode === "stage1"
+        ? followUpDecisionDraft.stage2Decision === "MOVE_STAGE2"
+          ? "MOVE_STAGE2"
+          : "KEEP_STAGE1"
+        : null;
 
     if (followUpDecisionDraft.route !== "HOLD_TRACKING" && !followUpDecisionDraft.scheduledAt) {
       toast.error("연계/예약 일정은 필수입니다.");
@@ -6521,6 +6996,25 @@ export function Stage1OpsDetail({
       ...prev,
       linkageStatus: afterStatus,
       reservationInfo: reservation,
+      reservation:
+        reservation == null
+          ? {
+              source: prev.reservation?.source ?? "MANUAL",
+              status: "NONE",
+            }
+          : {
+              source: "MANUAL",
+              status: "RESERVED",
+              programType: routeMeta.reservationType,
+              programName: routeMeta.label,
+              scheduledAt: reservation.scheduledAt,
+              locationName: reservation.place,
+              createdAt: prev.reservation?.createdAt ?? nowIso(),
+              updatedAt: nowIso(),
+              createdBy: "STAFF",
+              reservationId: prev.reservation?.reservationId,
+              options: prev.reservation?.options,
+            },
       contactFlowSteps: buildContactFlowSteps(prev.contactExecution, prev.preTriageResult, afterStatus, mode),
     }));
     if (reservation?.scheduledAt) {
@@ -6535,6 +7029,30 @@ export function Stage1OpsDetail({
       reason: `${routeMeta.label} 선택`,
       by: detail.header.assigneeName,
     });
+
+    if (resolvedCaseId && mode === "stage1") {
+      const stage2Route: Stage2Route = followUpDecisionDraft.route === "HOSPITAL_REFERRAL_BOOKING" ? "HOSPITAL" : "CENTER";
+      setCaseStage1NextStep(resolvedCaseId, stage2Decision ?? "KEEP_STAGE1", {
+        route: stage2Route,
+      });
+
+      const decisionLabel = stage2Decision === "MOVE_STAGE2" ? "Stage2 전환" : "Stage1 유지";
+      appendTimeline({
+        type: "STATUS_CHANGE",
+        at: nowIso(),
+        from: "Stage 1",
+        to: stage2Decision === "MOVE_STAGE2" ? "Stage 2" : "Stage 1",
+        reason: `후속 단계 결정 (${decisionLabel})`,
+        by: detail.header.assigneeName,
+      });
+      appendAuditLog(`후속 결정 저장: ${routeMeta.label} · ${decisionLabel}`);
+      toast.success(
+        stage2Decision === "MOVE_STAGE2"
+          ? "후속 결정이 저장되어 Stage2 전환이 반영되었습니다."
+          : "후속 결정이 저장되었습니다.",
+      );
+      return true;
+    }
 
     appendAuditLog(`후속 결정 저장: ${routeMeta.label}`);
     toast.success("후속 결정이 저장되었습니다.");
@@ -6770,6 +7288,9 @@ export function Stage1OpsDetail({
         contactFlowSteps: buildContactFlowSteps(prev_.contactExecution, newPreTriage, prev_.linkageStatus, mode),
       };
     });
+    if (caseRecord?.id) {
+      setCaseContactMode(caseRecord.id, next === "AI_FIRST" ? "AGENT" : "HUMAN", detail.header.assigneeName);
+    }
 
     appendTimeline({
       type: "STRATEGY_CHANGE",
@@ -6804,6 +7325,7 @@ export function Stage1OpsDetail({
 
   const markResponseDraftDirty = useCallback(() => {
     setResponseDraftDirty(true);
+    responseManualEditedRef.current = true;
     if (responseValidationError) {
       setResponseValidationError(null);
     }
@@ -6812,10 +7334,35 @@ export function Stage1OpsDetail({
 
   const handleSelectOutcomeCode = useCallback(
     (code: OutcomeCode | null) => {
+      if (
+        code &&
+        autoFilledOutcomeState &&
+        code !== autoFilledOutcomeState.outcome &&
+        !autoFilledOutcomeState.manualOverriddenAt
+      ) {
+        const overriddenAt = nowIso();
+        appendAuditLog(
+          `응답 결과 수동 덮어쓰기: ${OUTCOME_LABELS[autoFilledOutcomeState.outcome].label} → ${OUTCOME_LABELS[code].label}`,
+        );
+        appendTimeline({
+          type: "MESSAGE_SENT",
+          at: overriddenAt,
+          summary: `STAGE1_MANUAL_EDIT_APPLIED · ${OUTCOME_LABELS[autoFilledOutcomeState.outcome].label} → ${OUTCOME_LABELS[code].label}`,
+          by: detail.header.assigneeName,
+        });
+        setAutoFilledOutcomeState((prev) =>
+          prev
+            ? {
+                ...prev,
+                manualOverriddenAt: overriddenAt,
+              }
+            : prev,
+        );
+      }
       markResponseDraftDirty();
       setSelectedOutcomeCode(code);
     },
-    [markResponseDraftDirty],
+    [appendAuditLog, appendTimeline, autoFilledOutcomeState, detail.header.assigneeName, markResponseDraftDirty],
   );
 
   const handleOutcomeNoteChange = useCallback(
@@ -6873,6 +7420,8 @@ export function Stage1OpsDetail({
     setResponseValidationError(null);
     clearSubmitError();
     setResponseDraftDirty(false);
+    setAutoFilledOutcomeState(null);
+    responseManualEditedRef.current = false;
   }, [caseRecord, clearSubmitError, detail.contactExecution.retryCount, detail.header.assigneeName, detail.header.sla.level]);
 
   const persistOutcomeTriage = async ({
@@ -7082,6 +7631,7 @@ export function Stage1OpsDetail({
     }
     resetResponseTriageDraft();
     setResponseLastSavedAt(now);
+    responseManualEditedRef.current = false;
     return true;
   };
 
@@ -7252,6 +7802,24 @@ export function Stage1OpsDetail({
       ssotCase?.operationStep === "COMPLETED" ||
       ssotCase?.stage === 3,
   );
+  const stage2EffectiveTests = useMemo<Stage2Diagnosis["tests"]>(() => {
+    const required = stage2Evidence?.required;
+    const mmseFromEvidence = typeof required?.mmse === "number" && Number.isFinite(required.mmse) ? required.mmse : undefined;
+    const cdrFromEvidence =
+      typeof required?.cdrOrGds === "number" && Number.isFinite(required.cdrOrGds) ? required.cdrOrGds : undefined;
+    return {
+      specialist: Boolean(stage2Diagnosis.tests.specialist || required?.specialist || stage2ConfirmedByState),
+      mmse:
+        typeof stage2Diagnosis.tests.mmse === "number" && Number.isFinite(stage2Diagnosis.tests.mmse)
+          ? stage2Diagnosis.tests.mmse
+          : mmseFromEvidence,
+      cdr:
+        typeof stage2Diagnosis.tests.cdr === "number" && Number.isFinite(stage2Diagnosis.tests.cdr)
+          ? stage2Diagnosis.tests.cdr
+          : cdrFromEvidence,
+      neuroCognitiveType: stage2Diagnosis.tests.neuroCognitiveType ?? required?.neuroType ?? undefined,
+    };
+  }, [stage2ConfirmedByState, stage2Diagnosis.tests, stage2Evidence?.required]);
   const loopEvents = useMemo(() => mapTimelineToEvents(detail.timeline), [detail.timeline]);
   const opsLoopState = useMemo(() => {
     if (isStage2OpsView) {
@@ -7317,17 +7885,20 @@ export function Stage1OpsDetail({
       });
     }
 
+    const hasStage1ContactAttempted = detail.contactExecution.status !== "NOT_STARTED";
+    const hasStage1ResponseRecorded = Boolean(detail.contactExecution.lastOutcomeCode || detail.contactExecution.lastResponseAt);
     return computeOpsLoopState(loopEvents, {
       stage: "stage1",
-      hasPlanConfirmed: preTriageReady && Boolean(detail.preTriageResult?.strategy),
-      hasResultReceived: detail.contactExecution.status !== "NOT_STARTED",
-      hasResultValidated: Boolean(detail.contactExecution.lastOutcomeCode || detail.contactExecution.lastResponseAt),
-      hasModelResult: Boolean(detail.preTriageResult),
-      classificationConfirmed: Boolean(detail.contactExecution.lastOutcomeCode || detail.contactExecution.lastResponseAt),
-      nextStepDecided:
-        detail.linkageStatus !== "NOT_CREATED" ||
-        detail.contactExecution.status === "DONE" ||
-        detail.contactExecution.status === "STOPPED",
+      hasPlanConfirmed: stage1CaseWaitingForKickoff ? false : preTriageReady && Boolean(detail.preTriageResult?.strategy),
+      hasResultReceived: stage1CaseWaitingForKickoff ? false : hasStage1ContactAttempted,
+      hasResultValidated: stage1CaseWaitingForKickoff ? false : hasStage1ContactAttempted,
+      hasModelResult: false,
+      classificationConfirmed: stage1CaseWaitingForKickoff ? false : hasStage1ResponseRecorded,
+      nextStepDecided: stage1CaseWaitingForKickoff
+        ? false
+        : detail.linkageStatus !== "NOT_CREATED" ||
+          detail.contactExecution.status === "DONE" ||
+          detail.contactExecution.status === "STOPPED",
     });
   }, [
     detail.contactExecution.lastOutcomeCode,
@@ -7343,6 +7914,7 @@ export function Stage1OpsDetail({
     loopEvents,
     mode,
     preTriageReady,
+    stage1CaseWaitingForKickoff,
     stage3View,
     stage2ConfirmedByState,
     stage2Diagnosis.nextStep,
@@ -7652,7 +8224,9 @@ export function Stage1OpsDetail({
     [stage2PlanRequiredDraft, stage2PlanRouteDraft],
   );
   const stage2RequiredTestCount = stage2Route === "HOSPITAL" ? 4 : 3;
-  const stage2CompletedCount = stage2Evidence ? stage2RequiredTestCount - stage2Evidence.missing.length : countStage2CompletedTests(stage2Diagnosis.tests);
+  const stage2CompletedCount = stage2Evidence
+    ? stage2RequiredTestCount - stage2Evidence.missing.length
+    : countStage2CompletedTests(stage2EffectiveTests);
   const stage2CompletionPct = Math.round((Math.max(0, stage2CompletedCount) / stage2RequiredTestCount) * 100);
   const stage2DisplayLabel = stage2ClassLabelFromModel(ssotModel2?.predictedLabel) ?? stage2ModelRunState.recommendedLabel;
   const stage2DisplayMciStage = stage2MciStageFromModel(ssotModel2?.mciBand);
@@ -7667,19 +8241,19 @@ export function Stage1OpsDetail({
     Math.floor((Date.now() - new Date(stage2TargetAt).getTime()) / (1000 * 60 * 60 * 24)),
   );
   const stage2InputMissingCount = countStage2MissingByPlan(
-    stage2Diagnosis.tests,
+    stage2EffectiveTests,
     stage2PlanRouteDraft as Stage2PlanRoute,
     stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
   );
   const stage2MissingRequirements = [
-    ...(stage2PlanRequiredChecks.mmse && !(typeof stage2Diagnosis.tests.mmse === "number" && Number.isFinite(stage2Diagnosis.tests.mmse))
+    ...(stage2PlanRequiredChecks.mmse && !(typeof stage2EffectiveTests.mmse === "number" && Number.isFinite(stage2EffectiveTests.mmse))
       ? ["MMSE 점수 미입력"]
       : []),
-    ...(stage2PlanRequiredChecks.cdrOrGds && !(typeof stage2Diagnosis.tests.cdr === "number" && Number.isFinite(stage2Diagnosis.tests.cdr))
+    ...(stage2PlanRequiredChecks.cdrOrGds && !(typeof stage2EffectiveTests.cdr === "number" && Number.isFinite(stage2EffectiveTests.cdr))
       ? ["CDR/GDS 점수 미입력"]
       : []),
-    ...(stage2PlanRequiredChecks.neuroCognitive && !stage2Diagnosis.tests.neuroCognitiveType ? ["신경인지검사 유형 미선택"] : []),
-    ...(stage2PlanRequiredChecks.specialist && !stage2Diagnosis.tests.specialist ? ["전문의 소견 미확인"] : []),
+    ...(stage2PlanRequiredChecks.neuroCognitive && !stage2EffectiveTests.neuroCognitiveType ? ["신경인지검사 유형 미선택"] : []),
+    ...(stage2PlanRequiredChecks.specialist && !stage2EffectiveTests.specialist ? ["전문의 소견 미확인"] : []),
     ...stage2GateMissing,
     stage2RationaleDraft.trim().length > 0 ? null : "확정 근거 1줄 미입력",
   ].filter(Boolean) as string[];
@@ -7703,6 +8277,7 @@ export function Stage1OpsDetail({
     Boolean(stage2ModelRecommendedLabel) && stage2ClassificationDraft !== stage2ModelRecommendedLabel;
   const stage2OverrideMissing = stage2ClassificationIsOverride && stage2ClassificationOverrideReason.trim().length === 0;
   const stage2CanConfirm = stage2ModelReady && stage2MissingRequirements.length === 0 && !stage2OverrideMissing;
+  const stage2Step4Selectable = stage2ClassificationConfirmed || stage2CanConfirm;
   const stage2NextActionLabel =
     stage2Diagnosis.status === "NOT_STARTED"
       ? "검사 결과 입력"
@@ -8366,10 +8941,11 @@ export function Stage1OpsDetail({
       if (isStage2OpsView) {
         const blockingRequiredItems = stage2RequiredBlockingPlanItems;
         const precheckErrors = buildStage2ValidationErrors(
-          stage2Diagnosis.tests,
+          stage2EffectiveTests,
           stage2PlanRouteDraft as Stage2PlanRoute,
           stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
           {
+            skipTestChecks: true,
             strategyMemo: stage3ReviewDraft.strategyMemo,
             consentConfirmed: stage3ReviewDraft.consentConfirmed,
           },
@@ -8425,16 +9001,11 @@ export function Stage1OpsDetail({
         return;
       }
       const precheckErrors: Stage3TaskFieldErrors = {};
-      if (!stage3ReviewDraft.diffDecisionSet) {
-        precheckErrors.step1DiffDecision = isStage2OpsView
-          ? "Stage2 진입 필요 여부를 선택해 주세요."
-          : "감별검사 필요 여부를 선택해 주세요.";
-      }
       if (!stage3ReviewDraft.consentConfirmed) {
         precheckErrors.step1Consent = "상담 동의 확인이 필요합니다.";
       }
-      if (stage3ReviewDraft.strategyMemo.trim().length < 20) {
-        precheckErrors.step1StrategyMemo = "전략 메모를 20자 이상 입력해 주세요.";
+      if (stage3ReviewDraft.strategyMemo.trim().length < 10) {
+        precheckErrors.step1StrategyMemo = "전략 메모를 10자 이상 입력해 주세요.";
       }
       if (applyStage3ValidationErrors("PRECHECK", precheckErrors)) {
         toast.error("STEP1 필수 입력을 먼저 확인해 주세요.");
@@ -8504,7 +9075,7 @@ export function Stage1OpsDetail({
       if (isStage2OpsView) {
         setStage3TaskModalStep("CONTACT_EXECUTION");
       } else {
-        moveStage3TaskStep(1);
+        setStage3TaskModalStep("CONTACT_EXECUTION");
       }
       return;
     }
@@ -8512,7 +9083,7 @@ export function Stage1OpsDetail({
     if (stage3TaskModalStep === "CONTACT_EXECUTION") {
       if (isStage2OpsView) {
         const step2Errors = buildStage2ValidationErrors(
-          stage2Diagnosis.tests,
+          stage2EffectiveTests,
           stage2PlanRouteDraft as Stage2PlanRoute,
           stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
         );
@@ -8547,7 +9118,7 @@ export function Stage1OpsDetail({
           });
           appendAuditLog(`STAGE2_PLAN_CONFIRMED(AUTO): ${autoSummary}`);
         }
-        const summary = `필수 검사 입력 완료 (${countStage2CompletedTests(stage2Diagnosis.tests, stage2Route)}/${stage2RequiredTestCount})`;
+        const summary = `필수 검사 입력 완료 (${countStage2CompletedTests(stage2EffectiveTests, stage2Route)}/${stage2RequiredTestCount})`;
         appendTimeline({
           type: "STAGE2_RESULTS_RECORDED",
           at: now,
@@ -8627,7 +9198,7 @@ export function Stage1OpsDetail({
     if (stage3TaskModalStep === "RESPONSE_HANDLING") {
       if (isStage2OpsView) {
         const step3Errors = buildStage2ValidationErrors(
-          stage2Diagnosis.tests,
+          stage2EffectiveTests,
           stage2PlanRouteDraft as Stage2PlanRoute,
           stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
           {
@@ -8691,11 +9262,16 @@ export function Stage1OpsDetail({
     }
 
     if (isStage2OpsView) {
+      if (!stage2Step4Selectable) {
+        toast.error("STEP3 분류 확정을 먼저 완료해 주세요.");
+        return;
+      }
       const step4Errors = buildStage2ValidationErrors(
-        stage2Diagnosis.tests,
+        stage2EffectiveTests,
         stage2PlanRouteDraft as Stage2PlanRoute,
         stage2PlanRequiredDraft as Stage2PlanRequiredDraft,
         {
+          skipTestChecks: true,
           requireNextStep: true,
           hasNextStep: Boolean(stage2Diagnosis.nextStep),
         },
@@ -8823,15 +9399,19 @@ export function Stage1OpsDetail({
     stage2ClassificationOverrideReason,
     stage2Diagnosis,
     stage2DraftMciStage,
+    stage2EffectiveTests,
     stage2HospitalDraft,
     stage2ManualEditEnabled,
     stage2ManualEditReason,
     stage2ModelRecommendedLabel,
     stage2PlanRequiredDraft,
     stage2PlanRouteDraft,
+    stage2Route,
     stage2ResultMissingCount,
     stage2ScheduleDraft,
     stage2Step1Reviewed,
+    stage2Step4Selectable,
+    stage2RequiredTestCount,
     applyStage2ValidationErrors,
     applyStage3ValidationErrors,
     confirmStage2Classification,
@@ -8845,13 +9425,37 @@ export function Stage1OpsDetail({
 
     const now = nowIso();
     if (activeStage1Modal === "PRECHECK") {
-      const unresolvedRequiredGates = detail.policyGates.filter(
-        (gate) => gate.key !== "GUARDIAN_OPTIONAL" && gate.status !== "PASS",
-      );
-      if (unresolvedRequiredGates.length > 0) {
+      const requiredGates = detail.policyGates.filter((gate) => gate.key !== "GUARDIAN_OPTIONAL");
+      const failedRequiredGates = requiredGates.filter((gate) => gate.status === "FAIL");
+      const unknownRequiredGates = requiredGates.filter((gate) => gate.status === "UNKNOWN");
+      if (failedRequiredGates.length > 0) {
         toast.error("필수 사전 조건이 남아 있어 완료 처리할 수 없습니다.");
         return;
       }
+      if (unknownRequiredGates.length > 0) {
+        toast("확인 필요 항목이 남아 있지만 운영 기록 기준으로 다음 단계 진행을 허용합니다.");
+      }
+      setDetail((prev) => {
+        const nextPreTriage =
+          prev.preTriageResult ??
+          applyContactModeHint(
+            buildPreTriageResult(prev.preTriageInput),
+            prev.contactExecutor === "AGENT_SEND_ONLY" ? "AGENT" : "HUMAN",
+          );
+        const nextEffectiveStrategy = prev.header.effectiveStrategy ?? nextPreTriage.strategy;
+        const nextContactStrategy =
+          prev.header.contactStrategy === "MANUAL_OVERRIDE" ? "MANUAL_OVERRIDE" : nextPreTriage.strategy;
+        return {
+          ...prev,
+          header: {
+            ...prev.header,
+            contactStrategy: nextContactStrategy,
+            effectiveStrategy: nextEffectiveStrategy,
+          },
+          preTriageResult: nextPreTriage,
+          contactFlowSteps: buildContactFlowSteps(prev.contactExecution, nextPreTriage, prev.linkageStatus, mode),
+        };
+      });
 
       appendTimeline({
         type: "MESSAGE_SENT",
@@ -8861,7 +9465,7 @@ export function Stage1OpsDetail({
       });
       appendAuditLog("STAGE1_GATE_DONE: 사전 조건 확인 완료");
       toast.success("STEP1 완료 처리되었습니다.");
-      moveStage1TaskStep(1);
+      setStage1ModalStep("CONTACT_EXECUTION");
       return;
     }
 
@@ -8878,7 +9482,7 @@ export function Stage1OpsDetail({
       });
       appendAuditLog("STAGE1_CONTACT_ATTEMPT: 접촉 실행 완료");
       toast.success("STEP2 완료 처리되었습니다.");
-      moveStage1TaskStep(1);
+      setStage1ModalStep("RESPONSE_HANDLING");
       return;
     }
 
@@ -8896,7 +9500,7 @@ export function Stage1OpsDetail({
       });
       appendAuditLog("STAGE1_RESPONSE_RECORDED: 응답 결과 저장 완료");
       toast.success("STEP3 완료 처리되었습니다.");
-      moveStage1TaskStep(1);
+      setStage1ModalStep("FOLLOW_UP");
       return;
     }
 
@@ -8920,8 +9524,9 @@ export function Stage1OpsDetail({
     detail.contactExecution.status,
     detail.header.assigneeName,
     detail.policyGates,
+    mode,
     handleSaveFollowUpDecision,
-    moveStage1TaskStep,
+    setStage1ModalStep,
   ]);
 
   const handleFlowAction = useCallback(
@@ -9670,7 +10275,7 @@ export function Stage1OpsDetail({
 
           {!isStage3Mode ? (
             <>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="grid grid-cols-1 gap-3">
                 <ContactExecutionLauncherCard
                   mode={mode}
                   stage2OpsView={isStage2OpsView}
@@ -9688,14 +10293,6 @@ export function Stage1OpsDetail({
                   onRetryNow={retryAgentNow}
                   onScheduleRetry={scheduleAgentRetry}
                 />
-                <LinkageActionPanel
-                  linkageStatus={detail.linkageStatus}
-                  reservationInfo={detail.reservationInfo}
-                  locked={linkageLockedOnBoard}
-                  lockReason={linkageLockedOnBoard ? "STEP4 후속 결정 단계에서만 연계/예약 실행이 가능합니다." : undefined}
-                  onOpenStep4={() => openStage1FlowModal("FOLLOW_UP")}
-                  onAction={handleLinkageAction}
-                />
               </div>
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -9704,7 +10301,12 @@ export function Stage1OpsDetail({
                   onToggle={() => setResponsePanelExpanded((prev) => !prev)}
                   executionStatus={detail.contactExecution.status}
                   lastSentAt={detail.contactExecution.lastSentAt}
+                  lastSmsSentAt={detail.lastSmsSentAt}
                   assigneeName={detail.header.assigneeName}
+                  reservation={detail.reservation}
+                  showReservationSync={hasSmsReservationSignal}
+                  autoFilledState={autoFilledOutcomeState}
+                  onOpenReservationDetail={() => setReservationDetailOpen(true)}
                   selectedOutcomeCode={selectedOutcomeCode}
                   onSelectOutcomeCode={handleSelectOutcomeCode}
                   reasonTags={responseReasonTags}
@@ -9791,7 +10393,7 @@ export function Stage1OpsDetail({
             <>
               <section className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-bold text-slate-900">{isStage2OpsView ? "진단검사 진행 상태 요약" : "감별검사 상태 요약"}</h3>
+                  <h3 className="text-sm font-bold text-slate-900">{isStage2OpsView ? "진단검사 진행 상태 요약" : "정밀검사 연계 상태 요약"}</h3>
                   <button
                     onClick={() => openStage1FlowModal("CONTACT_EXECUTION")}
                     className="rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
@@ -9848,7 +10450,12 @@ export function Stage1OpsDetail({
                         onToggle={() => setResponsePanelExpanded((prev) => !prev)}
                         executionStatus={detail.contactExecution.status}
                         lastSentAt={detail.contactExecution.lastSentAt}
+                        lastSmsSentAt={detail.lastSmsSentAt}
                         assigneeName={detail.header.assigneeName}
+                        reservation={detail.reservation}
+                        showReservationSync={hasSmsReservationSignal}
+                        autoFilledState={autoFilledOutcomeState}
+                        onOpenReservationDetail={() => setReservationDetailOpen(true)}
                         selectedOutcomeCode={selectedOutcomeCode}
                         onSelectOutcomeCode={handleSelectOutcomeCode}
                         reasonTags={responseReasonTags}
@@ -10661,7 +11268,7 @@ export function Stage1OpsDetail({
                             <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
                               <li>{isStage2OpsView ? "• Stage1 선별 근거 기준으로 Stage2 진단검사 경로가 필요합니다." : "• 최근 평가 기록에서 추가 감별검사 권고 신호가 확인되었습니다."}</li>
                               <li>{isStage2OpsView ? "• 미응답/지연 이력으로 예약·의뢰 우선순위가 상향되었습니다." : "• 추적 지연/미응답 이력으로 정밀관리 연계 우선순위가 상향되었습니다."}</li>
-                              <li>{isStage2OpsView ? "• 운영 가이드 기준 상 신경심리/임상평가/전문의 경로를 순차 실행해야 합니다." : "• 운영 가이드 기준 상 감별검사/뇌영상 경로 시작이 필요합니다."}</li>
+                              <li>{isStage2OpsView ? "• 운영 가이드 기준 상 신경심리/임상평가/전문의 경로를 순차 실행해야 합니다." : "• 운영 가이드 기준 상 정밀검사 연계 경로 시작이 필요합니다."}</li>
                               <li>• 최종 조치는 담당자 검토 및 의료진 확인 전 운영 참고용입니다.</li>
                             </ul>
                           </div>
@@ -10686,10 +11293,10 @@ export function Stage1OpsDetail({
                               </ul>
                             </div>
                           ) : null}
-                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                            <p className="text-xs font-semibold text-slate-800">전략 수립(필수)</p>
-                            <div className="mt-2 rounded-md border border-slate-200 bg-white p-2">
-                              <p className="text-[11px] font-semibold text-slate-700">자동 감지된 주의/전제</p>
+                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3.5">
+                            <p className="text-sm font-semibold text-slate-800">전략 수립(필수)</p>
+                            <div className="mt-2 rounded-md border border-slate-200 bg-white p-2.5">
+                              <p className="text-sm font-semibold text-slate-700">자동 감지된 주의/전제</p>
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {[
                                   stage3ReviewDraft.sensitiveHistory ? "민감 이력 주의" : null,
@@ -10701,7 +11308,7 @@ export function Stage1OpsDetail({
                                 ]
                                   .filter(Boolean)
                                   .map((chip) => (
-                                    <span key={chip} className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                                    <span key={chip} className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
                                       {chip}
                                     </span>
                                   ))}
@@ -10715,7 +11322,7 @@ export function Stage1OpsDetail({
                                 stage3CurrentStepErrors.step1DiffDecision ? "rounded-md border border-rose-200 bg-rose-50 p-1" : "",
                               )}
                             >
-                              <p className="text-[11px] font-semibold text-slate-700">감별검사 필요 여부(필수)</p>
+                              <p className="text-sm font-semibold text-slate-700">감별검사 필요 여부(필수)</p>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -10727,14 +11334,14 @@ export function Stage1OpsDetail({
                                   }));
                                 }}
                                 className={cn(
-                                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left",
+                                  "flex w-full items-center justify-between rounded-md border px-3.5 py-2.5 text-left",
                                   stage3ReviewDraft.diffDecisionSet && stage3ReviewDraft.diffNeeded
                                     ? "border-indigo-300 bg-indigo-50 text-indigo-800"
                                     : "border-slate-200 bg-white text-slate-700",
                                 )}
                               >
-                                <span className="text-xs font-semibold">감별검사 필요(권고)</span>
-                                <span className="text-[10px]">전화 상담 후 병원 연계/예약 패키지 실행</span>
+                                <span className="text-sm font-semibold">감별검사 필요(권고)</span>
+                                <span className="text-xs">전화 상담 후 병원 연계/예약 패키지 실행</span>
                               </button>
                               <button
                                 type="button"
@@ -10747,22 +11354,22 @@ export function Stage1OpsDetail({
                                   }));
                                 }}
                                 className={cn(
-                                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left",
+                                  "flex w-full items-center justify-between rounded-md border px-3.5 py-2.5 text-left",
                                   stage3ReviewDraft.diffDecisionSet && !stage3ReviewDraft.diffNeeded
                                     ? "border-slate-400 bg-slate-100 text-slate-800"
                                     : "border-slate-200 bg-white text-slate-700",
                                 )}
                               >
-                                <span className="text-xs font-semibold">보류(추적/재평가 후 결정)</span>
-                                <span className="text-[10px]">전화 상담 후 재평가/추적 계획 우선</span>
+                                <span className="text-sm font-semibold">보류(추적/재평가 후 결정)</span>
+                                <span className="text-xs">전화 상담 후 재평가/추적 계획 우선</span>
                               </button>
                               {stage3CurrentStepErrors.step1DiffDecision ? (
-                                <p className="text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step1DiffDecision}</p>
+                                <p className="text-xs font-semibold text-rose-600">{stage3CurrentStepErrors.step1DiffDecision}</p>
                               ) : null}
                             </div>
 
                             {stage3ReviewDraft.diffDecisionSet ? (
-                              <label className="mt-2 block text-[11px] text-slate-600">
+                              <label className="mt-2 block text-sm text-slate-600">
                                 선택 이유(선택 입력)
                                 <input
                                   ref={registerStage3FieldRef("step1DiffReason")}
@@ -10774,14 +11381,14 @@ export function Stage1OpsDetail({
                                   className={stage3FieldClass(
                                     "PRECHECK",
                                     "step1DiffReason",
-                                    "mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300",
+                                    "mt-1 h-10 w-full rounded-md border border-gray-200 px-3 text-sm outline-none focus:border-indigo-300",
                                   )}
                                   placeholder="선택 이유를 짧게 기록하세요."
                                 />
                               </label>
                             ) : null}
 
-                            <label className="mt-2 flex items-center gap-1 text-[11px] text-slate-700">
+                            <label className="mt-2 flex items-center gap-1.5 text-sm text-slate-700">
                               <input
                                 ref={registerStage3FieldRef("step1Consent")}
                                 type="checkbox"
@@ -10794,9 +11401,9 @@ export function Stage1OpsDetail({
                               상담 동의 확인(필수)
                             </label>
                             {stage3CurrentStepErrors.step1Consent ? (
-                              <p className="text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step1Consent}</p>
+                              <p className="text-xs font-semibold text-rose-600">{stage3CurrentStepErrors.step1Consent}</p>
                             ) : null}
-                            <label className="mt-1 flex items-center gap-1 text-[11px] text-slate-700">
+                            <label className="mt-1 flex items-center gap-1.5 text-sm text-slate-700">
                               <input
                                 type="checkbox"
                                 checked={stage3ReviewDraft.caregiverNeeded}
@@ -10806,7 +11413,7 @@ export function Stage1OpsDetail({
                             </label>
 
                             <div className="mt-2">
-                              <label className="text-[11px] font-semibold text-slate-600">업무 우선순위(운영)</label>
+                              <label className="text-sm font-semibold text-slate-600">업무 우선순위(운영)</label>
                               <select
                                 value={stage3ReviewDraft.priority}
                                 onChange={(event) =>
@@ -10815,7 +11422,7 @@ export function Stage1OpsDetail({
                                     priority: event.target.value as Stage3ReviewDraft["priority"],
                                   }))
                                 }
-                                className="mt-1 h-8 w-full rounded-md border border-gray-200 px-2 text-[11px] outline-none focus:border-indigo-300"
+                                className="mt-1 h-10 w-full rounded-md border border-gray-200 px-3 text-sm outline-none focus:border-indigo-300"
                               >
                                 <option value="HIGH">HIGH</option>
                                 <option value="MID">MID</option>
@@ -10823,7 +11430,7 @@ export function Stage1OpsDetail({
                               </select>
                             </div>
                             <div className="mt-2">
-                              <label className="text-[11px] font-semibold text-slate-600">전략 메모(필수)</label>
+                              <label className="text-sm font-semibold text-slate-600">전략 메모(필수)</label>
                               <textarea
                                 ref={registerStage3FieldRef("step1StrategyMemo")}
                                 value={stage3ReviewDraft.strategyMemo}
@@ -10834,26 +11441,26 @@ export function Stage1OpsDetail({
                                 className={stage3FieldClass(
                                   "PRECHECK",
                                   "step1StrategyMemo",
-                                  "mt-1 h-28 w-full rounded-md border border-gray-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300",
+                                  "mt-1 h-32 w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:border-indigo-300",
                                 )}
                                 placeholder={"1) Stage3로 넘어온 이유\n2) 감별검사/연계 계획\n3) 추적/정밀관리 방향"}
                               />
                               {stage3CurrentStepErrors.step1StrategyMemo ? (
-                                <p className="mt-1 text-[10px] font-semibold text-rose-600">{stage3CurrentStepErrors.step1StrategyMemo}</p>
+                                <p className="mt-1 text-xs font-semibold text-rose-600">{stage3CurrentStepErrors.step1StrategyMemo}</p>
                               ) : null}
                             </div>
                           </div>
 
                           <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
-                            <p className="text-[11px] text-indigo-800">
+                            <p className="text-sm text-indigo-800">
                               완료 시 <strong>{isStage2OpsView ? "STEP1 검토 완료" : "STAGE3_REVIEW_DONE"}</strong> 이벤트와 전략 메모가 타임라인/감사로그에 기록됩니다.
                             </p>
                             <button
                               type="button"
-                              onClick={() => moveStage3TaskStep(1)}
-                              className="mt-2 w-full rounded-md border border-indigo-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100"
+                              onClick={handleStage3TaskComplete}
+                              className="mt-2 w-full rounded-md border border-indigo-300 bg-white px-3 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
                             >
-                              {isStage2OpsView ? "Step2(신경심리검사)로 이동" : "Step2(감별경로)로 이동"}
+                              {isStage2OpsView ? "Step2(신경심리검사)로 이동" : "Step2(검사 연계)로 이동"}
                             </button>
                           </div>
                         </div>
@@ -11338,7 +11945,7 @@ export function Stage1OpsDetail({
                   const previousExamSummary = [
                     `Stage1 우선도 ${modelPriorityMeta.bandLabel} (${Math.round(modelPriorityValue)}점)`,
                     `Stage2 결과 ${stage2ResolvedLabel}${stage2ResolvedMciStage ? `(${stage2ResolvedMciStage})` : ""}`,
-                    `현재 감별경로 상태 ${diffStatus}`,
+                    `현재 검사 연계 상태 ${diffStatus}`,
                   ];
                   const stage3Step2Panels: Array<{
                     key: Stage3Step2PanelKey;
@@ -11354,7 +11961,7 @@ export function Stage1OpsDetail({
                     },
                     {
                       key: "BOOKING",
-                      title: "2) 감별검사 예약 생성",
+                      title: "2) 정밀검사 예약 생성",
                       description: "기관/검사/예약 정보를 확정합니다.",
                       done:
                         Boolean(stage3DiffDraft.preferredHospital.trim()) &&
@@ -11396,71 +12003,74 @@ export function Stage1OpsDetail({
                           : "이전 검사 결과를 확인한 뒤 통화로 재평가 안내와 추적 계획을 확정합니다."}
                       </p>
 
-                      <div className="mt-3 space-y-2">
-                        {stage3Step2Panels.map((panel, index) => {
-                          const active = stage3Step2ActivePanel === panel.key;
-                          const blocked = index > stage3Step2ActiveIndex + 1;
-                          return (
-                            <button
-                              key={panel.key}
-                              type="button"
-                              onClick={() => {
-                                if (blocked) return;
-                                openStage3Step2Panel(panel.key);
-                              }}
-                              className={cn(
-                                "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left",
-                                active
-                                  ? "border-indigo-300 bg-indigo-50"
-                                  : panel.done
-                                    ? "border-emerald-200 bg-emerald-50"
-                                    : "border-slate-200 bg-slate-50",
-                                blocked ? "cursor-not-allowed opacity-60" : "hover:border-indigo-200 hover:bg-white",
-                              )}
-                            >
-                              <div>
-                                <p className="text-[11px] font-semibold text-slate-900">{panel.title}</p>
-                                <p className="text-[10px] text-slate-600">{panel.description}</p>
-                              </div>
-                              <span
+                      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)]">
+                        <div className="space-y-2">
+                          {stage3Step2Panels.map((panel, index) => {
+                            const active = stage3Step2ActivePanel === panel.key;
+                            const blocked = index > stage3Step2ActiveIndex + 1;
+                            return (
+                              <button
+                                key={panel.key}
+                                type="button"
+                                onClick={() => {
+                                  if (blocked) return;
+                                  openStage3Step2Panel(panel.key);
+                                }}
                                 className={cn(
-                                  "rounded border px-2 py-0.5 text-[10px] font-semibold",
-                                  panel.done
-                                    ? "border-emerald-300 bg-white text-emerald-700"
-                                    : active
-                                      ? "border-indigo-300 bg-white text-indigo-700"
-                                      : "border-slate-200 bg-white text-slate-600",
+                                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left",
+                                  active
+                                    ? "border-indigo-300 bg-indigo-50"
+                                    : panel.done
+                                      ? "border-emerald-200 bg-emerald-50"
+                                      : "border-slate-200 bg-slate-50",
+                                  blocked ? "cursor-not-allowed opacity-60" : "hover:border-indigo-200 hover:bg-white",
                                 )}
                               >
-                                {panel.done ? "완료" : blocked ? "잠금" : active ? "열림" : "대기"}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {stage3Step2Errors.length > 0 ? (
-                        <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2">
-                          <p className="text-[11px] font-semibold text-rose-700">필수 항목 누락 {stage3Step2Errors.length}건</p>
-                          <ul className="mt-1 space-y-1">
-                            {stage3Step2Errors.map((entry) => (
-                              <li key={entry.key}>
-                                <button
-                                  type="button"
-                                  onClick={() => focusStage3ErrorField(entry.key as Stage3TaskFieldKey)}
-                                  className="text-[11px] text-rose-700 underline decoration-dotted underline-offset-2"
+                                <div>
+                                  <p className="text-[11px] font-semibold text-slate-900">{panel.title}</p>
+                                  <p className="text-[10px] text-slate-600">{panel.description}</p>
+                                </div>
+                                <span
+                                  className={cn(
+                                    "rounded border px-2 py-0.5 text-[10px] font-semibold",
+                                    panel.done
+                                      ? "border-emerald-300 bg-white text-emerald-700"
+                                      : active
+                                        ? "border-indigo-300 bg-white text-indigo-700"
+                                        : "border-slate-200 bg-white text-slate-600",
+                                  )}
                                 >
-                                  - {entry.message}
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null}
+                                  {panel.done ? "완료" : blocked ? "잠금" : active ? "열림" : "대기"}
+                                </span>
+                              </button>
+                            );
+                          })}
 
-                      <div className="mx-auto mt-3 max-w-[1100px] space-y-3 px-2 md:px-8">
-                        {stage3Step2ActivePanel === "REVIEW" ? (
-                        <div id="stage3-step2-panel-review" className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          {stage3Step2Errors.length > 0 ? (
+                            <div className="rounded-md border border-rose-200 bg-rose-50 p-2">
+                              <p className="text-[11px] font-semibold text-rose-700">필수 항목 누락 {stage3Step2Errors.length}건</p>
+                              <ul className="mt-1 space-y-1">
+                                {stage3Step2Errors.map((entry) => (
+                                  <li key={entry.key}>
+                                    <button
+                                      type="button"
+                                      onClick={() => focusStage3ErrorField(entry.key as Stage3TaskFieldKey)}
+                                      className="text-[11px] text-rose-700 underline decoration-dotted underline-offset-2"
+                                    >
+                                      - {entry.message}
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-slate-800">전화/문자 실행 패널</p>
+                            <span className="text-[10px] text-slate-500">Stage1 상담/문자 시스템 재사용</span>
+                          </div>
                           <div className="rounded-md border border-slate-200 bg-white p-2">
                             <p className="text-xs font-semibold text-slate-800">이전 검사 요약</p>
                             <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
@@ -11468,10 +12078,6 @@ export function Stage1OpsDetail({
                                 <li key={item}>• {item}</li>
                               ))}
                             </ul>
-                          </div>
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-xs font-semibold text-slate-800">전화 상담 패널</p>
-                            <span className="text-[10px] text-slate-500">Stage1 상담/문자 시스템 재사용</span>
                           </div>
                           <div className="grid grid-cols-3 gap-1">
                             <button
@@ -11559,6 +12165,23 @@ export function Stage1OpsDetail({
                             onConsultation={handleStage3Step2Consultation}
                             onSmsSent={handleStage3Step2SmsSent}
                           />
+                        </div>
+                      </div>
+
+                      <div className="mx-auto mt-3 max-w-[1100px] space-y-3 px-2 md:px-8">
+                        {stage3Step2ActivePanel === "REVIEW" ? (
+                        <div id="stage3-step2-panel-review" className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <div className="rounded-md border border-slate-200 bg-white p-2">
+                            <p className="text-xs font-semibold text-slate-800">이전 검사 요약</p>
+                            <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                              {previousExamSummary.map((item) => (
+                                <li key={item}>• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <p className="text-[11px] text-slate-600">
+                            전화/문자 실행은 우측 패널에서 상시 확인·수행할 수 있습니다.
+                          </p>
                         </div>
                         ) : null}
 
@@ -12461,21 +13084,21 @@ export function Stage1OpsDetail({
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
                       <button
                         onClick={() => setStage2NextStep("FOLLOWUP_2Y", "정상 분류로 2년 후 선별검사 일정 생성")}
-                        disabled={!stage2ClassificationConfirmed || stage2CurrentLabel !== "정상"}
+                        disabled={!stage2Step4Selectable || stage2CurrentLabel !== "정상"}
                         className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 disabled:opacity-50"
                       >
                         정상 → 2년 후 선별
                       </button>
                       <button
                         onClick={() => setStage2NextStep("STAGE3", "MCI/치매 분류로 Stage3 진입 생성")}
-                        disabled={!stage2ClassificationConfirmed || !stage2NeedsStage3(stage2CurrentLabel)}
+                        disabled={!stage2Step4Selectable || !stage2NeedsStage3(stage2CurrentLabel)}
                         className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1.5 text-[11px] font-semibold text-blue-700 disabled:opacity-50"
                       >
                         MCI → Stage3 진입
                       </button>
                       <button
                         onClick={() => setStage2NextStep("DIFF_PATH", "치매 분류로 감별검사 경로 전환")}
-                        disabled={!stage2ClassificationConfirmed || stage2CurrentLabel !== "치매"}
+                        disabled={!stage2Step4Selectable || stage2CurrentLabel !== "치매"}
                         className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] font-semibold text-rose-700 disabled:opacity-50"
                       >
                         치매 → 감별 경로
@@ -12563,6 +13186,10 @@ export function Stage1OpsDetail({
               </button>
               <button
                 onClick={() => {
+                  if (!isStage2OpsView && stage3TaskModalStep === "PRECHECK") {
+                    handleStage3TaskComplete();
+                    return;
+                  }
                   if (isStage2OpsView && stage3TaskModalStep === "CONTACT_EXECUTION") {
                     handleStage3TaskComplete();
                     return;
@@ -12884,7 +13511,12 @@ export function Stage1OpsDetail({
                     onToggle={closeStage1Modal}
                     executionStatus={detail.contactExecution.status}
                     lastSentAt={detail.contactExecution.lastSentAt}
+                    lastSmsSentAt={detail.lastSmsSentAt}
                     assigneeName={detail.header.assigneeName}
+                    reservation={detail.reservation}
+                    showReservationSync={hasSmsReservationSignal}
+                    autoFilledState={autoFilledOutcomeState}
+                    onOpenReservationDetail={() => setReservationDetailOpen(true)}
                     selectedOutcomeCode={selectedOutcomeCode}
                     onSelectOutcomeCode={handleSelectOutcomeCode}
                     reasonTags={responseReasonTags}
@@ -12922,15 +13554,10 @@ export function Stage1OpsDetail({
                 <FollowUpDecisionPanel
                   draft={followUpDecisionDraft}
                   reservationInfo={detail.reservationInfo}
+                  reservation={detail.reservation}
+                  showStage2Decision={mode === "stage1"}
                   onChange={setFollowUpDecisionDraft}
                   onSave={handleSaveFollowUpDecision}
-                />
-
-                <LinkageActionPanel
-                  linkageStatus={detail.linkageStatus}
-                  reservationInfo={detail.reservationInfo}
-                  onAction={handleLinkageAction}
-                  mode={mode}
                 />
 
                 <NextActionPanel
@@ -13077,6 +13704,12 @@ export function Stage1OpsDetail({
           })
         }
         onConfirm={confirmOutcome}
+      />
+
+      <ReservationDetailModal
+        open={reservationDetailOpen}
+        reservation={detail.reservation}
+        onClose={() => setReservationDetailOpen(false)}
       />
 
       {/* ═══ 접촉 전략 Override 모달 ═══ */}
@@ -13735,81 +14368,6 @@ function ContactExecutionLauncherCard({
   );
 }
 
-function LinkageActionPanel({
-  linkageStatus,
-  reservationInfo,
-  locked = false,
-  lockReason,
-  onOpenStep4,
-  onAction,
-  mode = "stage1",
-}: {
-  linkageStatus: LinkageStatus;
-  reservationInfo?: ReservationInfo;
-  locked?: boolean;
-  lockReason?: string;
-  onOpenStep4?: () => void;
-  onAction: (action: Stage1LinkageAction) => void;
-  mode?: StageOpsMode;
-}) {
-  const isStage3Mode = mode === "stage3";
-  return (
-    <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-      <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-        <ExternalLink size={15} className="text-[#15386a]" />
-        {isStage3Mode ? "플랜/연계 실행" : "연계 작업"}
-      </h3>
-      <p className="mt-1 text-[11px] text-gray-500">
-        {isStage3Mode ? "프로그램 제공/외부 연계는 관리 제공(프로그램·연계) 단계에서 실행합니다." : "프로그램 제공/외부 연계는 이 패널에서만 실행합니다."}
-      </p>
-
-      {locked ? (
-        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-          <p className="text-[11px] font-semibold text-amber-800">{lockReason ?? "후속 결정 단계에서 실행 가능합니다."}</p>
-          <button
-            onClick={onOpenStep4}
-            className="mt-2 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
-          >
-            STEP4 열기
-          </button>
-        </div>
-      ) : null}
-
-      <div className="mt-3 space-y-2">
-        {(Object.keys(STAGE1_LINKAGE_ACTION_META) as Stage1LinkageAction[]).map((actionKey) => {
-          const action = STAGE1_LINKAGE_ACTION_META[actionKey];
-          return (
-            <button
-              key={actionKey}
-              type="button"
-              disabled={locked}
-              onClick={() => onAction(actionKey)}
-              className={cn(
-                "w-full rounded-lg border border-slate-200 px-3 py-2 text-left transition-colors",
-                locked ? "cursor-not-allowed bg-slate-100 text-slate-400" : "bg-slate-50 hover:bg-slate-100"
-              )}
-            >
-              <p className="text-xs font-semibold text-slate-900">{action.title}</p>
-              <p className="mt-0.5 text-[11px] text-slate-600">{action.description}</p>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-800">
-        <p>
-          현재 예약/연계 상태: <strong>{LINKAGE_STATUS_HINT[linkageStatus]}</strong>
-        </p>
-        <p className="mt-0.5">
-          예약 정보:{" "}
-          <strong>{reservationInfo ? reservationInfoToBookingLine(reservationInfo) : "아직 생성되지 않았습니다."}</strong>
-        </p>
-        <p className="mt-0.5">연계 실행 시 감사 로그와 타임라인에 즉시 기록됩니다.</p>
-      </div>
-    </section>
-  );
-}
-
 function RagRecommendationPanel({
   loading,
   recommendations,
@@ -13879,11 +14437,15 @@ function RagRecommendationPanel({
 function FollowUpDecisionPanel({
   draft,
   reservationInfo,
+  reservation,
+  showStage2Decision = false,
   onChange,
   onSave,
 }: {
   draft: FollowUpDecisionDraft;
   reservationInfo?: ReservationInfo;
+  reservation?: ReservationSnapshot;
+  showStage2Decision?: boolean;
   onChange: (next: FollowUpDecisionDraft) => void;
   onSave: () => void;
 }) {
@@ -13922,6 +14484,41 @@ function FollowUpDecisionPanel({
           );
         })}
       </div>
+
+      {showStage2Decision ? (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold text-slate-700">다음 단계 결정 (Stage1)</p>
+          <p className="mt-0.5 text-[10px] text-slate-500">후속 결정 저장 시 Stage2 전환 여부를 함께 기록합니다.</p>
+          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => onChange({ ...draft, stage2Decision: "KEEP_STAGE1" })}
+              className={cn(
+                "rounded-md border px-3 py-2 text-left text-xs transition-colors",
+                draft.stage2Decision === "KEEP_STAGE1"
+                  ? "border-slate-400 bg-white text-slate-900"
+                  : "border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200",
+              )}
+            >
+              <p className="font-semibold">Stage1 유지</p>
+              <p className="mt-0.5 text-[10px] text-slate-500">후속 추적/연계를 Stage1에서 계속 수행</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange({ ...draft, stage2Decision: "MOVE_STAGE2" })}
+              className={cn(
+                "rounded-md border px-3 py-2 text-left text-xs transition-colors",
+                draft.stage2Decision === "MOVE_STAGE2"
+                  ? "border-blue-300 bg-blue-50 text-blue-900"
+                  : "border-blue-200 bg-white text-blue-700 hover:bg-blue-50",
+              )}
+            >
+              <p className="font-semibold">Stage2로 올림</p>
+              <p className="mt-0.5 text-[10px] text-blue-600">2차 평가 대기열로 전환</p>
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
         <div>
@@ -13968,6 +14565,14 @@ function FollowUpDecisionPanel({
       <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
         <p>현재 선택: <strong>{routeMeta.label}</strong></p>
         <p className="mt-0.5">예약안내 문자 템플릿은 후속 결정 저장 후 활성화됩니다.</p>
+        {showStage2Decision ? (
+          <p className="mt-0.5">
+            단계 결정: <strong>{draft.stage2Decision === "MOVE_STAGE2" ? "Stage2로 올림" : "Stage1 유지"}</strong>
+          </p>
+        ) : null}
+        <p className="mt-0.5">
+          예약 출처/상태: <strong>{reservation?.source === "SMS" ? "SMS" : reservation?.source ?? "수동"} / {reservation ? RESERVATION_STATUS_LABELS[reservation.status] : "미생성"}</strong>
+        </p>
         <p className="mt-0.5">현재 예약 정보: <strong>{reservationInfo ? reservationInfoToBookingLine(reservationInfo) : "없음"}</strong></p>
       </div>
 
@@ -14414,7 +15019,12 @@ function ResponseTriagePanel({
   onToggle,
   executionStatus,
   lastSentAt,
+  lastSmsSentAt,
   assigneeName,
+  reservation,
+  showReservationSync,
+  autoFilledState,
+  onOpenReservationDetail,
   selectedOutcomeCode,
   onSelectOutcomeCode,
   reasonTags,
@@ -14440,7 +15050,12 @@ function ResponseTriagePanel({
   onToggle: () => void;
   executionStatus: ContactExecutionStatus;
   lastSentAt?: string;
+  lastSmsSentAt?: string | null;
   assigneeName: string;
+  reservation?: ReservationSnapshot;
+  showReservationSync?: boolean;
+  autoFilledState?: AutoFilledOutcomeState | null;
+  onOpenReservationDetail?: () => void;
   selectedOutcomeCode: OutcomeCode | null;
   onSelectOutcomeCode: (code: OutcomeCode | null) => void;
   reasonTags: ResponseReasonTag[];
@@ -14503,6 +15118,68 @@ function ResponseTriagePanel({
               먼저 결과 유형을 선택하고, 필요한 입력을 채운 뒤 저장하세요.
             </p>
           </div>
+
+          {showReservationSync && reservation?.source === "SMS" && reservation.status !== "NONE" ? (
+            <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="space-y-1 text-[11px]">
+                  <p className="inline-flex items-center rounded-full border border-sky-300 bg-white px-2 py-0.5 font-semibold text-sky-700">
+                    문자 예약 동기화
+                  </p>
+                  <p className="text-slate-700">
+                    최근 문자 발송: <strong>{formatDateTime(lastSmsSentAt)}</strong>
+                  </p>
+                  <p className="text-slate-700">
+                    예약 상태: <strong>{RESERVATION_STATUS_LABELS[reservation.status]}</strong>
+                  </p>
+                  <p className="text-slate-700">
+                    예약 완료 시각: <strong>{formatDateTime(reservation.updatedAt ?? reservation.createdAt)}</strong>
+                  </p>
+                </div>
+                {onOpenReservationDetail ? (
+                  <button
+                    type="button"
+                    onClick={onOpenReservationDetail}
+                    className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-100"
+                  >
+                    예약 내용 확인
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {!((showReservationSync && reservation?.source === "SMS" && reservation.status !== "NONE")) && lastSmsSentAt ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-700">
+              <p className="font-semibold text-slate-800">문자 예약 동기화 대기</p>
+              <p className="mt-1">
+                최근 문자 발송 {formatDateTime(lastSmsSentAt)} 이후 시민 예약 이벤트가 아직 수신되지 않았습니다.
+              </p>
+              <p className="mt-1 text-slate-500">
+                시민이 문자 링크에서 예약을 완료하면 이 위치에 예약 출처/일정/상태가 자동으로 표시됩니다.
+              </p>
+            </div>
+          ) : null}
+
+          {autoFilledState ? (
+            <div
+              className={cn(
+                "rounded-md border px-3 py-2 text-[11px]",
+                autoFilledState.manualOverriddenAt
+                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                  : "border-emerald-200 bg-emerald-50 text-emerald-800",
+              )}
+            >
+              <p className="font-semibold">
+                {autoFilledState.manualOverriddenAt ? "자동 반영 후 수동 수정됨" : "자동 반영됨"}
+              </p>
+              <p className="mt-0.5">{autoFilledState.summary}</p>
+              <p className="mt-0.5 text-[10px] opacity-80">
+                자동 반영 {formatDateTime(autoFilledState.autoFilledAt)}
+                {autoFilledState.manualOverriddenAt ? ` · 수동 수정 ${formatDateTime(autoFilledState.manualOverriddenAt)}` : ""}
+              </p>
+            </div>
+          ) : null}
 
           <div className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11px] font-semibold text-indigo-800">
             운영 참고 · 담당자 확인 필요
@@ -14792,6 +15469,87 @@ function ResponseTriagePanel({
         </div>
       ) : null}
     </section>
+  );
+}
+
+function ReservationDetailModal({
+  open,
+  reservation,
+  onClose,
+}: {
+  open: boolean;
+  reservation?: ReservationSnapshot;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="w-[min(720px,94vw)] rounded-xl border border-gray-200 bg-white p-0">
+        <div className="border-b border-gray-100 px-5 py-4">
+          <h3 className="text-sm font-bold text-slate-900">예약 내용 확인</h3>
+          <p className="mt-1 text-[11px] text-gray-500">문자 예약 동기화 결과를 확인합니다.</p>
+        </div>
+        <div className="space-y-3 px-5 py-4 text-xs text-slate-700">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">채널 출처</p>
+              <p className="mt-0.5 font-semibold text-slate-900">문자(SMS) 링크</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">예약 주체</p>
+              <p className="mt-0.5 font-semibold text-slate-900">
+                {reservation?.createdBy === "STAFF" ? "담당자 수행" : reservation?.createdBy === "AGENT" ? "자동 안내/응답 수집" : "시민 직접 수행"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">예약 프로그램</p>
+              <p className="mt-0.5 font-semibold text-slate-900">
+                {reservation?.programName ?? reservation?.programType ?? "일부 정보 미수신"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">예약 상태</p>
+              <p className="mt-0.5 font-semibold text-slate-900">
+                {reservation ? RESERVATION_STATUS_LABELS[reservation.status] : "일부 정보 미수신"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">예약 일정</p>
+              <p className="mt-0.5 font-semibold text-slate-900">{formatDateTime(reservation?.scheduledAt)}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-500">장소/기관</p>
+              <p className="mt-0.5 font-semibold text-slate-900">{reservation?.locationName ?? "일부 정보 미수신"}</p>
+            </div>
+          </div>
+
+          {reservation?.options && reservation.options.length > 0 ? (
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <p className="text-[11px] font-semibold text-slate-700">추가 옵션</p>
+              <div className="mt-1 space-y-1 text-[11px] text-slate-600">
+                {reservation.options.map((option) => (
+                  <p key={`${option.key}-${option.value}`}>
+                    {option.label}: <strong className="text-slate-900">{option.value}</strong>
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            내부 식별자 {reservation?.reservationId ? `#${reservation.reservationId}` : "미수신"} · 외부 원문 링크/토큰은 노출하지 않습니다.
+          </div>
+        </div>
+        <div className="flex justify-end border-t border-gray-100 px-5 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-gray-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-gray-50"
+          >
+            닫기
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -427,3 +427,19 @@ class RagRun(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default='DONE')
     summary: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class RegionalSnapshot(Base):
+    __tablename__ = 'regional_snapshots'
+    __table_args__ = (
+        Index('ix_local_regional_snapshots_scope', 'scope_key'),
+        Index('ix_local_regional_snapshots_region_updated', 'region_id', 'updated_at'),
+        {'schema': 'local_center'},
+    )
+
+    snapshot_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    region_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

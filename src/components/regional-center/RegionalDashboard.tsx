@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect, startTransition } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   ChevronLeft,
   AlertTriangle,
@@ -70,6 +71,7 @@ import type {
 } from './opsContracts';
 import type { RegionalPageId } from './regionalRouting';
 import { buildOpsTodos } from './regionalOpsMockApi';
+import { fetchRegionalDashboardDistricts } from '../../lib/regionalApi';
 
 type AnalyticsPeriod = 'week' | 'month' | 'quarter';
 type RangePreset = '24h' | '7d' | '30d' | '90d';
@@ -1237,12 +1239,37 @@ export function RegionalDashboard({
     [districtRegionEntries, region.ctprvnCode, sigunguRegions],
   );
 
+  const districtRowsQuery = useQuery<{ items: DistrictOpsData[] }>({
+    queryKey: [
+      'regional-dashboard',
+      'districts',
+      region.id,
+      analyticsPeriod,
+      rangePreset,
+      districtSourceRegions.map((entry) => `${entry.code}:${entry.name}`).join('|'),
+    ],
+    queryFn: async () => {
+      const remote = await fetchRegionalDashboardDistricts({
+        regionId: region.id,
+        period: analyticsPeriod,
+        rangePreset,
+        districts: districtSourceRegions,
+      });
+      return { items: (remote.items || []) as DistrictOpsData[] };
+    },
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
   const districtRows = useMemo(
-    () =>
-      districtSourceRegions.map((entry) =>
+    () => {
+      const remoteItems = districtRowsQuery.data?.items ?? [];
+      if (remoteItems.length) return remoteItems;
+      return districtSourceRegions.map((entry) =>
         buildDistrictData(entry.name, `${region.id}-${rangePreset}`, analyticsPeriod, rangePreset, entry.code),
-      ),
-    [districtSourceRegions, region.id, analyticsPeriod, rangePreset],
+      );
+    },
+    [analyticsPeriod, districtRowsQuery.data?.items, districtSourceRegions, rangePreset, region.id],
   );
 
   const emdRows = useMemo(() => {

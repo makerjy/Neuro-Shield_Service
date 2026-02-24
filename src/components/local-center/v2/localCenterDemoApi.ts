@@ -4,14 +4,16 @@ import {
   type CaseEvent,
   type DashboardStats,
   type GlobalFilters,
+  ensureCaseRecords,
   getCaseEntity,
   getDashboardStats,
   listCaseDashboardRecords,
   listCaseEvents,
 } from "./caseSSOT";
 
-const USE_REAL_LOCAL_CENTER_API = import.meta.env.VITE_USE_REAL_LOCAL_CENTER_API === "true";
+const USE_REAL_LOCAL_CENTER_API = String(import.meta.env.VITE_USE_REAL_LOCAL_CENTER_API ?? "true").toLowerCase() !== "false";
 const LOCAL_CENTER_BASE = "/api/local-center";
+const TOP_PRIORITY_STAGE1_CASE_ID = "CASE-2026-175";
 
 export type LocalCenterApiSource = "demo" | "remote" | "fallback";
 
@@ -220,6 +222,78 @@ async function runDemo<T>(builder: () => T, source: LocalCenterApiSource = "demo
   };
 }
 
+function mergeRemoteDashboardItemsWithLocal(items: CaseRecord[], filters?: Partial<GlobalFilters>) {
+  ensureCaseRecords(items);
+  const localItems = listCaseDashboardRecords(filters);
+  const localById = new Map(localItems.map((item) => [item.id, item]));
+  const merged = items.map((item) => localById.get(item.id) ?? item);
+  const mergedIds = new Set(merged.map((item) => item.id));
+
+  for (const localItem of localItems) {
+    if (!mergedIds.has(localItem.id)) {
+      merged.push(localItem);
+      mergedIds.add(localItem.id);
+    }
+  }
+
+  return merged;
+}
+
+function mergeRemoteCaseWithLocal(caseId: string, remote: CaseEntity | null): CaseEntity | null {
+  const local = getCaseEntity(caseId);
+  if (local) return local;
+  return remote;
+}
+
+function hasNonZeroMciDistribution(stats: DashboardStats) {
+  return stats.mciDistribution.some((item) => item.value > 0);
+}
+
+type PriorityTaskItem = DashboardStats["priorityTasks"][number];
+
+function normalizePriorityTasks(remoteTasks: PriorityTaskItem[], localTasks: PriorityTaskItem[]): PriorityTaskItem[] {
+  const base = remoteTasks.length > 0 ? remoteTasks : localTasks;
+  const localPinned = localTasks.find((item) => item.id === TOP_PRIORITY_STAGE1_CASE_ID && item.stage === "Stage 1");
+  const basePinned = base.find((item) => item.id === TOP_PRIORITY_STAGE1_CASE_ID);
+  const pinnedTask = localPinned ?? basePinned;
+
+  const deduped: PriorityTaskItem[] = [];
+  const seen = new Set<string>();
+  for (const item of base) {
+    if (item.id === TOP_PRIORITY_STAGE1_CASE_ID) continue;
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    deduped.push(item);
+  }
+
+  return (pinnedTask ? [pinnedTask, ...deduped] : deduped).slice(0, 4);
+}
+
+function mergeDashboardStatsWithLocal(remote: DashboardStats, filters?: Partial<GlobalFilters>): DashboardStats {
+  const local = getDashboardStats(filters);
+  const priorityTasks = normalizePriorityTasks(remote.priorityTasks, local.priorityTasks);
+  const shouldPreferLocalMci =
+    (!hasNonZeroMciDistribution(remote) && hasNonZeroMciDistribution(local)) ||
+    (remote.highRiskMci <= 0 && local.highRiskMci > 0) ||
+    (remote.highRiskMciList.length === 0 && local.highRiskMciList.length > 0);
+
+  if (!shouldPreferLocalMci) {
+    return {
+      ...remote,
+      priorityTasks,
+    };
+  }
+
+  return {
+    ...remote,
+    highRiskMci: local.highRiskMci,
+    mciDistribution: local.mciDistribution,
+    highRiskMciList: local.highRiskMciList,
+    pipelineData: local.pipelineData,
+    priorityTasks,
+  };
+}
+
 export async function fetchLocalCenterDashboardStats(
   filters?: Partial<GlobalFilters>,
 ): Promise<LocalCenterDashboardStatsResponse> {
@@ -227,7 +301,10 @@ export async function fetchLocalCenterDashboardStats(
   if (USE_REAL_LOCAL_CENTER_API) {
     try {
       const remote = await fetchJson<LocalCenterDashboardStatsResponse>(withQuery(`${LOCAL_CENTER_BASE}/dashboard/stats`, query));
-      return remote;
+      return {
+        ...remote,
+        stats: mergeDashboardStatsWithLocal(remote.stats, filters),
+      };
     } catch {
       const fallback = await runDemo(() => ({
         stats: getDashboardStats(filters),
@@ -252,8 +329,13 @@ export async function fetchLocalCenterCaseDashboard(
   const query = toFilterQuery(filters);
   if (USE_REAL_LOCAL_CENTER_API) {
     try {
-      const remote = await fetchJson<LocalCenterCasesResponse>(withQuery(`${LOCAL_CENTER_BASE}/cases`, query));
-      return remote;
+      const remote = await fetchJson<LocalCenterCasesResponse>(withQuery(`${LOCAL_CENTER_BASE}/dashboard/cases`, query));
+      const mergedItems = mergeRemoteDashboardItemsWithLocal(remote.items, filters);
+      return {
+        ...remote,
+        items: mergedItems,
+        total: mergedItems.length,
+      };
     } catch {
       const fallback = await runDemo(() => {
         const items = listCaseDashboardRecords(filters);
@@ -282,7 +364,10 @@ export async function fetchLocalCenterCase(caseId: string): Promise<LocalCenterC
   if (USE_REAL_LOCAL_CENTER_API) {
     try {
       const remote = await fetchJson<LocalCenterCaseResponse>(`${LOCAL_CENTER_BASE}/cases/${encodeURIComponent(caseId)}`);
-      return remote;
+      return {
+        ...remote,
+        item: mergeRemoteCaseWithLocal(caseId, remote.item),
+      };
     } catch {
       const fallback = await runDemo(
         () => ({
@@ -306,7 +391,20 @@ export async function fetchLocalCenterCaseEvents(caseId: string): Promise<LocalC
   if (USE_REAL_LOCAL_CENTER_API) {
     try {
       const remote = await fetchJson<LocalCenterCaseEventsResponse>(`${LOCAL_CENTER_BASE}/cases/${encodeURIComponent(caseId)}/events`);
-      return remote;
+      const localItems = listCaseEvents(caseId);
+      if (localItems.length === 0) return remote;
+      const remoteIds = new Set(remote.items.map((event) => event.eventId));
+      const mergedItems = [...remote.items];
+      for (const localEvent of localItems) {
+        if (!remoteIds.has(localEvent.eventId)) {
+          mergedItems.push(localEvent);
+        }
+      }
+      return {
+        ...remote,
+        items: mergedItems.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()),
+        total: mergedItems.length,
+      };
     } catch {
       const fallback = await runDemo(
         () => {

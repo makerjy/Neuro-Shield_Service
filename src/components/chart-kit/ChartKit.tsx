@@ -17,6 +17,7 @@ import {
   Pie,
   Legend,
 } from 'recharts';
+import { chartPalette } from '../../utils/cssVar';
 
 export type ChartUnit = '건' | '%' | '점' | '일' | '%p';
 
@@ -35,8 +36,8 @@ type DeltaValue = {
   delta: number;
 };
 
-const AXIS_TICK_STYLE = { fontSize: 11, fill: '#6b7280' } as const;
-const GRID_STROKE = '#e5e7eb';
+const AXIS_TICK_STYLE = { fontSize: 11, fill: 'var(--muted-foreground)' } as const;
+const GRID_STROKE = 'var(--border)';
 
 function formatCompact(value: number): string {
   const abs = Math.abs(value);
@@ -98,23 +99,24 @@ function ChartTooltip({
 }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="min-w-[150px] rounded-md border border-gray-200 bg-white px-2.5 py-2 shadow-lg">
-      {label != null && <div className="text-[11px] font-semibold text-gray-700 mb-1">{String(label)}</div>}
+    <div className="min-w-[150px] rounded-md border border-border bg-card px-2.5 py-2 shadow-lg">
+      {label != null && <div className="mb-1 text-[11px] font-semibold text-foreground">{String(label)}</div>}
       <div className="space-y-1">
         {payload.map((item, idx) => {
           const numeric = typeof item.value === 'number' ? item.value : 0;
           const isDelta = item.name ? deltaKeys.includes(item.name) : false;
           const unit: ChartUnit = isDelta ? deltaUnit : valueUnit;
+          const palette = chartPalette();
           return (
             <div key={`${item.name ?? idx}-${idx}`} className="grid grid-cols-[1fr_auto] items-center gap-2 text-[11px]">
-              <div className="flex items-center gap-1.5 text-gray-600">
+              <div className="flex items-center gap-1.5 text-muted-foreground">
                 <span
                   className="inline-block h-2 w-2 rounded-full"
-                  style={{ backgroundColor: item.color ?? '#94a3b8' }}
+                  style={{ backgroundColor: item.color ?? palette[idx % palette.length] }}
                 />
                 <span className="truncate">{item.name ?? `value-${idx + 1}`}</span>
               </div>
-              <span className="font-semibold text-gray-900 tabular-nums">{formatByUnit(numeric, unit)}</span>
+              <span className="font-semibold text-foreground tabular-nums">{formatByUnit(numeric, unit)}</span>
             </div>
           );
         })}
@@ -137,10 +139,10 @@ export function ChartHeader({
   return (
     <div className="mb-2 flex items-start justify-between gap-2">
       <div className="min-w-0">
-        <div className="text-sm font-semibold text-gray-800 truncate">{title}</div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-gray-500">
+        <div className="truncate text-sm font-semibold text-foreground">{title}</div>
+        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
           {subtitle && <span className="truncate">{subtitle}</span>}
-          {scopeLabel && <span className="text-gray-400">· {scopeLabel}</span>}
+          {scopeLabel && <span className="text-muted-foreground">· {scopeLabel}</span>}
         </div>
       </div>
       {action}
@@ -162,7 +164,7 @@ export function ChartCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-3">
+    <div className="rounded-lg border border-border bg-card p-3">
       <ChartHeader title={title} subtitle={subtitle} scopeLabel={scopeLabel} action={action} />
       {children}
     </div>
@@ -171,14 +173,14 @@ export function ChartCard({
 
 export function ChartEmpty({ message = '데이터가 없습니다.' }: { message?: string }) {
   return (
-    <div className="h-[220px] rounded-lg border border-dashed border-gray-200 bg-gray-50 text-[12px] text-gray-500 flex items-center justify-center">
+    <div className="flex h-[220px] items-center justify-center rounded-lg border border-dashed border-border bg-muted text-[12px] text-muted-foreground">
       {message}
     </div>
   );
 }
 
 export function ChartSkeleton({ height = 220 }: { height?: number }) {
-  return <div className="animate-pulse rounded-lg bg-gray-200" style={{ height }} />;
+  return <div className="animate-pulse rounded-lg bg-muted" style={{ height }} />;
 }
 
 export function KpiTrendLine({
@@ -227,11 +229,26 @@ export function KpiTrendLine({
                 style={{ fontSize: 10, fill: color, fontWeight: 600 }}
               />
             </Line>
-            <Line type="monotone" dataKey="national" name={nationalLabel} stroke="#9ca3af" strokeWidth={1.6} dot={false} strokeDasharray="4 3" />
+            <Line
+              type="monotone"
+              dataKey="national"
+              name={nationalLabel}
+              stroke="var(--chart-4)"
+              strokeWidth={1.6}
+              dot={false}
+              strokeDasharray="4 3"
+            />
             {districtLabel && (
-              <Line type="monotone" dataKey="district" name={districtLabel} stroke="#ef4444" strokeWidth={1.8} dot={{ r: 2.2, fill: '#ef4444' }} />
+              <Line
+                type="monotone"
+                dataKey="district"
+                name={districtLabel}
+                stroke="var(--risk-high)"
+                strokeWidth={1.8}
+                dot={{ r: 2.2, fill: 'var(--risk-high)' }}
+              />
             )}
-            {markerLabel && <ReferenceLine x={markerLabel} stroke="#2563eb" strokeDasharray="4 3" />}
+            {markerLabel && <ReferenceLine x={markerLabel} stroke="var(--chart-2)" strokeDasharray="4 3" />}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -268,7 +285,7 @@ export function TopNHorizontalBar({
       <div style={{ height: 230 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={rows} layout="vertical" margin={{ top: 6, right: 52, left: 24, bottom: 6 }}>
-            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" />
+            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={GRID_STROKE} />
             <XAxis type="number" tick={AXIS_TICK_STYLE} tickCount={6} domain={domain} />
             <YAxis dataKey="name" type="category" tick={AXIS_TICK_STYLE} width={88} />
             <Tooltip content={<ChartTooltip valueUnit={unit} />} />
@@ -277,7 +294,7 @@ export function TopNHorizontalBar({
                 dataKey="value"
                 position="right"
                 formatter={(value: number) => formatLabelByUnit(value, unit)}
-                style={{ fontSize: 10, fill: '#334155', fontWeight: 600 }}
+                style={{ fontSize: 10, fill: 'var(--foreground)', fontWeight: 600 }}
               />
               {rows.map((row, idx) => (
                 <Cell
@@ -300,7 +317,7 @@ export function DonutBreakdown({
   data,
   unit,
   scopeLabel,
-  colors = ['#f97316', '#fb923c', '#f59e0b', '#ef4444', '#d97706'],
+  colors = chartPalette(),
   onSliceClick,
 }: {
   title: string;
@@ -366,7 +383,7 @@ export function StageContribution({
   const rawMax = Math.max(...data.map((item) => item.value));
   const displayUnit: ChartUnit = unit === '%' && rawMax > 100 ? '점' : unit;
   const domain = getDomain(displayUnit, data.map((item) => item.value));
-  const palette = colorScale ?? ['#ef4444', '#f97316', '#f59e0b', '#fb7185', '#dc2626'];
+  const palette = colorScale ?? chartPalette();
   const note =
     unit === '%' && rawMax > 100
       ? '원천값이 100을 넘어 기여도 점수로 표시'
@@ -386,7 +403,7 @@ export function StageContribution({
                 dataKey="value"
                 position="top"
                 formatter={(value: number) => formatLabelByUnit(value, displayUnit)}
-                style={{ fontSize: 10, fill: '#475569', fontWeight: 600 }}
+                style={{ fontSize: 10, fill: 'var(--foreground)', fontWeight: 600 }}
               />
               {data.map((item, idx) => (
                 <Cell key={`${item.name}-${idx}`} fill={palette[idx % palette.length]} />
@@ -406,8 +423,8 @@ export function DeltaScatterOrBar({
   data,
   valueUnit,
   deltaUnit = '%p',
-  barColor = '#2563eb',
-  lineColor = '#ef4444',
+  barColor = 'var(--chart-2)',
+  lineColor = 'var(--risk-high)',
 }: {
   title: string;
   subtitle?: string;
@@ -433,7 +450,7 @@ export function DeltaScatterOrBar({
             <XAxis dataKey="name" tick={AXIS_TICK_STYLE} interval={0} angle={-28} textAnchor="end" height={58} />
             <YAxis yAxisId="left" tick={AXIS_TICK_STYLE} tickCount={6} domain={valueDomain} />
             <YAxis yAxisId="right" orientation="right" tick={AXIS_TICK_STYLE} tickCount={5} domain={deltaDomain} />
-            <ReferenceLine yAxisId="right" y={0} stroke="#cbd5e1" />
+            <ReferenceLine yAxisId="right" y={0} stroke="var(--border)" />
             <Tooltip
               content={
                 <ChartTooltip
@@ -448,7 +465,7 @@ export function DeltaScatterOrBar({
                 dataKey="value"
                 position="top"
                 formatter={(value: number) => formatLabelByUnit(value, valueUnit)}
-                style={{ fontSize: 10, fill: '#334155', fontWeight: 600 }}
+                style={{ fontSize: 10, fill: 'var(--foreground)', fontWeight: 600 }}
               />
             </Bar>
             <Line yAxisId="right" type="monotone" dataKey="delta" name="평균 대비 Δ" stroke={lineColor} strokeWidth={2} dot={{ r: 2.5 }}>

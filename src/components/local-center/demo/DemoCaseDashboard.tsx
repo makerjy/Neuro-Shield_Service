@@ -100,13 +100,13 @@ export function DemoCaseDashboard({ onSelectCase }: DemoCaseDashboardProps) {
     <div className="space-y-4">
       <DemoPanel />
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-500">Demo API</p>
-            <h3 className="text-lg font-bold text-slate-900">단일 MCI 케이스 Stage 연계 대시보드</h3>
+            <p className="text-xs font-semibold text-muted-foreground">Demo API</p>
+            <h3 className="text-lg font-bold text-foreground">단일 MCI 케이스 Stage 연계 대시보드</h3>
           </div>
-          <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-600">
+          <span className="rounded-md border border-border bg-muted px-2 py-1 text-xs font-semibold text-muted-foreground">
             {STAGE_TABS.find((tab) => tab.key === activeStage)?.label} · {total}건
           </span>
         </div>
@@ -118,8 +118,8 @@ export function DemoCaseDashboard({ onSelectCase }: DemoCaseDashboardProps) {
               type="button"
               className={`rounded-lg border px-3 py-1.5 text-sm font-semibold transition-colors ${
                 activeStage === tab.key
-                  ? "border-blue-300 bg-blue-50 text-blue-700"
-                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  ? "border-primary/30 bg-accent text-primary"
+                  : "border-border bg-card text-muted-foreground hover:bg-muted"
               }`}
               onClick={() => setActiveStage(tab.key)}
             >
@@ -128,9 +128,9 @@ export function DemoCaseDashboard({ onSelectCase }: DemoCaseDashboardProps) {
           ))}
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
+        <div className="overflow-x-auto rounded-xl border border-border">
           <table className="w-full min-w-[960px] border-collapse text-sm">
-            <thead className="bg-slate-50 text-xs font-semibold text-slate-500">
+            <thead className="bg-muted text-xs font-semibold text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 text-left">케이스</th>
                 <th className="px-3 py-2 text-left">대상자</th>
@@ -144,16 +144,16 @@ export function DemoCaseDashboard({ onSelectCase }: DemoCaseDashboardProps) {
             <tbody>
               {!loading && rows.length === 0 ? (
                 <tr>
-                  <td className="px-3 py-4 text-center text-sm text-slate-500" colSpan={7}>
+                  <td className="px-3 py-4 text-center text-sm text-muted-foreground" colSpan={7}>
                     해당 Stage 케이스가 없습니다.
                   </td>
                 </tr>
               ) : null}
               {loading
                 ? [...new Array(3)].map((_, index) => (
-                    <tr key={`skeleton-${index}`} className="border-t border-slate-100">
+                    <tr key={`skeleton-${index}`} className="border-t border-border">
                       <td className="px-3 py-3" colSpan={7}>
-                        <div className="h-4 animate-pulse rounded bg-slate-100" />
+                        <div className="h-4 animate-pulse rounded bg-muted" />
                       </td>
                     </tr>
                   ))
@@ -169,42 +169,42 @@ export function DemoCaseDashboard({ onSelectCase }: DemoCaseDashboardProps) {
                     return (
                       <tr
                         key={item.case.caseId}
-                        className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"
+                        className="cursor-pointer border-t border-border hover:bg-muted"
                         onClick={() => onSelectCase(item.case.caseId, toStageType(item.case.currentStage))}
                       >
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
-                            <span className="font-mono font-semibold text-slate-800">{item.case.caseId}</span>
+                            <span className="font-mono font-semibold text-foreground">{item.case.caseId}</span>
                             {item.case.caseId === HERO_CASE_ID ? (
-                              <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">
+                              <span className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-accent px-1.5 py-0.5 text-[10px] font-bold text-primary">
                                 <BadgeCheck size={12} />
                                 HERO
                               </span>
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-slate-700">
+                        <td className="px-3 py-3 text-foreground">
                           {item.person.name} · {item.person.sex} · {ageBandFromBirthYear(item.person.birthYear)}
                         </td>
-                        <td className="px-3 py-3 text-slate-700">
+                        <td className="px-3 py-3 text-foreground">
                           {item.person.region.sido} {item.person.region.sigungu}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-slate-700">{stageSummary(item)}</span>
+                            <span className="text-foreground">{stageSummary(item)}</span>
                             {running ? (
-                              <span className="rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                              <span className="rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning">
                                 {running}
                               </span>
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-slate-700">Step {loopStep}</td>
-                        <td className="px-3 py-3 text-slate-500">{formatDateTime(item.case.updatedAt)}</td>
+                        <td className="px-3 py-3 text-foreground">Step {loopStep}</td>
+                        <td className="px-3 py-3 text-muted-foreground">{formatDateTime(item.case.updatedAt)}</td>
                         <td className="px-3 py-3 text-right">
                           <button
                             type="button"
-                            className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted-foreground hover:bg-muted"
                             onClick={(event) => {
                               event.stopPropagation();
                               onSelectCase(item.case.caseId, toStageType(item.case.currentStage));

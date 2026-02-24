@@ -139,7 +139,11 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
   onSelectCase: (id: string, stage: StageType) => void,
   centerName?: string,
 }) {
-  const { data: statsResponse } = useLocalCenterDashboardStatsQuery();
+  const { data: statsResponse } = useLocalCenterDashboardStatsQuery({
+    stage: "ALL",
+    status: "ALL",
+    keyword: "",
+  });
   const stats = statsResponse?.stats ?? EMPTY_DASHBOARD_STATS;
   const mapScope = resolveLocalMapScope(centerName);
   const [hoveredPipelineStep, setHoveredPipelineStep] = useState<string | null>(null);
@@ -305,7 +309,7 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* 2) 오늘의 우선 업무 패널 */}
-        <div className="lg:col-span-8 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col">
+        <div className="lg:col-span-8 lg:self-start h-fit bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col">
           <div className="p-5 border-b border-gray-100 flex items-center justify-between">
             <h3 className="font-bold text-gray-800 flex items-center gap-2">
               <AlertTriangle className="text-amber-500" size={18} />
@@ -318,7 +322,7 @@ export function MainDashboard({ onNavigateToCases, onSelectCase, centerName }: {
               전체 보기 <ChevronRight size={14} />
             </button>
           </div>
-          <div className="flex-1 overflow-auto">
+          <div className="overflow-auto max-h-[420px]">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-gray-50 text-[11px] font-bold text-gray-500 uppercase tracking-wider">

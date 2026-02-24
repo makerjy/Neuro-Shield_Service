@@ -205,6 +205,30 @@ export type ReservationInfo = {
   note?: string;
 };
 
+export type ReservationSource = "MANUAL" | "SMS" | "AGENT";
+
+export type ReservationStatus = "NONE" | "RESERVED" | "CANCELLED" | "CHANGED" | "NO_SHOW";
+
+export type ReservationOption = {
+  key: string;
+  label: string;
+  value: string;
+};
+
+export type ReservationSnapshot = {
+  source: ReservationSource;
+  status: ReservationStatus;
+  programType?: string;
+  programName?: string;
+  scheduledAt?: string;
+  locationName?: string;
+  options?: ReservationOption[];
+  createdAt?: string;
+  updatedAt?: string;
+  createdBy?: "CITIZEN" | "STAFF" | "AGENT";
+  reservationId?: string;
+};
+
 export type AgentContactResult = "SENT_SUCCESS" | "SENT_FAILED" | "NO_RESPONSE" | "WAITING";
 
 export type AgentJobStatus = "IDLE" | "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
@@ -355,6 +379,25 @@ export type ContactEvent =
       type: "MESSAGE_SENT";
       at: string;
       summary: string;
+      by: string;
+    }
+  | {
+      type: "SMS_RESERVATION_RESERVED" | "SMS_RESERVATION_CANCELLED" | "SMS_RESERVATION_CHANGED" | "SMS_RESERVATION_NO_SHOW";
+      at: string;
+      actor: "CITIZEN" | "SYSTEM" | "STAFF";
+      source: "SMS";
+      summary: string;
+      reservationId?: string;
+      programName?: string;
+      scheduledAt?: string;
+      by: string;
+    }
+  | {
+      type: "INCONSISTENT_SMS_STATUS";
+      at: string;
+      summary: string;
+      detail?: string;
+      reservationId?: string;
       by: string;
     }
   | {
@@ -642,7 +685,9 @@ export type Stage1Detail = {
   contactFlowSteps: ContactFlowState[];
   linkageStatus: LinkageStatus;
   contactExecutor: ContactExecutor;
+  lastSmsSentAt?: string | null;
   reservationInfo?: ReservationInfo;
+  reservation?: ReservationSnapshot;
   agentExecutionLogs: AgentExecutionLog[];
   stage3?: {
     headerMeta: Stage3HeaderMeta;

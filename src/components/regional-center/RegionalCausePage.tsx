@@ -19,6 +19,13 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import type { RegionalScope } from '../geomap/regions';
 import type { InternalRangeKey, InterventionDraft, KpiKey } from './opsContracts';
 import { safeOpsText } from '../../lib/uiTextGuard';
+import {
+  createRegionalCauseIntervention,
+  fetchRegionalCauseAreaComparison,
+  fetchRegionalCauseSummary,
+  fetchRegionalCauseTopN,
+  fetchRegionalCauseTrend,
+} from '../../lib/regionalApi';
 
 interface RegionalCausePageProps {
   region: RegionalScope;
@@ -894,6 +901,7 @@ export function RegionalCausePage({
 
   const queryState = useMemo(
     () => ({
+      regionKey: region.id,
       kpiKey: selectedKpiKey,
       sigungu: selectedRegionSgg ?? '',
       period: selectedRange,
@@ -904,6 +912,7 @@ export function RegionalCausePage({
       trendMetric,
     }),
     [
+      region.id,
       selectedArea,
       selectedCauseKey,
       selectedKpiKey,
@@ -924,6 +933,7 @@ export function RegionalCausePage({
     queryKey: [
       'regional-cause',
       'summary',
+      region.id,
       queryState.kpiKey,
       queryState.sigungu,
       queryState.period,
@@ -931,8 +941,20 @@ export function RegionalCausePage({
       queryState.selectedCauseKey ?? 'all',
       queryState.stageImpactOn ? 'impact-on' : 'impact-off',
     ],
-    queryFn: async () =>
-      buildSummaryResponse(`${baseSeed}-summary`, queryState.selectedStage, queryState.selectedCauseKey),
+    queryFn: async () => {
+      try {
+        return await fetchRegionalCauseSummary({
+          regionId: region.id,
+          kpiKey: queryState.kpiKey,
+          sigungu: queryState.sigungu,
+          period: queryState.period,
+          selectedStage: queryState.selectedStage,
+          selectedCauseKey: queryState.selectedCauseKey,
+        });
+      } catch {
+        return buildSummaryResponse(`${baseSeed}-summary`, queryState.selectedStage, queryState.selectedCauseKey);
+      }
+    },
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
@@ -941,18 +963,31 @@ export function RegionalCausePage({
     queryKey: [
       'regional-cause',
       'causes',
+      region.id,
       queryState.kpiKey,
       queryState.sigungu,
       queryState.period,
       queryState.selectedStage ?? 'all',
       queryState.selectedCompareAreaKey ?? 'all',
     ],
-    queryFn: async () =>
-      buildCausesResponse(
-        `${baseSeed}-causes`,
-        queryState.selectedStage,
-        queryState.selectedCompareAreaKey,
-      ),
+    queryFn: async () => {
+      try {
+        return await fetchRegionalCauseTopN({
+          regionId: region.id,
+          kpiKey: queryState.kpiKey,
+          sigungu: queryState.sigungu,
+          period: queryState.period,
+          selectedStage: queryState.selectedStage,
+          selectedArea: queryState.selectedCompareAreaKey,
+        });
+      } catch {
+        return buildCausesResponse(
+          `${baseSeed}-causes`,
+          queryState.selectedStage,
+          queryState.selectedCompareAreaKey,
+        );
+      }
+    },
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
@@ -961,6 +996,7 @@ export function RegionalCausePage({
     queryKey: [
       'regional-cause',
       'area-comparison',
+      region.id,
       queryState.kpiKey,
       queryState.sigungu,
       queryState.period,
@@ -968,13 +1004,26 @@ export function RegionalCausePage({
       queryState.selectedCauseKey ?? 'all',
       queryState.selectedCompareAreaKey ?? 'all',
     ],
-    queryFn: async () =>
-      buildAreaComparison(
-        `${baseSeed}-area-${queryState.selectedCauseKey ?? 'all'}`,
-        districtOptions,
-        queryState.selectedCauseKey,
-        queryState.selectedStage,
-      ),
+    queryFn: async () => {
+      try {
+        return await fetchRegionalCauseAreaComparison({
+          regionId: region.id,
+          kpiKey: queryState.kpiKey,
+          sigungu: queryState.sigungu,
+          period: queryState.period,
+          selectedStage: queryState.selectedStage,
+          selectedCauseKey: queryState.selectedCauseKey,
+          districtOptions,
+        });
+      } catch {
+        return buildAreaComparison(
+          `${baseSeed}-area-${queryState.selectedCauseKey ?? 'all'}`,
+          districtOptions,
+          queryState.selectedCauseKey,
+          queryState.selectedStage,
+        );
+      }
+    },
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
@@ -983,6 +1032,7 @@ export function RegionalCausePage({
     queryKey: [
       'regional-cause',
       'trend',
+      region.id,
       queryState.kpiKey,
       queryState.sigungu,
       queryState.period,
@@ -991,15 +1041,29 @@ export function RegionalCausePage({
       queryState.selectedCompareAreaKey ?? 'all',
       queryState.trendMetric,
     ],
-    queryFn: async () =>
-      buildTrendResponse(
-        `${baseSeed}-trend`,
-        queryState.period,
-        queryState.selectedCauseKey,
-        queryState.selectedStage,
-        queryState.selectedCompareAreaKey,
-        queryState.trendMetric,
-      ),
+    queryFn: async () => {
+      try {
+        return await fetchRegionalCauseTrend({
+          regionId: region.id,
+          kpiKey: queryState.kpiKey,
+          sigungu: queryState.sigungu,
+          period: queryState.period,
+          selectedStage: queryState.selectedStage,
+          selectedCauseKey: queryState.selectedCauseKey,
+          selectedArea: queryState.selectedCompareAreaKey,
+          trendMetric: queryState.trendMetric,
+        });
+      } catch {
+        return buildTrendResponse(
+          `${baseSeed}-trend`,
+          queryState.period,
+          queryState.selectedCauseKey,
+          queryState.selectedStage,
+          queryState.selectedCompareAreaKey,
+          queryState.trendMetric,
+        );
+      }
+    },
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
@@ -1118,7 +1182,17 @@ export function RegionalCausePage({
   }, [trendMetric, trendPoints]);
 
   const createInterventionMutation = useMutation({
-    mutationFn: postRegionalIntervention,
+    mutationFn: async (payload: {
+      from: 'bottleneck';
+      queryState: Record<string, unknown>;
+      beforeSnapshot: InterventionBeforeSnapshot;
+    }) => {
+      try {
+        return await createRegionalCauseIntervention(payload);
+      } catch {
+        return postRegionalIntervention(payload);
+      }
+    },
   });
 
   const createIntervention = useCallback(

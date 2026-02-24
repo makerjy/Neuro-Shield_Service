@@ -106,7 +106,7 @@ function buildNoisePersons(): Person[] {
   return [
     {
       personId: "PERSON-1001",
-      name: "박○○",
+      name: "김종팔",
       sex: "M",
       birthYear: 1956,
       phoneMasked: "010-****-2188",
@@ -114,7 +114,7 @@ function buildNoisePersons(): Person[] {
     },
     {
       personId: "PERSON-1002",
-      name: "이○○",
+      name: "박옥자",
       sex: "F",
       birthYear: 1953,
       phoneMasked: "010-****-7632",
@@ -122,7 +122,7 @@ function buildNoisePersons(): Person[] {
     },
     {
       personId: "PERSON-1003",
-      name: "정○○",
+      name: "이덕기",
       sex: "F",
       birthYear: 1960,
       phoneMasked: "010-****-4408",
@@ -130,7 +130,7 @@ function buildNoisePersons(): Person[] {
     },
     {
       personId: "PERSON-1004",
-      name: "최○○",
+      name: "최종덕",
       sex: "M",
       birthYear: 1951,
       phoneMasked: "010-****-8955",
@@ -138,7 +138,7 @@ function buildNoisePersons(): Person[] {
     },
     {
       personId: "PERSON-1005",
-      name: "한○○",
+      name: "한복녀",
       sex: "F",
       birthYear: 1958,
       phoneMasked: "010-****-1204",
@@ -146,7 +146,7 @@ function buildNoisePersons(): Person[] {
     },
     {
       personId: "PERSON-1006",
-      name: "윤○○",
+      name: "윤만복",
       sex: "M",
       birthYear: 1955,
       phoneMasked: "010-****-9024",
@@ -154,7 +154,7 @@ function buildNoisePersons(): Person[] {
     },
     {
       personId: "PERSON-1007",
-      name: "문○○",
+      name: "문갑순",
       sex: "F",
       birthYear: 1952,
       phoneMasked: "010-****-3021",
@@ -162,7 +162,7 @@ function buildNoisePersons(): Person[] {
     },
     {
       personId: "PERSON-1008",
-      name: "강○○",
+      name: "강칠성",
       sex: "M",
       birthYear: 1954,
       phoneMasked: "010-****-5550",
@@ -174,7 +174,7 @@ function buildNoisePersons(): Person[] {
 export function createDemoSeedData(baseDate = new Date()): DemoSeedData {
   const heroPerson: Person = {
     personId: "PERSON-HERO-001",
-    name: "이재용",
+    name: "김복남",
     sex: "M",
     birthYear: 1959,
     phoneMasked: "010-****-1234",

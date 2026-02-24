@@ -21,6 +21,12 @@ from server_fastapi.app.services.local_case_service import (
     list_local_cases,
     update_work_item,
 )
+from server_fastapi.app.services.local_view_service import (
+    build_case_entity,
+    build_case_events,
+    build_dashboard_stats,
+    list_dashboard_case_records,
+)
 
 router = APIRouter(tags=['local-center'])
 
@@ -48,6 +54,58 @@ def get_local_cases(
         page=page,
         size=size,
     )
+
+
+@router.get('/api/local-center/dashboard/stats')
+def get_local_dashboard_stats(
+    stage: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    records = list_dashboard_case_records(db, stage=stage, status=status, keyword=keyword)
+    return {
+        'stats': build_dashboard_stats(db, records),
+        'totalCases': len(records),
+        'fetchedAt': datetime.utcnow().isoformat() + 'Z',
+        'source': 'remote',
+    }
+
+
+@router.get('/api/local-center/dashboard/cases')
+def get_local_dashboard_cases(
+    stage: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    keyword: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    records = list_dashboard_case_records(db, stage=stage, status=status, keyword=keyword)
+    return {
+        'items': records,
+        'total': len(records),
+        'fetchedAt': datetime.utcnow().isoformat() + 'Z',
+        'source': 'remote',
+    }
+
+
+@router.get('/api/local-center/cases/{case_id}')
+def get_local_case_detail(case_id: str, db: Session = Depends(get_db)) -> dict:
+    return {
+        'item': build_case_entity(db, case_id),
+        'fetchedAt': datetime.utcnow().isoformat() + 'Z',
+        'source': 'remote',
+    }
+
+
+@router.get('/api/local-center/cases/{case_id}/events')
+def get_local_case_events(case_id: str, db: Session = Depends(get_db)) -> dict:
+    items = build_case_events(db, case_id)
+    return {
+        'items': items,
+        'total': len(items),
+        'fetchedAt': datetime.utcnow().isoformat() + 'Z',
+        'source': 'remote',
+    }
 
 
 @router.get('/api/local-center/cases/{case_id}/summary')

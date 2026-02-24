@@ -74,8 +74,8 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
   const ssotCase = useCaseEntity(caseId);
   const apiCaseEntity = caseResponse?.item ?? null;
   const profile = useMemo(() => {
-    if (apiCaseEntity) return toCaseDashboardRecord(apiCaseEntity);
     if (ssotCase) return toCaseDashboardRecord(ssotCase);
+    if (apiCaseEntity) return toCaseDashboardRecord(apiCaseEntity);
     return getCaseRecordById(caseId);
   }, [apiCaseEntity, caseId, ssotCase]);
   const [stage1HeaderSummary, setStage1HeaderSummary] = useState<Stage1HeaderSummary | null>(null);
@@ -112,7 +112,7 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
                 </span>
               </div>
               <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
-                <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "김성실 매니저"}</span>
+                <span className="font-bold text-gray-700">담당자: {profile?.manager ?? "박종덕 매니저"}</span>
                 <span className="w-px h-2 bg-gray-200"></span>
                 <span>
                   현재 상태: <span className="font-bold text-blue-700">{profile?.status ?? (apiCaseEntity?.status ?? ssotCase?.status ?? "진행중")}</span>
@@ -221,8 +221,8 @@ export function CaseDetail({ caseId, stage, onBack }: CaseDetailProps) {
               </div>
               <div className="space-y-3">
                 {[
-                  { time: "2026-02-11 11:20", user: "김성실", action: "관리 경로 변경", reason: "재평가 트리거 충족 (점수 하락 15% 초과)", logId: "LOG-9921" },
-                  { time: "2026-02-10 14:45", user: "박민지", action: "데이터 품질 승인", reason: "누락된 정보 보완 완료 확인", logId: "LOG-8842" },
+                  { time: "2026-02-11 11:20", user: "박종덕", action: "관리 경로 변경", reason: "재평가 트리거 충족 (점수 하락 15% 초과)", logId: "LOG-9921" },
+                  { time: "2026-02-10 14:45", user: "최덕기", action: "데이터 품질 승인", reason: "누락된 정보 보완 완료 확인", logId: "LOG-8842" },
                   { time: "2026-02-09 10:00", user: "System", action: "Stage 승급", reason: "2차 평가 데이터 입력 완료에 따른 자동 전환", logId: "LOG-7710" },
                 ].map((log, idx) => (
                   <div key={idx} className="flex gap-4 text-xs group">
@@ -465,7 +465,7 @@ function Stage2Detail() {
   const handleReveal = () => {
     setShowSensitive(true);
     toast.info("민감 정보 열람이 감사 로그에 실시간 기록되었습니다.", {
-      description: "열람자: 김성실, 열람 일시: 2026-02-11 11:50",
+      description: "열람자: 박종덕, 열람 일시: 2026-02-11 11:50",
     });
   };
 

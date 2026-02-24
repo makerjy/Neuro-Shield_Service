@@ -111,6 +111,41 @@ export function reconcileStage3Case(
     }
   }
 
+  const diagnosisConfirmed = Boolean(nextCase.profile?.originStage2Result);
+  if (diagnosisConfirmed && nextCase.loop.status !== "ON_HOLD" && nextCase.loop.status !== "EXCLUDED") {
+    const inferredAt = nextCase.model.result?.computedAt ?? nextCase.updatedAt ?? nowIso();
+    if (!nextCase.loop.completed.step1At) {
+      pushPatch(patches, inconsistencyFlags, {
+        code: "P1",
+        path: "loop.completed.step1At",
+        message: "진단확정(Stage2 결과 기반) 케이스라 STEP1을 자동 정렬했습니다.",
+        from: undefined,
+        to: inferredAt,
+      });
+      nextCase.loop.completed.step1At = inferredAt;
+    }
+    if (!nextCase.loop.completed.step2At) {
+      pushPatch(patches, inconsistencyFlags, {
+        code: "P1",
+        path: "loop.completed.step2At",
+        message: "진단확정(Stage2 결과 기반) 케이스라 STEP2를 자동 정렬했습니다.",
+        from: undefined,
+        to: inferredAt,
+      });
+      nextCase.loop.completed.step2At = inferredAt;
+    }
+    if (nextCase.model.status === "READY" && nextCase.model.result && !nextCase.loop.completed.step3At) {
+      pushPatch(patches, inconsistencyFlags, {
+        code: "P1",
+        path: "loop.completed.step3At",
+        message: "모델 READY 상태의 진단확정 케이스라 STEP3를 자동 정렬했습니다.",
+        from: undefined,
+        to: inferredAt,
+      });
+      nextCase.loop.completed.step3At = inferredAt;
+    }
+  }
+
   if (nextCase.loop.status === "ON_HOLD" || nextCase.loop.status === "EXCLUDED") {
     nextCase.loop.blockers = [
       nextCase.loop.status === "ON_HOLD" ? "보류 상태로 운영 루프가 잠겨 있습니다." : "제외 상태로 운영 루프가 잠겨 있습니다.",

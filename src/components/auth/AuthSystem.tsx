@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Shield, Building2, User, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Shield, Building2, User, Mail, Lock, Eye, EyeOff, AlertCircle, Activity } from 'lucide-react';
 import { NeuroShieldLogoLarge } from '../ui/NeuroShieldLogo';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import { Button } from '../ui/button';
@@ -30,6 +30,15 @@ function resolveCitizenEntryUrl(): string {
   const token = (envAny.VITE_CITIZEN_DEMO_TOKEN || DEMO_CITIZEN_TOKEN_DEFAULT).trim();
   const basePath = normalizeBasePath(envAny.VITE_BASE_PATH || '/neuro-shield/');
   return `${window.location.origin}${basePath}p/sms?t=${encodeURIComponent(token)}`;
+}
+
+function resolveThreeStepModelEntryUrl(): string {
+  const envAny = import.meta.env as Record<string, string | undefined>;
+  const explicitUrl = (envAny.VITE_THREE_STEP_MODEL_ENTRY_URL || '').trim();
+  if (explicitUrl) return explicitUrl;
+
+  const basePath = normalizeBasePath(envAny.VITE_BASE_PATH || '/neuro-shield/');
+  return `${window.location.origin}${basePath}3-step-model/`;
 }
 
 interface DemoAccount {
@@ -125,6 +134,11 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
     setMode('login');
   };
 
+  const handleThreeStepModelSelect = () => {
+    const entryUrl = resolveThreeStepModelEntryUrl();
+    window.location.href = entryUrl;
+  };
+
   const handleLogin = () => {
     if (!email || !password) {
       toast.error('이메일과 비밀번호를 입력해주세요');
@@ -215,7 +229,7 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-100 via-gray-200 to-gray-300 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-100 via-slate-50 to-blue-100/60 flex items-center justify-center p-4">
       <div className="w-full max-w-6xl">
         {/* Header */}
         <div className="text-center mb-8">
@@ -225,15 +239,15 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
         {/* Role Selection */}
         {mode === 'select' && (
           <div className="space-y-6">
-            <Card className="border-2">
+            <Card className="border border-slate-300 bg-white shadow-[0_14px_34px_rgba(15,23,42,0.08)]">
               <CardHeader>
-                <CardTitle className="text-center">서비스/기관 선택</CardTitle>
-                <CardDescription className="text-center">
+                <CardTitle className="text-center text-slate-900">서비스/기관 선택</CardTitle>
+                <CardDescription className="text-center text-slate-600">
                   시민 서비스는 로그인 없이 바로 이용할 수 있습니다
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                   {roles.map((role) => {
                     const Icon = role.icon;
                     return (
@@ -250,6 +264,17 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
                       </button>
                     );
                   })}
+                  <button
+                    key="three_step_model"
+                    onClick={handleThreeStepModelSelect}
+                    className="p-6 border-2 border-gray-300 hover:border-primary rounded transition-all hover:shadow-lg group"
+                  >
+                    <div className="bg-indigo-600 w-16 h-16 rounded flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
+                      <Activity className="h-8 w-8 text-white" />
+                    </div>
+                    <h3 className="font-semibold text-gray-900 mb-1">3-Step 모델</h3>
+                    <p className="text-sm text-gray-600">3단계 서비스 화면</p>
+                  </button>
                 </div>
               </CardContent>
             </Card>
@@ -282,39 +307,39 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
 
         {/* Login Form */}
         {mode === 'login' && selectedRole && (
-          <Card className="max-w-md mx-auto border-2">
+          <Card className="max-w-md mx-auto border border-slate-300 bg-white shadow-[0_16px_38px_rgba(15,23,42,0.1)]">
             <CardHeader>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleBack}
-                className="mb-2 -ml-2"
+                className="mb-2 -ml-2 border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               >
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 뒤로
               </Button>
-              <CardTitle>
+              <CardTitle className="text-slate-900">
                 {roles.find((r) => r.id === selectedRole)?.title} 로그인
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-slate-600">
                 계정 정보를 입력하여 로그인하세요
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <Label htmlFor="email">이메일</Label>
+                <Label htmlFor="email" className="text-slate-800">이메일</Label>
                 <Input
                   id="email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="example@domain.com"
-                  className="mt-2"
+                  className="mt-2 border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:ring-blue-100"
                 />
               </div>
 
               <div>
-                <Label htmlFor="password">비밀번호</Label>
+                <Label htmlFor="password" className="text-slate-800">비밀번호</Label>
                 <div className="relative mt-2">
                   <Input
                     id="password"
@@ -322,6 +347,7 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
+                    className="border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:ring-blue-100"
                   />
                   <button
                     type="button"
@@ -344,23 +370,23 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
                 </label>
               </div>
 
-              <Button className="w-full" onClick={handleLogin}>
+              <Button className="w-full bg-[#163b6f] text-white hover:bg-[#0f2b4a] shadow-sm" onClick={handleLogin}>
                 로그인
               </Button>
 
               <div className="text-center">
                 <button
                   onClick={() => setMode('register')}
-                  className="text-sm text-primary hover:underline"
+                  className="text-sm text-blue-700 hover:text-blue-800 hover:underline"
                 >
                   계정이 없으신가요? 회원가입
                 </button>
               </div>
 
               {/* Quick Demo Login */}
-              <Alert>
+              <Alert className="border border-slate-300 bg-slate-50">
                 <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
+                <AlertDescription className="text-slate-700">
                   <p className="text-sm font-medium mb-2">빠른 로그인:</p>
                   <div className="space-y-1">
                     {demoAccounts
@@ -383,21 +409,21 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
 
         {/* Register Form */}
         {mode === 'register' && selectedRole && (
-          <Card className="max-w-md mx-auto border-2">
+          <Card className="max-w-md mx-auto border border-slate-300 bg-white shadow-[0_16px_38px_rgba(15,23,42,0.1)]">
             <CardHeader>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleBack}
-                className="mb-2 -ml-2"
+                className="mb-2 -ml-2 border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               >
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 뒤로
               </Button>
-              <CardTitle>
+              <CardTitle className="text-slate-900">
                 {roles.find((r) => r.id === selectedRole)?.title} 회원가입
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-slate-600">
                 {step === 1 ? '계정 정보를 입력하세요' : '추가 정보를 입력하세요'}
               </CardDescription>
             </CardHeader>
@@ -405,19 +431,19 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
               {step === 1 ? (
                 <>
                   <div>
-                    <Label htmlFor="reg-email">이메일 *</Label>
+                    <Label htmlFor="reg-email" className="text-slate-800">이메일 *</Label>
                     <Input
                       id="reg-email"
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="example@domain.com"
-                      className="mt-2"
+                      className="mt-2 border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:ring-blue-100"
                     />
                   </div>
 
                   <div>
-                    <Label htmlFor="reg-password">비밀번호 *</Label>
+                    <Label htmlFor="reg-password" className="text-slate-800">비밀번호 *</Label>
                     <div className="relative mt-2">
                       <Input
                         id="reg-password"
@@ -425,6 +451,7 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="8자 이상"
+                        className="border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:ring-blue-100"
                       />
                       <button
                         type="button"
@@ -439,32 +466,32 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
               ) : (
                 <>
                   <div>
-                    <Label htmlFor="name">이름 *</Label>
+                    <Label htmlFor="name" className="text-slate-800">이름 *</Label>
                     <Input
                       id="name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="홍길동"
-                      className="mt-2"
+                      className="mt-2 border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:ring-blue-100"
                     />
                   </div>
 
                   {selectedRole !== 'citizen' && (
                     <div>
-                      <Label htmlFor="organization">소속 기관 *</Label>
+                      <Label htmlFor="organization" className="text-slate-800">소속 기관 *</Label>
                       <Input
                         id="organization"
                         value={organization}
                         onChange={(e) => setOrganization(e.target.value)}
                         placeholder="예: 서울시 강남구 치매안심센터"
-                        className="mt-2"
+                        className="mt-2 border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:border-blue-400 focus-visible:ring-blue-100"
                       />
                     </div>
                   )}
                 </>
               )}
 
-              <Button className="w-full" onClick={handleRegister}>
+              <Button className="w-full bg-[#163b6f] text-white hover:bg-[#0f2b4a] shadow-sm" onClick={handleRegister}>
                 {step === 1 ? '다음' : '회원가입 완료'}
               </Button>
 
@@ -474,7 +501,7 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
                     setMode('login');
                     setStep(1);
                   }}
-                  className="text-sm text-primary hover:underline"
+                  className="text-sm text-blue-700 hover:text-blue-800 hover:underline"
                 >
                   이미 계정이 있으신가요? 로그인
                 </button>
@@ -484,7 +511,7 @@ export function AuthSystem({ onLogin }: AuthSystemProps) {
         )}
 
         {/* Footer */}
-        <div className="text-center mt-8 text-sm text-gray-600">
+        <div className="text-center mt-8 text-sm text-slate-600">
           <p>© 2026 Neuro-Shield. All rights reserved.</p>
           <p className="mt-1">중앙정신건강복지센터</p>
         </div>

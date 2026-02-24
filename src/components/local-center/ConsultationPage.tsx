@@ -189,7 +189,7 @@ export function ConsultationPage({
       id: 'CONS-001',
       date: '2026-02-01',
       time: '10:30',
-      counselor: '이상담',
+      counselor: '김순자',
       duration: 15,
       result: 'completed',
       summary: '초기 상담 완료. 센터 방문 예약 확정.',

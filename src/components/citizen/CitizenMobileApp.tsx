@@ -31,6 +31,7 @@ import { Alert, AlertDescription } from '../ui/alert';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../ui/dialog';
 import { toast } from 'sonner@2.0.3';
 import { ChatbotDialog } from './ChatbotDialog';
+import { normalizePhoneForSync, resolveCaseIdBySmsToken, upsertSmsReservationSyncEvent } from '../../lib/smsReservationSync';
 
 type PageMode = 'home' | 'booking' | 'consent' | 'center-select' | 'datetime' | 'confirm' | 'complete' | 'faq' | 'contact';
 
@@ -250,6 +251,14 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
       const text = await response.text();
       throw new Error(`demo booking failed (${response.status}): ${text}`);
     }
+    let scheduleId: string | undefined;
+    try {
+      const body = await response.json() as { scheduleId?: string };
+      scheduleId = body.scheduleId;
+    } catch {
+      scheduleId = undefined;
+    }
+    return { appointmentAt, organization, demoCaseId, reservationId: scheduleId };
   };
 
   const submitLegacyBooking = async () => {
@@ -270,6 +279,44 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
       const text = await response.text();
       throw new Error(`legacy booking failed (${response.status}): ${text}`);
     }
+  };
+
+  const writeSmsReservationSync = ({
+    status = 'RESERVED',
+    appointmentAt,
+    organization,
+    caseId,
+    reservationId,
+    note,
+  }: {
+    status?: 'RESERVED' | 'CANCELLED' | 'CHANGED' | 'NO_SHOW';
+    appointmentAt: string;
+    organization: string;
+    caseId?: string;
+    reservationId?: string;
+    note?: string;
+  }) => {
+    const now = new Date().toISOString();
+    const resolvedCaseId = caseId || resolveCaseIdBySmsToken(inviteToken);
+    upsertSmsReservationSyncEvent({
+      caseId: resolvedCaseId,
+      source: 'SMS',
+      phone: normalizePhoneForSync(phone),
+      reservationId,
+      status,
+      programType: 'STAGE1_SCREENING',
+      programName: `${organization} 예약`,
+      scheduledAt: appointmentAt,
+      locationName: organization,
+      options: [
+        { key: 'channel', label: '접수 채널', value: '문자 링크' },
+        { key: 'actor', label: '예약 주체', value: '시민 직접 수행' },
+      ],
+      createdAt: now,
+      createdBy: 'CITIZEN',
+      lastSmsSentAt: now,
+      note,
+    });
   };
 
   const handleConfirmBooking = async () => {
@@ -356,6 +403,26 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
         const text = await response.text();
         throw new Error(`booking failed (${response.status}): ${text}`);
       }
+      let bookingResult: {
+        appointmentId?: string;
+        status?: string;
+        appointmentAt?: string;
+      } | null = null;
+      try {
+        bookingResult = (await response.json()) as {
+          appointmentId?: string;
+          status?: string;
+          appointmentAt?: string;
+        };
+      } catch {
+        bookingResult = null;
+      }
+      writeSmsReservationSync({
+        status: bookingResult?.status === 'CANCELED' ? 'CANCELLED' : bookingResult?.status === 'RESCHEDULED' ? 'CHANGED' : 'RESERVED',
+        appointmentAt: bookingResult?.appointmentAt ?? appointmentAt,
+        organization,
+        reservationId: bookingResult?.appointmentId,
+      });
 
       const payload = {
         sessionId,
@@ -370,7 +437,15 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
       console.error(error);
       let recovered = false;
       try {
-        await submitDemoSchedule();
+        const demoResult = await submitDemoSchedule();
+        writeSmsReservationSync({
+          status: 'RESERVED',
+          appointmentAt: demoResult.appointmentAt,
+          organization: demoResult.organization,
+          caseId: demoResult.demoCaseId,
+          reservationId: demoResult.reservationId,
+          note: '기본 예약 연동 지연으로 데모 일정에 반영됨',
+        });
         setMode('complete');
         toast.success('기본 예약 연동이 지연되어 데모 일정으로 저장했습니다.');
         recovered = true;
@@ -382,7 +457,15 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
         try {
           await submitLegacyBooking();
           try {
-            await submitDemoSchedule();
+            const demoResult = await submitDemoSchedule();
+            writeSmsReservationSync({
+              status: 'RESERVED',
+              appointmentAt: demoResult.appointmentAt,
+              organization: demoResult.organization,
+              caseId: demoResult.demoCaseId,
+              reservationId: demoResult.reservationId,
+              note: '레거시 경로 예약 후 데모 일정 동기화',
+            });
           } catch (linkageError) {
             console.error(linkageError);
           }
@@ -396,6 +479,8 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
 
       if (!recovered) {
         if (isDemoBypass || backendDemoMode) {
+          const appointmentAt = new Date(`${selectedDate}T${selectedTime}:00`).toISOString();
+          const organization = centers.find((center) => center.id === selectedCenter)?.name || '강남구 치매안심센터';
           const offlineKey = `citizen-offline-booking:${Date.now()}`;
           window.localStorage.setItem(
             offlineKey,
@@ -410,6 +495,13 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
               additionalNotes: additionalNotes || null,
             }),
           );
+          writeSmsReservationSync({
+            status: 'RESERVED',
+            appointmentAt,
+            organization,
+            caseId: 'CASE-DEMO-IJY-001',
+            note: '오프라인 데모 예약 기록',
+          });
           setMode('complete');
           toast.success('데모 오프라인 모드로 예약을 기록했습니다.');
         } else {

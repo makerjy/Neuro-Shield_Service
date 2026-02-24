@@ -10,7 +10,7 @@ type DemoDB = {
   initializedAt: string;
 };
 
-const STORAGE_KEY = "neuro-shield:demo-db:v5";
+const STORAGE_KEY = "neuro-shield:demo-db:v6";
 
 const listeners = new Set<() => void>();
 let version = 0;

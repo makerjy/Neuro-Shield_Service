@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
-import { ScrollArea } from '../ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 
 interface Message {
@@ -152,8 +151,8 @@ export function ChatbotDialog({ open, onOpenChange }: ChatbotDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl h-[600px] flex flex-col p-0">
-        <DialogHeader className="p-6 pb-4 border-b">
+      <DialogContent className="max-w-2xl h-[600px] max-h-[90dvh] !grid grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b p-6 pb-4">
           <DialogTitle className="flex items-center gap-2">
             <div className="bg-blue-100 p-2 rounded-full">
               <Bot className="h-5 w-5 text-blue-600" />
@@ -162,8 +161,8 @@ export function ChatbotDialog({ open, onOpenChange }: ChatbotDialogProps) {
           </DialogTitle>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 p-6" ref={scrollRef}>
-          <div className="space-y-4">
+        <div ref={scrollRef} className="min-h-0 overflow-y-auto overscroll-contain p-6">
+          <div className="space-y-4 pb-2">
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -208,14 +207,14 @@ export function ChatbotDialog({ open, onOpenChange }: ChatbotDialogProps) {
               </div>
             </div>
           )}
-        </ScrollArea>
+        </div>
 
-        <div className="p-4 border-t">
+        <div className="border-t p-4">
           <div className="flex gap-2">
             <Input
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
               placeholder="질문을 입력하세요..."
               className="flex-1"
             />

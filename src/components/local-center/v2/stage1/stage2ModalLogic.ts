@@ -63,21 +63,24 @@ export function buildStage2ValidationErrors(
     overrideReason?: string;
     requireNextStep?: boolean;
     hasNextStep?: boolean;
+    skipTestChecks?: boolean;
   },
 ): Stage2FieldErrors {
   const errors: Stage2FieldErrors = {};
-  const missing = computeStage2MissingFields(tests, route, required);
-  for (const key of missing) {
-    if (key === "mmse") errors.mmse = "MMSE 점수를 입력하세요.";
-    if (key === "cdr") errors.cdr = "CDR 또는 GDS 점수를 입력하세요.";
-    if (key === "neuro") errors.neuro = "신경인지검사 유형을 선택하세요.";
-    if (key === "specialist") errors.specialist = "전문의 소견 완료 여부를 확인하세요.";
-  }
-  if (typeof tests.mmse === "number" && Number.isFinite(tests.mmse) && (tests.mmse < 0 || tests.mmse > 30)) {
-    errors.mmse = "MMSE 점수는 0~30 범위로 입력하세요.";
-  }
-  if (typeof tests.cdr === "number" && Number.isFinite(tests.cdr) && (tests.cdr < 0 || tests.cdr > 7)) {
-    errors.cdr = "CDR/GDS 점수는 0~7 범위로 입력하세요.";
+  if (!options?.skipTestChecks) {
+    const missing = computeStage2MissingFields(tests, route, required);
+    for (const key of missing) {
+      if (key === "mmse") errors.mmse = "MMSE 점수를 입력하세요.";
+      if (key === "cdr") errors.cdr = "CDR 또는 GDS 점수를 입력하세요.";
+      if (key === "neuro") errors.neuro = "신경인지검사 유형을 선택하세요.";
+      if (key === "specialist") errors.specialist = "전문의 소견 완료 여부를 확인하세요.";
+    }
+    if (typeof tests.mmse === "number" && Number.isFinite(tests.mmse) && (tests.mmse < 0 || tests.mmse > 30)) {
+      errors.mmse = "MMSE 점수는 0~30 범위로 입력하세요.";
+    }
+    if (typeof tests.cdr === "number" && Number.isFinite(tests.cdr) && (tests.cdr < 0 || tests.cdr > 7)) {
+      errors.cdr = "CDR/GDS 점수는 0~7 범위로 입력하세요.";
+    }
   }
 
   if (options?.strategyMemo != null && options.strategyMemo.trim().length < 20) {

@@ -24,10 +24,10 @@ function formatEta(seconds?: number) {
 }
 
 function statusTone(status: ModelJob["status"]) {
-  if (status === "SUCCEEDED") return "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (status === "FAILED") return "bg-red-50 text-red-700 border-red-200";
-  if (status === "RUNNING") return "bg-blue-50 text-blue-700 border-blue-200";
-  return "bg-amber-50 text-amber-700 border-amber-200";
+  if (status === "SUCCEEDED") return "border-success/30 bg-success/10 text-success";
+  if (status === "FAILED") return "border-destructive/30 bg-destructive/10 text-destructive";
+  if (status === "RUNNING") return "border-primary/30 bg-accent text-primary";
+  return "border-warning/30 bg-warning/10 text-warning";
 }
 
 function statusLabel(status: ModelJob["status"]) {
@@ -51,16 +51,16 @@ export function ModelJobProgressCard({
   const progress = job?.progress ?? 0;
 
   return (
-    <div className={cn("rounded-xl border border-slate-200 bg-white p-4 shadow-sm", className)}>
+    <div className={cn("rounded-xl border border-border bg-card p-4 shadow-sm", className)}>
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold text-slate-500">{title}</p>
+          <p className="text-xs font-semibold text-muted-foreground">{title}</p>
           <div className="mt-1 flex items-center gap-2">
             <span className={cn("rounded-md border px-2 py-0.5 text-xs font-semibold", statusTone(status))}>
               {statusLabel(status)}
             </span>
             {status === "RUNNING" || status === "QUEUED" ? (
-              <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                 <Timer size={13} />
                 ETA {formatEta(job?.etaSeconds)}
               </span>
@@ -68,33 +68,33 @@ export function ModelJobProgressCard({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {status === "SUCCEEDED" ? <CheckCircle2 size={16} className="text-emerald-600" /> : null}
-          {status === "FAILED" ? <AlertCircle size={16} className="text-red-600" /> : null}
-          {running ? <Loader2 size={16} className="animate-spin text-blue-600" /> : null}
+          {status === "SUCCEEDED" ? <CheckCircle2 size={16} className="text-success" /> : null}
+          {status === "FAILED" ? <AlertCircle size={16} className="text-destructive" /> : null}
+          {running ? <Loader2 size={16} className="animate-spin text-primary" /> : null}
         </div>
       </div>
 
       <div className="mt-3">
-        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
           <div
             className={cn(
               "h-full rounded-full transition-[width] duration-200 ease-out",
-              status === "FAILED" ? "bg-red-500" : status === "SUCCEEDED" ? "bg-emerald-500" : "bg-blue-500",
+              status === "FAILED" ? "bg-destructive" : status === "SUCCEEDED" ? "bg-success" : "bg-primary",
             )}
             style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
           />
         </div>
-        <div className="mt-1 flex justify-between text-[11px] text-slate-500">
+        <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
           <span>{running ? "모델 산출 중" : status === "SUCCEEDED" ? "모델 산출 완료" : "모델 상태 확인 필요"}</span>
           <span>{Math.round(progress)}%</span>
         </div>
       </div>
 
       {import.meta.env.DEV && showDevTools && running && onInstantComplete ? (
-        <div className="mt-3 border-t border-slate-100 pt-3">
+        <div className="mt-3 border-t border-border pt-3">
           <button
             type="button"
-            className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            className="rounded-md border border-border px-2 py-1 text-xs font-semibold text-muted-foreground hover:bg-muted"
             onClick={() => void onInstantComplete()}
           >
             즉시 완료(Dev)

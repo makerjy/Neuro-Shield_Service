@@ -67,9 +67,9 @@ export function Stage2ClassificationViz({ probs, predictedLabel, mciSeverity, mc
   const normalized = useMemo(() => normalizeProbabilities(probs), [probs]);
 
   const segments = [
-    { key: "NORMAL", label: "NORMAL", value: normalized.NORMAL, tone: "bg-emerald-500", textTone: "text-emerald-700" },
-    { key: "MCI", label: "MCI", value: normalized.MCI, tone: "bg-blue-500", textTone: "text-blue-700" },
-    { key: "AD", label: "AD", value: normalized.AD, tone: "bg-rose-500", textTone: "text-rose-700" },
+    { key: "NORMAL", label: "NORMAL", value: normalized.NORMAL, fill: "var(--risk-low)", textColor: "var(--risk-low)" },
+    { key: "MCI", label: "MCI", value: normalized.MCI, fill: "var(--chart-2)", textColor: "var(--chart-2)" },
+    { key: "AD", label: "AD", value: normalized.AD, fill: "var(--risk-high)", textColor: "var(--risk-high)" },
   ] as const;
 
   const maxSegment = segments.reduce((acc, cur) => (cur.value > acc.value ? cur : acc), segments[0]);
@@ -81,11 +81,11 @@ export function Stage2ClassificationViz({ probs, predictedLabel, mciSeverity, mc
   const showMciGauge = predictedLabel === "MCI";
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-4 shadow-sm">
+    <section className="rounded-xl border border-border bg-card p-4 shadow-sm">
       <div className="flex items-center justify-between gap-2">
-        <h4 className="text-sm font-bold text-slate-900">Stage2 분류 확률 시각화</h4>
+        <h4 className="text-sm font-bold text-foreground">Stage2 분류 확률 시각화</h4>
         <span
-          className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700"
+          className="rounded-full border border-border bg-card px-2 py-0.5 text-[11px] font-semibold text-muted-foreground"
           title="검사 기반 분류 확률입니다. 운영 참고용입니다."
         >
           모델 분류 결과(운영 참고)
@@ -93,10 +93,10 @@ export function Stage2ClassificationViz({ probs, predictedLabel, mciSeverity, mc
       </div>
 
       {!normalized.hasData ? (
-        <p className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-500">분류 확률 데이터가 없습니다.</p>
+        <p className="mt-3 rounded-md border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground">분류 확률 데이터가 없습니다.</p>
       ) : (
         <>
-          <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+          <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
             <div className="flex h-10 w-full">
               {segments.map((seg) => {
                 const width = `${seg.value}%`;
@@ -108,15 +108,14 @@ export function Stage2ClassificationViz({ probs, predictedLabel, mciSeverity, mc
                     title={`${seg.label}: ${seg.value}%`}
                     className={cn(
                       "relative flex min-w-0 items-center justify-center px-1 text-[11px] font-bold text-white",
-                      seg.tone,
-                      isMax && "ring-2 ring-white/80",
-                      isPredicted && "outline outline-2 outline-slate-900/60 outline-offset-[-2px]",
+                      isMax && "ring-2 ring-card/80",
+                      isPredicted && "outline outline-2 outline-foreground/60 outline-offset-[-2px]",
                     )}
-                    style={{ width }}
+                    style={{ width, backgroundColor: seg.fill }}
                   >
                     {seg.value >= 9 ? `${seg.label} ${seg.value}%` : `${seg.value}%`}
                     {isMax ? (
-                      <span className="absolute right-1 top-1 rounded bg-white/85 px-1 py-[1px] text-[9px] font-bold text-slate-700">
+                      <span className="absolute right-1 top-1 rounded bg-card/85 px-1 py-[1px] text-[9px] font-bold text-foreground">
                         최대 확률
                       </span>
                     ) : null}
@@ -128,7 +127,11 @@ export function Stage2ClassificationViz({ probs, predictedLabel, mciSeverity, mc
 
           <div className="mt-2 flex flex-wrap gap-2">
             {segments.map((seg) => (
-              <span key={`legend-${seg.key}`} className={cn("rounded border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold", seg.textTone)}>
+              <span
+                key={`legend-${seg.key}`}
+                className="rounded border border-border bg-card px-2 py-1 text-[11px] font-semibold"
+                style={{ color: seg.textColor }}
+              >
                 {seg.label} {seg.value}%
               </span>
             ))}
@@ -137,11 +140,11 @@ export function Stage2ClassificationViz({ probs, predictedLabel, mciSeverity, mc
       )}
 
       {showMciGauge ? (
-        <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50/60 p-3">
+        <div className="mt-4 rounded-lg border border-border bg-muted p-3">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold text-blue-900">MCI 세분화 게이지 (ANN)</p>
+            <p className="text-xs font-semibold text-foreground">MCI 세분화 게이지 (ANN)</p>
             <span
-              className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-blue-700"
+              className="rounded-full border border-border bg-card px-2 py-0.5 text-[10px] font-semibold text-primary"
               title="양호: 추적 중심, 중간: 인지/신체 통합 관리, 위험: 감별검사 권고 + 개입 상향"
             >
               현재 구간: {mciLabel}
@@ -149,20 +152,23 @@ export function Stage2ClassificationViz({ probs, predictedLabel, mciSeverity, mc
           </div>
 
           <div className="mt-2">
-            <div className="relative h-3 rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-500">
+            <div
+              className="relative h-3 rounded-full"
+              style={{ background: "linear-gradient(to right, var(--risk-low), var(--risk-medium), var(--risk-high))" }}
+            >
               <span
-                className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-white bg-slate-900 shadow"
+                className="absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-card bg-foreground shadow"
                 style={{ left: `calc(${resolvedMciScore}% - 8px)` }}
                 aria-label={`MCI 점수 ${resolvedMciScore}`}
               />
             </div>
-            <div className="mt-1 flex items-center justify-between text-[10px] text-slate-500">
+            <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
               <span>0 (양호)</span>
               <span>40 (중간)</span>
               <span>70 (위험)</span>
               <span>100</span>
             </div>
-            <p className="mt-1 text-[11px] font-semibold text-slate-700">
+            <p className="mt-1 text-[11px] font-semibold text-foreground">
               점수 {resolvedMciScore} · 세분화 {mciSeverityLabel}
             </p>
           </div>

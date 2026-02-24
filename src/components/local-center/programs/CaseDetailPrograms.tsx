@@ -79,7 +79,7 @@ const TOP_ICONS: Record<TopCategory, React.ReactNode> = {
 ═══════════════════════════════════════════════════════════════ */
 export function CaseDetailPrograms({
   caseId, stage, resultLabel, mciSeverity, riskTags = [],
-  actorId = "OP-001", actorName = "이상담",
+  actorId = "OP-001", actorName = "김순자",
   readOnly = false,
 }: CaseDetailProgramsProps) {
 

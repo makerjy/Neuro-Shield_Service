@@ -6,3 +6,6 @@ instance-team6.key
 3-step_model_final/*.tsbuildinfo
 3-step_model_final/vite.config.js
 3-step_model_final/vite.config.d.ts
+
+# ML preprocessing artifacts (local only)
+3-step_model_final/stage3_final/data/preprocessing/*.pkl

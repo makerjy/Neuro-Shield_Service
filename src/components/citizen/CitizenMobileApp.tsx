@@ -535,7 +535,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
       <Card className="border-2 border-primary bg-gradient-to-br from-blue-50 to-white">
         <CardContent className="p-6">
           <div className="flex items-start gap-4">
-            <div className="bg-primary p-3 rounded">
+            <div className="bg-[#1e3a5f] p-3 rounded">
               <Building2 className="h-8 w-8 text-white" />
             </div>
             <div className="flex-1">
@@ -566,11 +566,11 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
       {/* Action Buttons */}
       <div className="space-y-3">
         <Button
-          className="w-full h-14 text-lg"
+          className="w-full h-14 text-lg !bg-[#1e3a5f] !text-white hover:!bg-[#152a45] !border-[#1e3a5f]"
           onClick={handleStartBooking}
         >
           상담 예약하기
-          <ChevronRight className="h-5 w-5 ml-2" />
+          <ChevronRight className="h-5 w-5 ml-2 text-white" />
         </Button>
 
         <Button
@@ -589,7 +589,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
           onClick={() => setMode('faq')}
           className="p-4 border-2 border-gray-300 rounded hover:border-primary transition-colors"
         >
-          <MessageSquare className="h-6 w-6 text-primary mx-auto mb-2" />
+          <MessageSquare className="h-6 w-6 text-[#1e3a5f] mx-auto mb-2" />
           <span className="text-sm font-medium text-gray-900">자주 묻는 질문</span>
         </button>
 
@@ -597,7 +597,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
           onClick={() => setMode('contact')}
           className="p-4 border-2 border-gray-300 rounded hover:border-primary transition-colors"
         >
-          <Phone className="h-6 w-6 text-primary mx-auto mb-2" />
+          <Phone className="h-6 w-6 text-[#1e3a5f] mx-auto mb-2" />
           <span className="text-sm font-medium text-gray-900">문의 및 지원</span>
         </button>
       </div>
@@ -626,7 +626,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
             />
             <div className="flex-1">
               <Label htmlFor="required" className="cursor-pointer">
-                <span className="font-bold text-primary">필수</span> 상담 및 연계 서비스 제공
+                <span className="font-bold text-[#1e3a5f]">필수</span> 상담 및 연계 서비스 제공
               </Label>
               <p className="text-sm text-gray-600 mt-2">
                 개인정보 수집 및 이용, 검사 결과 관리, 센터 연계에 동의합니다.
@@ -685,7 +685,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
             className="w-full p-4 border-2 border-gray-300 hover:border-primary rounded transition-colors text-left"
           >
             <div className="flex items-start gap-3">
-              <Building2 className="h-6 w-6 text-primary flex-shrink-0 mt-1" />
+              <Building2 className="h-6 w-6 text-[#1e3a5f] flex-shrink-0 mt-1" />
               <div>
                 <h3 className="font-semibold text-gray-900 mb-1">{center.name}</h3>
                 <p className="text-sm text-gray-600 flex items-center gap-1">
@@ -996,7 +996,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-3">
-            <Phone className="h-5 w-5 text-primary" />
+            <Phone className="h-5 w-5 text-[#1e3a5f]" />
             <div>
               <p className="text-sm text-gray-600">전화</p>
               <p className="font-medium">02-1234-5678</p>
@@ -1004,7 +1004,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
           </div>
 
           <div className="flex items-center gap-3">
-            <Mail className="h-5 w-5 text-primary" />
+            <Mail className="h-5 w-5 text-[#1e3a5f]" />
             <div>
               <p className="text-sm text-gray-600">이메일</p>
               <p className="font-medium">support@gangnam.go.kr</p>
@@ -1012,7 +1012,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
           </div>
 
           <div className="flex items-center gap-3">
-            <MapPin className="h-5 w-5 text-primary" />
+            <MapPin className="h-5 w-5 text-[#1e3a5f]" />
             <div>
               <p className="text-sm text-gray-600">주소</p>
               <p className="font-medium">서울시 강남구 봉은사로 524</p>
@@ -1069,7 +1069,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
         {/* Header */}
         <div className="mb-6 text-center">
           <div className="flex items-center justify-center mb-2">
-            <Building2 className="h-8 w-8 text-primary" />
+            <Building2 className="h-8 w-8 text-[#1e3a5f]" />
           </div>
           <h1 className="text-xl font-bold text-gray-900">치매안심센터</h1>
           <p className="text-sm text-gray-600">서울시 강남구</p>
@@ -1090,7 +1090,7 @@ export function CitizenMobileApp({ inviteToken }: CitizenMobileAppProps) {
         {/* Floating Chatbot Button */}
         <button
           onClick={() => setChatbotOpen(true)}
-          className="fixed bottom-6 right-6 bg-primary hover:bg-primary-hover text-white rounded-full p-4 shadow-lg transition-transform hover:scale-110"
+          className="fixed bottom-6 right-6 bg-[#1e3a5f] hover:bg-[#152a45] text-white rounded-full p-4 shadow-lg transition-transform hover:scale-110"
         >
           <Bot className="h-6 w-6" />
         </button>

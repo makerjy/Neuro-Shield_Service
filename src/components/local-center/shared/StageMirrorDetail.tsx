@@ -99,9 +99,8 @@ function summarizeMissingEvidence(missing?: string[]) {
 export function StageMirrorDetail({ caseId, stage, onBack, forceMode }: StageMirrorDetailProps) {
   const ssotCase = useCaseEntity(caseId);
   const profile = useMemo(() => {
-    const legacy = getCaseRecordById(caseId);
-    if (legacy) return legacy;
-    return ssotCase ? toCaseDashboardRecord(ssotCase) : undefined;
+    if (ssotCase) return toCaseDashboardRecord(ssotCase);
+    return getCaseRecordById(caseId);
   }, [caseId, ssotCase]);
   const [headerSummary, setHeaderSummary] = useState<Stage1HeaderSummary | null>(null);
   const isStage2 = stage === "Stage 2";

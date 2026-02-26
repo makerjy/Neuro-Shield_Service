@@ -2241,9 +2241,18 @@ function buildInitialStage1Detail(
     mode === "stage3" && stage3HeaderMeta ? buildStage3RecommendedActions(caseRecord, stage3HeaderMeta, stage2OpsView) : [];
   const stage3ProgramCatalog = mode === "stage3" ? buildStage3ProgramCatalog(caseRecord) : [];
   const stage3InitialPrograms = mode === "stage3" ? buildInitialProgramSelections(stage3ProgramCatalog) : [];
-  const stage3DiffPathStatus: Stage3DiffPathStatus = stage3RecommendedActions.length > 0 ? "RECOMMENDED" : "NONE";
+  const stage3EvidenceCompleted = Boolean(caseRecord?.computed?.stage3?.completed || caseRecord?.computed?.stage3?.modelAvailable);
+  const stage3DiffPathStatus: Stage3DiffPathStatus = stage3EvidenceCompleted
+    ? "COMPLETED"
+    : stage3RecommendedActions.length > 0
+      ? "RECOMMENDED"
+      : "NONE";
   const stage3InitialReevalStatus: Stage3ReevalStatus =
-    stage3HeaderMeta?.opsStatus === "REEVAL_DUE" || stage3HeaderMeta?.opsStatus === "REEVAL_PENDING" ? "PENDING" : "SCHEDULED";
+    stage3EvidenceCompleted
+      ? "COMPLETED"
+      : stage3HeaderMeta?.opsStatus === "REEVAL_DUE" || stage3HeaderMeta?.opsStatus === "REEVAL_PENDING"
+        ? "PENDING"
+        : "SCHEDULED";
   const stage3PlanProgressPct =
     mode === "stage3"
       ? stage3HeaderMeta?.planStatus === "ACTIVE"
@@ -2337,9 +2346,9 @@ function buildInitialStage1Detail(
             headerMeta: stage3HeaderMeta,
             transitionRisk: stage3TransitionRisk,
             reevalStatus: stage3InitialReevalStatus,
-            riskReviewedAt: undefined,
+            riskReviewedAt: caseRecord?.computed?.stage3?.modelAvailable ? toIsoFromLegacyDateTime(caseRecord?.updated) ?? nowIso() : undefined,
             diffPathStatus: stage3DiffPathStatus,
-            triggersReviewedAt: undefined,
+            triggersReviewedAt: stage3EvidenceCompleted ? toIsoFromLegacyDateTime(caseRecord?.updated) ?? nowIso() : undefined,
             planProgressPct: stage3PlanProgressPct,
             planUpdatedAt: stage3HeaderMeta.planStatus === "NEEDS_UPDATE" ? undefined : withHoursFromNow(-10),
             recommendedActions: stage3RecommendedActions,
@@ -4683,14 +4692,20 @@ export function Stage1OpsDetail({
     setStage3ReviewDraft({
       diffNeeded: true,
       diffDecisionSet: true,
-      diffDecisionReason: "",
+      diffDecisionReason: caseRecord?.computed?.stage3?.completed ? "검사 결과 수집/반영이 완료되어 정밀관리 단계로 진행합니다." : "",
       priority: caseRecord?.risk === "고" ? "HIGH" : caseRecord?.risk === "중" ? "MID" : "LOW",
       caregiverNeeded: Boolean(caseRecord?.profile.guardianPhone),
       sensitiveHistory: Boolean(caseRecord?.alertTags.includes("이탈 위험")),
-      resultLinkedChecked: false,
-      consentConfirmed: false,
-      strategyMemo: "",
+      resultLinkedChecked: Boolean(caseRecord?.computed?.stage3?.completed),
+      consentConfirmed: Boolean(caseRecord?.computed?.stage3?.completed),
+      strategyMemo: caseRecord?.computed?.stage3?.completed
+        ? "감별검사 경로에서 결과 수집/반영 완료. 정밀관리 제공 단계로 연계 준비."
+        : "",
     });
+    const stage3Completed = Boolean(caseRecord?.computed?.stage3?.completed || caseRecord?.computed?.stage3?.modelAvailable);
+    const stage3RiskLabel = caseRecord?.computed?.stage3?.label;
+    const resultTextByLabel = stage3RiskLabel === "HIGH" ? "양성" : stage3RiskLabel === "LOW" ? "음성" : "불확실";
+    const resultPerformedAt = stage3Completed ? toIsoFromLegacyDateTime(caseRecord?.updated) ?? withHoursFromNow(-24) : "";
     setStage3DiffDraft({
       orgName: "협력 병원",
       orgPhone: DEFAULT_CENTER_PHONE,
@@ -4703,25 +4718,25 @@ export function Stage1OpsDetail({
       testOther: false,
       bookingAt: withHoursFromNow(72),
       bookingAltAt: withHoursFromNow(96),
-      bookingConfirmed: false,
+      bookingConfirmed: stage3Completed,
       prepGuide: "신분증/복용약 목록/최근 검사기록 지참 안내",
-      note: "",
-      resultSummary: "",
-      resultLabel: "불확실",
-      riskReady: false,
-      resultPerformedAt: "",
-      biomarkerResultText: "",
-      imagingResultText: "",
+      note: stage3Completed ? "연계 기관 결과 반영 완료." : "",
+      resultSummary: stage3Completed ? "협력 병원 검사 결과 수집/입력 반영 완료." : "",
+      resultLabel: stage3Completed ? resultTextByLabel : "불확실",
+      riskReady: stage3Completed,
+      resultPerformedAt,
+      biomarkerResultText: stage3Completed ? resultTextByLabel : "",
+      imagingResultText: stage3Completed ? resultTextByLabel : "",
       abeta: "",
       tau: "",
     });
     setStage3Step2Flow({
-      consultStarted: false,
-      infoCollected: false,
-      ragGenerated: false,
-      bookingConfirmed: false,
-      messageSent: false,
-      calendarSynced: false,
+      consultStarted: stage3Completed,
+      infoCollected: stage3Completed,
+      ragGenerated: stage3Completed,
+      bookingConfirmed: stage3Completed,
+      messageSent: stage3Completed,
+      calendarSynced: stage3Completed,
     });
     setStage3Step2ActivePanel("REVIEW");
     setStage3RagAutoFill(null);

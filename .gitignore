@@ -1,4 +1,6 @@
 node_modules
+build
+instance-team6.key
 3-step_model_final/node_modules
 3-step_model_final/dist
 3-step_model_final/*.tsbuildinfo

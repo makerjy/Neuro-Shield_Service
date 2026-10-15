@@ -65,13 +65,36 @@
 
 ## 4. 팀 전체 모델링 파이프라인 (Team Modeling Pipeline)
 
-### Stage 1 — 고위험군 선별(Screening)
+아래 모델링은 **팀 전체의 성과**이며, 제 직접 기여인 **프로젝트·서비스 기획, React/Vite·FastAPI 기반 서비스 구현 및 시각화**와 구분합니다.
+
+### 단계별 사용 모델 요약
+
+| 단계 | 사용 모델 | 핵심 역할 |
+|---|---|---|
+| **Stage 1 — 1차 선별** | **XGB(XGBoost) 기반 앙상블** | 연령·생활습관·간이인지검사 정보 등을 이용한 정상군 및 고위험군 선별 |
+| **Stage 2 — 고위험군 등급화** | **서로 다른 seed로 학습한 ANN 5개 + Soft Voting Ensemble** | 예측 확률을 결합하여 MCI 저·중·고 위험군 등급화 |
+| **Stage 3 — 멀티모달 통합 예측** | **MRI CNN + 임상·유전·바이오마커 ANN + Weighted Average Ensemble** | 영상·비영상 모델의 예측 결과를 가중 평균으로 결합한 멀티모달 앙상블 |
+
+> **코호트·성능 수치의 구분:** 아래 수치는 기존 README에 기록된 팀 자료의 값을 유지했습니다. 모델 구조 이미지에 제시된 코호트·성능 수치와는 평가 대상 및 조건이 동일한지 확인되지 않았으므로 서로 대체하지 않으며, 기존 수치를 멀티모달 앙상블의 최종 성능으로 간주하지 않습니다.
+
+### Stage 1 — XGB(XGBoost) 앙상블 기반 고위험군 선별(Screening)
+
+- **모델:** XGB(XGBoost) 기반 앙상블
+- **입력:** 연령, 생활습관, 간이인지검사 등
+- **목적:** 정상군과 고위험군(경도인지장애·치매 관련 위험군) 1차 구분
 
 첫 단계는 확정적인 치매 진단이 아니라, **추가 평가나 우선 확인이 필요한 대상을 선별**하는 단계입니다.
 
 모델이 산출한 위험도를 서비스에서 활용할 수 있도록 우선 검토 신호와 후속 관리 절차로 연결했습니다.
 
-### Stage 2 — ANN 기반 위험도 분석
+### Stage 2 — ANN 5개·Soft Voting 기반 MCI 위험군 등급화
+
+- **모델:** 서로 다른 seed로 학습한 ANN(Artificial Neural Network) 5개
+- **앙상블:** 각 ANN의 예측 확률을 결합하는 Soft Voting Ensemble
+- **입력:** 성별, 혈압, BMI, MMSE, CDRSB, FAQ 등 임상·인지 변수
+- **목적:** MCI 위험군을 저위험(Low) / 중위험(Mid) / 고위험(High)으로 세분화
+
+5개의 ANN이 각각 산출한 예측 확률을 Soft Voting으로 결합한 뒤, 결합된 AD 예측 확률에 임계값을 적용하여 MCI 위험군을 등급화합니다.
 
 팀의 ANN 모델링 과정에서는 방문 시점과 피험자 단위로 데이터를 정렬하고, 결측치 처리와 특징 공학(Feature Engineering), 정규화/스케일링을 수행했습니다.
 
@@ -81,7 +104,7 @@
 2. 학습 데이터에서 적합한 MICE 기반 결측치 대치(Imputation)
 3. 특징 생성 및 스케일링
 4. 건강 정보(Health), 인지 정보(Cognitive), 파생 특징(Engineered Features) 그룹 구성
-5. Multi-input ANN 및 Soft-voting 결합 모델 학습
+5. 서로 다른 seed의 Multi-input ANN 5개 학습 및 Soft Voting 결합
 
 **팀 자료에 기록된 성능**
 
@@ -94,7 +117,17 @@
 
 MCI 위험군을 Low/Mid/High로 나눈 결과는 별도의 확정된 임상 진단 분류가 아니라 **ANN의 AD 예측 확률에 임계값을 적용한 위험도 구분**입니다.
 
-### Stage 3 — MRI 및 멀티모달 분석
+### Stage 3 — MRI CNN·ANN의 Weighted Average 기반 멀티모달 통합 예측
+
+- **MRI 영상 모델:** CNN(Convolutional Neural Network)
+- **임상·유전·바이오마커 모델:** ANN(Artificial Neural Network)
+- **앙상블:** 두 모델의 예측 결과를 가중 평균으로 결합하는 Weighted Average Ensemble
+- **입력:** MRI 이미지, 임상평가, 유전·바이오마커 정보
+- **목적:** 영상·비영상 정보를 함께 활용한 멀티모달 통합 위험도 예측
+
+MRI CNN과 임상·유전·바이오마커 ANN이 각각 예측 결과를 산출한 뒤, 두 결과를 **가중 평균(Weighted Average)**으로 결합하는 **멀티모달 앙상블(Multimodal Ensemble)** 구조입니다.
+
+#### 기존 팀 문서의 MRI 분석 기록
 
 팀 자료에서는 약 **1,127명의 피험자**, **13,590장의 2D MRI 슬라이스**를 활용한 **CN / MCI / Dementia 3-class 분류**가 기록되어 있습니다.
 
@@ -109,7 +142,7 @@ MCI 위험군을 Low/Mid/High로 나눈 결과는 별도의 확정된 임상 진
 - 이미지 크기 조정 및 잡음 제거(Denoising)
 - 데이터 증강(Augmentation)
 
-모델은 **EfficientNet 기반 전이학습(Transfer Learning)**과 Attention 구조를 활용했습니다.
+MRI 영상 모델은 **EfficientNet 기반 전이학습(Transfer Learning)**과 Attention 구조를 활용했습니다.
 
 **팀 자료에 기록된 성능**
 
@@ -127,43 +160,6 @@ MCI 위험군을 Low/Mid/High로 나눈 결과는 별도의 확정된 임상 진
 - Heatmap 기반 결과 해석
 
 > 위 수치는 **팀 프로젝트에서 보고한 결과**입니다. 제가 별도로 재현·검증한 개인 실험 성과가 아니며, 임상적 유효성이 검증된 진단 성능을 의미하지 않습니다.
-### 단계별 사용 모델 요약
-
-| 단계 | 사용 모델 | 핵심 역할 |
-|---|---|---|
-| **Stage 1 — 1차 선별** | **XGBoost(XGB) 기반 앙상블 모델** | 연령·생활습관·간이인지검사 정보를 이용한 정상군 및 고위험군 선별 |
-| **Stage 2 — 고위험군 등급화** | **ANN 5개 + Soft Voting Ensemble** | 서로 다른 Seed로 학습한 ANN의 예측 확률을 결합하여 위험군 세분화 |
-| **Stage 3 — 멀티모달 통합 예측** | **MRI CNN + 임상·유전정보 ANN + Weighted Average Ensemble** | MRI 영상과 임상·바이오마커 정보의 예측 결과를 가중 결합 |
-
-#### Stage 1 — XGBoost 기반 1차 선별
-
-- **모델:** XGBoost 기반 앙상블 모델
-- **입력:** 연령, 나이, 생활습관, 간이인지검사 등
-- **목적:** 정상군과 고위험군(경도인지장애·치매 관련 위험군) 1차 구분
-
-#### Stage 2 — ANN 기반 고위험군 등급화
-
-- **모델:** ANN(Artificial Neural Network) 5개
-- **앙상블:** Soft Voting
-- **입력:** 성별, 혈압, BMI, MMSE, CDRSB, FAQ 등 임상·인지 변수
-- **목적:** 예측 확률을 활용해 MCI 위험군을 Low / Mid / High로 세분화
-
-서로 다른 Seed로 학습한 5개의 ANN 모델이 각각 예측 확률을 출력하고,
-이를 Soft Voting으로 결합하는 구조입니다.
-
-#### Stage 3 — CNN·ANN 기반 멀티모달 통합 예측
-
-- **MRI 영상 모델:** CNN(Convolutional Neural Network)
-- **임상·유전정보 모델:** ANN(Artificial Neural Network)
-- **앙상블:** Weighted Average Ensemble
-- **입력:** 임상평가, MRI 이미지, 바이오마커 정보
-- **목적:** 영상·비영상 정보를 함께 활용한 통합 위험도 예측
-
-MRI CNN과 임상·유전정보 ANN이 각각 예측값을 산출한 뒤,
-두 결과를 가중 평균 방식으로 결합하여 최종 예측을 수행합니다.
-
-
-> 
 
 ### 확장 분석 — MCI에서 AD로의 전환(Progression Analysis)
 

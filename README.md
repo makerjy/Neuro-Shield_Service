@@ -127,6 +127,43 @@ MCI 위험군을 Low/Mid/High로 나눈 결과는 별도의 확정된 임상 진
 - Heatmap 기반 결과 해석
 
 > 위 수치는 **팀 프로젝트에서 보고한 결과**입니다. 제가 별도로 재현·검증한 개인 실험 성과가 아니며, 임상적 유효성이 검증된 진단 성능을 의미하지 않습니다.
+### 단계별 사용 모델 요약
+
+| 단계 | 사용 모델 | 핵심 역할 |
+|---|---|---|
+| **Stage 1 — 1차 선별** | **XGBoost(XGB) 기반 앙상블 모델** | 연령·생활습관·간이인지검사 정보를 이용한 정상군 및 고위험군 선별 |
+| **Stage 2 — 고위험군 등급화** | **ANN 5개 + Soft Voting Ensemble** | 서로 다른 Seed로 학습한 ANN의 예측 확률을 결합하여 위험군 세분화 |
+| **Stage 3 — 멀티모달 통합 예측** | **MRI CNN + 임상·유전정보 ANN + Weighted Average Ensemble** | MRI 영상과 임상·바이오마커 정보의 예측 결과를 가중 결합 |
+
+#### Stage 1 — XGBoost 기반 1차 선별
+
+- **모델:** XGBoost 기반 앙상블 모델
+- **입력:** 연령, 나이, 생활습관, 간이인지검사 등
+- **목적:** 정상군과 고위험군(경도인지장애·치매 관련 위험군) 1차 구분
+
+#### Stage 2 — ANN 기반 고위험군 등급화
+
+- **모델:** ANN(Artificial Neural Network) 5개
+- **앙상블:** Soft Voting
+- **입력:** 성별, 혈압, BMI, MMSE, CDRSB, FAQ 등 임상·인지 변수
+- **목적:** 예측 확률을 활용해 MCI 위험군을 Low / Mid / High로 세분화
+
+서로 다른 Seed로 학습한 5개의 ANN 모델이 각각 예측 확률을 출력하고,
+이를 Soft Voting으로 결합하는 구조입니다.
+
+#### Stage 3 — CNN·ANN 기반 멀티모달 통합 예측
+
+- **MRI 영상 모델:** CNN(Convolutional Neural Network)
+- **임상·유전정보 모델:** ANN(Artificial Neural Network)
+- **앙상블:** Weighted Average Ensemble
+- **입력:** 임상평가, MRI 이미지, 바이오마커 정보
+- **목적:** 영상·비영상 정보를 함께 활용한 통합 위험도 예측
+
+MRI CNN과 임상·유전정보 ANN이 각각 예측값을 산출한 뒤,
+두 결과를 가중 평균 방식으로 결합하여 최종 예측을 수행합니다.
+
+
+> 
 
 ### 확장 분석 — MCI에서 AD로의 전환(Progression Analysis)
 
